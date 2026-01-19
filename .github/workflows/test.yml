@@ -39,7 +39,8 @@ jobs:
       working-directory: ./backend
       run: |
         playwright install chromium
-        playwright install-deps chromium
+        # Skip install-deps as it tries to install libasound2 which doesn't exist in Ubuntu 24.04
+        # We already installed the required dependencies manually above
     
     - name: Check database initialization
       working-directory: ./backend
