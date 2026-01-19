@@ -101,5 +101,6 @@ run_flet_app.py
 states_cities_data.json
 50 States_Cities/
 
-# Allow backend requirements.txt
+# Allow backend requirements.txt and states_cities_data.json
 !backend/requirements.txt
+!backend/states_cities_data.json
