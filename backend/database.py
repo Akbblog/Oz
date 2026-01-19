@@ -77,25 +77,23 @@ def init_database():
     """)
     
     # Create default admin user (password: admin123)
-    try:
-        from passlib.context import CryptContext
-        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        admin_password = "admin123"
-        admin_hash = pwd_context.hash(admin_password)
-        
-        cursor.execute("""
-            INSERT OR IGNORE INTO users (username, email, password_hash, is_approved, is_admin, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("admin", "admin@example.com", admin_hash, 1, 1, datetime.now().isoformat()))
-    except Exception as e:
-        # If bcrypt fails, use a simple hash for testing (not secure, but allows workflow to pass)
-        import hashlib
-        admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
-        cursor.execute("""
-            INSERT OR IGNORE INTO users (username, email, password_hash, is_approved, is_admin, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("admin", "admin@example.com", admin_hash, 1, 1, datetime.now().isoformat()))
-        print(f"Warning: bcrypt failed, using SHA256 hash for admin user: {e}")
+    # Only create if it doesn't exist to avoid errors on re-initialization
+    cursor.execute("SELECT id FROM users WHERE username = ?", ("admin",))
+    if not cursor.fetchone():
+        try:
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            admin_password = "admin123"
+            admin_hash = pwd_context.hash(admin_password)
+            
+            cursor.execute("""
+                INSERT INTO users (username, email, password_hash, is_approved, is_admin, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, ("admin", "admin@example.com", admin_hash, 1, 1, datetime.now().isoformat()))
+        except Exception as e:
+            # Log error but don't fail - admin can be created manually
+            print(f"Warning: Could not create admin user: {e}")
+            print("Admin user can be created manually after first login")
     
     conn.commit()
     conn.close()
