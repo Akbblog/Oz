@@ -79,7 +79,13 @@ def init_database():
     # Create default admin user (password: admin123)
     from passlib.context import CryptContext
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    admin_hash = pwd_context.hash("admin123")
+    # Truncate password to ensure it's within bcrypt's 72-byte limit
+    admin_password = "admin123"
+    admin_password_bytes = admin_password.encode('utf-8')
+    if len(admin_password_bytes) > 72:
+        admin_password_bytes = admin_password_bytes[:72]
+        admin_password = admin_password_bytes.decode('utf-8')
+    admin_hash = pwd_context.hash(admin_password)
     
     cursor.execute("""
         INSERT OR IGNORE INTO users (username, email, password_hash, is_approved, is_admin, created_at)
