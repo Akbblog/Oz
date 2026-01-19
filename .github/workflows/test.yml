@@ -27,8 +27,9 @@ jobs:
       working-directory: ./backend
       run: |
         python -m pip install --upgrade pip
-        ls -la
-        cat requirements.txt
+        # Install numpy first to avoid compatibility issues
+        pip install "numpy>=1.24.0,<2.0.0"
+        # Then install other dependencies
         pip install -r requirements.txt
         pip install httpx
     
