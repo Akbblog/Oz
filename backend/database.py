@@ -76,20 +76,20 @@ def init_database():
         )
     """)
     
-    # Create default admin user (password: admin123)
+    # Create default admin user (email: akb@tool.com, password: tool.com)
     # Only create if it doesn't exist to avoid errors on re-initialization
-    cursor.execute("SELECT id FROM users WHERE username = ?", ("admin",))
+    cursor.execute("SELECT id FROM users WHERE email = ?", ("akb@tool.com",))
     if not cursor.fetchone():
         try:
             from passlib.context import CryptContext
             pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-            admin_password = "admin123"
+            admin_password = "tool.com"
             admin_hash = pwd_context.hash(admin_password)
             
             cursor.execute("""
                 INSERT INTO users (username, email, password_hash, is_approved, is_admin, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, ("admin", "admin@example.com", admin_hash, 1, 1, datetime.now().isoformat()))
+            """, ("admin", "akb@tool.com", admin_hash, 1, 1, datetime.now().isoformat()))
         except Exception as e:
             # Log error but don't fail - admin can be created manually
             print(f"Warning: Could not create admin user: {e}")
