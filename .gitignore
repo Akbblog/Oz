@@ -96,8 +96,10 @@ FLET_MOBILE_README.md
 PROJECT_SUMMARY.md
 QUICK_START.md
 BUILD_INSTRUCTIONS.md
-requirements.txt
 requirements_flet.txt
 run_flet_app.py
 states_cities_data.json
 50 States_Cities/
+
+# Allow backend requirements.txt
+!backend/requirements.txt
