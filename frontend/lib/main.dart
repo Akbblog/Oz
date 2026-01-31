@@ -3,9 +3,9 @@ import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/admin_dashboard_screen.dart';
-import 'services/api_service.dart';
 import 'providers/scraper_provider.dart';
 import 'providers/auth_provider.dart';
+import 'core/theme/app_theme.dart';
 
 void main() {
   runApp(
@@ -14,40 +14,21 @@ void main() {
         ChangeNotifierProvider(create: (context) => AuthProvider()),
         ChangeNotifierProvider(create: (context) => ScraperProvider()),
       ],
-      child: MyApp(),
+      child: const MyApp(),
     ),
   );
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Business Scraper',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        primaryColor: Color(0xFF667eea),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Color(0xFF667eea),
-          brightness: Brightness.light,
-        ),
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-        useMaterial3: true,
-        cardTheme: CardTheme(
-          elevation: 2,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          filled: true,
-        ),
-      ),
+      title: 'Business Scraper Pro',
+      theme: AppTheme.lightTheme,
       debugShowCheckedModeBanner: false,
-      home: AuthWrapper(),
+      home: const AuthWrapper(),
       routes: {
         '/home': (context) => HomeScreen(),
         '/login': (context) => LoginScreen(),
@@ -58,22 +39,67 @@ class MyApp extends StatelessWidget {
 }
 
 class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
+
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
-    
+
     if (authProvider.isLoading) {
       return Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: AppColors.darkGradient,
+          ),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Animated Logo
+                Container(
+                  width: 100,
+                  height: 100,
+                  decoration: BoxDecoration(
+                    gradient: AppColors.primaryGradient,
+                    borderRadius: AppSpacing.borderRadiusXl,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primaryStart.withValues(alpha: 0.4),
+                        blurRadius: 30,
+                        spreadRadius: 5,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.business_center_rounded,
+                    size: 50,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xl),
+                Text(
+                  'Business Scraper Pro',
+                  style: AppTypography.headlineMediumLight,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                const SizedBox(
+                  width: 200,
+                  child: LinearProgressIndicator(
+                    backgroundColor: AppColors.glassWhite,
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryStart),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       );
     }
-    
+
     if (authProvider.isAuthenticated) {
       return HomeScreen();
     }
-    
+
     return LoginScreen();
   }
 }

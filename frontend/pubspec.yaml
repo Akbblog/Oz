@@ -17,6 +17,7 @@ dependencies:
   permission_handler: ^11.3.0
   csv: ^5.0.2
   flutter_markdown: ^0.6.18
+  file_saver: ^0.2.12
 
 
 dev_dependencies:

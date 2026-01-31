@@ -3,9 +3,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://localhost:8000';
-  // For production, update this to your deployed API URL
-  // static const String baseUrl = 'https://your-api-domain.com';
+  // Update this to your Railway URL after deployment
+  static const String baseUrl = 'https://YOUR-APP-NAME.up.railway.app';
+  // For local development, use: 'http://127.0.0.1:8001'
 
   Future<String?> getToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -175,6 +175,42 @@ class ApiService {
       return data['content'];
     } else {
       throw Exception('Failed to download results');
+    }
+  }
+
+  // States and Cities endpoints
+  Future<Map<String, List<String>>> getStates() async {
+    final response = await http.get(Uri.parse('$baseUrl/api/states'));
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return {
+        'USA': List<String>.from(data['USA'] ?? []),
+        'UK': List<String>.from(data['UK'] ?? []),
+      };
+    } else {
+      throw Exception('Failed to load states');
+    }
+  }
+
+  Future<List<String>> getCities(String state) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/states/${Uri.encodeComponent(state)}/cities'),
+    );
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<String>.from(data['cities'] ?? []);
+    } else {
+      throw Exception('Failed to load cities for $state');
+    }
+  }
+
+  Future<List<String>> getCountries() async {
+    final response = await http.get(Uri.parse('$baseUrl/api/countries'));
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<String>.from(data['countries'] ?? []);
+    } else {
+      throw Exception('Failed to load countries');
     }
   }
 

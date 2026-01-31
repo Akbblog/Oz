@@ -16,7 +16,15 @@ import logging
 from datetime import datetime, timedelta
 from enum import Enum
 import asyncio
-from playwright.async_api import async_playwright
+import sys
+from urllib.parse import quote_plus
+import requests
+from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+# Fix for Windows asyncio event loop
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from database import init_database, get_db
 from auth import (
@@ -28,6 +36,13 @@ from auth import (
 init_database()
 
 app = FastAPI(title="Google Business Scraper API", version="2.0.0")
+
+# ==================== COUNTRY ENDPOINTS ====================
+
+@app.get("/api/countries")
+async def get_countries():
+    """Get list of available countries (USA, UK)"""
+    return {"countries": list(COUNTRIES_DATA.keys())}
 
 # CORS middleware
 app.add_middleware(
@@ -52,9 +67,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load states and cities data
+# Load states and cities data for USA
 with open('states_cities_data.json', 'r', encoding='utf-8') as f:
     STATES_CITIES_DATA = json.load(f)
+
+# Load UK regions and cities data
+with open('uk_regions_cities.json', 'r', encoding='utf-8') as f:
+    UK_REGIONS_DATA = json.load(f)
+
+# Mapping of country to its region/state data
+COUNTRIES_DATA = {
+    "USA": STATES_CITIES_DATA,
+    "UK": UK_REGIONS_DATA
+}
 
 # Results directory
 RESULTS_DIR = "results"
@@ -192,7 +217,11 @@ async def login(credentials: UserLogin):
     conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT id, username, email, password_hash, is_approved, is_admin FROM users WHERE username = ?", (credentials.username,))
+    # Allow users to sign in with either their username or their email
+    cursor.execute(
+        "SELECT id, username, email, password_hash, is_approved, is_admin FROM users WHERE username = ? OR email = ?",
+        (credentials.username, credentials.username),
+    )
     user = cursor.fetchone()
     conn.close()
     
@@ -233,6 +262,30 @@ async def login(credentials: UserLogin):
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """Get current user information"""
     return current_user
+
+
+# Debug endpoint: list users (local dev only)
+@app.get("/internal/debug_users")
+async def _debug_list_users():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, email, is_approved, is_admin, created_at, last_login FROM users ORDER BY id DESC")
+    users = cursor.fetchall()
+    conn.close()
+    return {
+        "users": [
+            {
+                "id": u[0],
+                "username": u[1],
+                "email": u[2],
+                "is_approved": bool(u[3]),
+                "is_admin": bool(u[4]),
+                "created_at": u[5],
+                "last_login": u[6],
+            }
+            for u in users
+        ]
+    }
 
 # ==================== ADMIN ENDPOINTS ====================
 
@@ -347,105 +400,173 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
 # ==================== SCRAPER ====================
 
 class GoogleBusinessScraper:
-    def __init__(self):
+    def __init__(self, headless: bool = None):
+        """Create scraper instance. headless defaults to env PLAYWRIGHT_HEADLESS (True)"""
+        self.playwright = None
         self.browser = None
+        self.context = None
         self.page = None
-    
+        # Determine headless mode from param or environment
+        if headless is None:
+            env_val = os.getenv('PLAYWRIGHT_HEADLESS', 'True').lower()
+            self.headless = False if env_val in ('0','false','no') else True
+        else:
+            self.headless = headless
+
     async def init_browser(self):
-        """Initialize Playwright browser"""
-        playwright = await async_playwright().start()
-        self.browser = await playwright.chromium.launch(headless=True)
-        self.page = await self.browser.new_page()
-        
-        # Block images for faster loading
-        await self.page.route("**/*.{png,jpg,jpeg,gif,webp}", lambda route: route.abort())
-    
+        """Initialize Playwright browser with proper async support for Windows"""
+        try:
+            logger.info('Initializing Playwright browser with async API')
+
+            # Start Playwright
+            self.playwright = await async_playwright().start()
+
+            # Launch browser
+            self.browser = await self.playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox'
+                ]
+            )
+
+            # Create browser context with realistic settings
+            user_agent = os.getenv("PLAYWRIGHT_USER_AGENT") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+            self.context = await self.browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent=user_agent,
+                locale="en-US",
+                extra_http_headers={"accept-language": "en-US,en;q=0.9"}
+            )
+
+            # Create page
+            self.page = await self.context.new_page()
+
+            # Hide webdriver flag
+            await self.page.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined})')
+
+            # Block images for faster loading
+            await self.context.route("**/*.{png,jpg,jpeg,gif,webp,svg,ico}", lambda route: route.abort())
+
+            logger.info('Playwright browser initialized successfully')
+
+        except Exception as e:
+            logger.exception(f'Failed to initialize Playwright browser: {e}')
+            raise
+
+
     async def scrape_location(self, category: str, city: str, state: str, max_results: int = 10) -> List[Dict]:
-        """Scrape businesses for a specific location"""
+        """Scrape businesses for a specific location using Playwright"""
         if not self.page:
             await self.init_browser()
-        
+
         results = []
         search_term = f"{category} in {city}, {state}"
-        
+
         try:
             logger.info(f"Starting scraping for {city}, {state}")
-            
-            # Search for businesses
-            await self.page.goto("https://www.google.com/maps", timeout=60000)
-            await self.page.wait_for_selector("input#searchboxinput", timeout=10000)
-            await self.page.fill("input#searchboxinput", search_term)
-            await self.page.keyboard.press("Enter")
-            
+
+            search_url = f"https://www.google.com/maps/search/{quote_plus(search_term)}"
+            logger.info(f"Searching Google Maps for: {search_term}")
+
+            # Navigate to search page
+            await self.page.goto(search_url, wait_until="networkidle", timeout=30000)
+
+            # Wait for results to load
             try:
-                await self.page.wait_for_selector('div[role="feed"]', timeout=15000)
-            except:
-                logger.warning(f"No results feed found for {city}, {state}")
-                return []
+                await self.page.wait_for_selector('div[role="feed"]', timeout=10000)
+                logger.info("Results feed loaded")
+            except PlaywrightTimeout:
+                logger.warning("Results feed did not load, trying alternative selector")
+                await asyncio.sleep(2)
 
-            # Scroll to load results
-            feed_selector = 'div[role="feed"]'
-            for i in range(10):
-                await self.page.evaluate(f'''
-                    const feed = document.querySelector('{feed_selector}');
-                    if (feed) feed.scrollTo(0, feed.scrollHeight);
-                ''')
-                
-                if await self.page.locator("text=You've reached the end of the list").count() > 0:
-                    break
-                await asyncio.sleep(1)
+            # Scroll the results panel to load more businesses
+            results_panel = await self.page.query_selector('div[role="feed"]')
+            if results_panel:
+                logger.info("Scrolling to load more results")
+                for _ in range(3):
+                    await results_panel.evaluate('el => el.scrollTop = el.scrollHeight')
+                    await asyncio.sleep(1)
 
-            # Extract URLs
-            listing_elements = await self.page.locator(f'{feed_selector} > div > div > a[href*="/maps/place/"]').all()
-            urls_to_visit = []
-            
-            for listing in listing_elements:
-                href = await listing.get_attribute("href")
-                if href:
-                    full_url = href if href.startswith("http") else f"https://www.google.com{href}"
-                    urls_to_visit.append(full_url.split('?')[0])
+            # Extract business links - Google Maps uses <a> tags with specific href patterns
+            business_links = await self.page.query_selector_all('a[href*="/maps/place/"]')
+            logger.info(f"Found {len(business_links)} business links")
 
-            urls_to_visit = list(set(urls_to_visit))[:max_results]
-            logger.info(f"Found {len(urls_to_visit)} businesses to scrape for {city}, {state}")
-            
-            # Visit each URL
-            for url in urls_to_visit:
+            # Get unique business URLs (avoid duplicates)
+            business_urls = []
+            seen_urls = set()
+            for link in business_links[:max_results * 2]:  # Get extra in case of duplicates
                 try:
-                    await self.page.goto(url, timeout=30000)
-                    await self.page.wait_for_selector("h1", timeout=10000)
-                    
-                    name = await self.page.locator("h1").first.inner_text()
-                    website = "N/A"
-                    phone = "N/A"
-                    address = "N/A"
+                    href = await link.get_attribute('href')
+                    if href and href not in seen_urls and '/maps/place/' in href:
+                        business_urls.append(href)
+                        seen_urls.add(href)
+                        if len(business_urls) >= max_results:
+                            break
+                except Exception as e:
+                    logger.debug(f"Error getting link href: {e}")
+                    continue
+
+            logger.info(f"Processing {len(business_urls)} unique businesses")
+
+            # Visit each business page to get details
+            for idx, url in enumerate(business_urls):
+                try:
+                    logger.info(f"Scraping business {idx + 1}/{len(business_urls)}")
+
+                    # Navigate to business page
+                    await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    await asyncio.sleep(1)
+
+                    # Extract business name
+                    business_name = "Unknown"
+                    try:
+                        name_elem = await self.page.query_selector('h1')
+                        if name_elem:
+                            business_name = (await name_elem.text_content()).strip()
+                    except Exception:
+                        pass
+
+                    # Extract phone number
+                    phone = ""
+                    try:
+                        phone_button = await self.page.query_selector('button[data-item-id*="phone"]')
+                        if phone_button:
+                            phone_text = await phone_button.get_attribute('aria-label')
+                            if phone_text:
+                                # Extract just the number from aria-label
+                                import re
+                                phone_match = re.search(r'[\d\s\-\(\)\+]+', phone_text)
+                                if phone_match:
+                                    phone = phone_match.group(0).strip()
+                    except Exception:
+                        pass
 
                     # Extract website
+                    website = ""
                     try:
-                        website_loc = self.page.locator('a[data-item-id="authority"]')
-                        if await website_loc.count() > 0:
-                            website = await website_loc.get_attribute("href") or "N/A"
-                    except: pass
+                        website_link = await self.page.query_selector('a[data-item-id*="authority"]')
+                        if website_link:
+                            website = await website_link.get_attribute('href')
+                    except Exception:
+                        pass
 
-                    # Extract phone
-                    try:
-                        phone_loc = self.page.locator('button[data-item-id^="phone:"]')
-                        if await phone_loc.count() > 0:
-                            phone = await phone_loc.get_attribute("aria-label") or "N/A"
-                            if phone != "N/A": 
-                                phone = phone.replace("Phone: ", "").strip()
-                    except: pass
-                    
                     # Extract address
+                    address = ""
                     try:
-                        address_loc = self.page.locator('button[data-item-id="address"]')
-                        if await address_loc.count() > 0:
-                            address = await address_loc.get_attribute("aria-label") or "N/A"
-                            if address != "N/A":
-                                address = address.replace("Address: ", "").strip()
-                    except: pass
+                        address_button = await self.page.query_selector('button[data-item-id*="address"]')
+                        if address_button:
+                            address_text = await address_button.get_attribute('aria-label')
+                            if address_text:
+                                # Remove "Address: " prefix if present
+                                address = address_text.replace('Address:', '').strip()
+                    except Exception:
+                        pass
 
-                    data = {
-                        'business_name': name,
+                    business_data = {
+                        'business_name': business_name,
                         'phone': phone,
                         'website': website,
                         'address': address,
@@ -454,26 +575,39 @@ class GoogleBusinessScraper:
                         'state': state,
                         'google_maps_url': url
                     }
-                    results.append(data)
-                    logger.info(f"Scraped business: {name}")
-                    
-                    await asyncio.sleep(0.5)
 
+                    results.append(business_data)
+                    logger.info(f"Scraped: {business_name}")
+
+                except PlaywrightTimeout:
+                    logger.warning(f"Timeout loading business page: {url}")
+                    continue
                 except Exception as e:
-                    logger.error(f"Error scraping business URL {url}: {e}")
+                    logger.debug(f"Error scraping business at {url}: {e}")
                     continue
 
-            logger.info(f"Completed scraping for {city}, {state}. Found {len(results)} businesses")
-            return results
+            logger.info(f"Found {len(results)} businesses for {city}, {state}")
 
         except Exception as e:
-            logger.error(f"Scraping error for {city}, {state}: {e}")
+            logger.exception(f"Error scraping location {city}, {state}: {e}")
             return []
-    
+
+        return results
+
     async def close(self):
-        """Close browser"""
-        if self.browser:
-            await self.browser.close()
+        """Close browser and Playwright safely"""
+        try:
+            if self.page:
+                await self.page.close()
+            if self.context:
+                await self.context.close()
+            if self.browser:
+                await self.browser.close()
+            if self.playwright:
+                await self.playwright.stop()
+            logger.info("Browser closed successfully")
+        except Exception as e:
+            logger.debug(f"Error closing browser: {e}")
 
 async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
     """Background task for running scraping jobs"""
@@ -482,6 +616,8 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
     
     try:
         logger.info(f"Starting scraping job {job_id}")
+        # Debug: log the incoming list of city/state strings
+        logger.debug(f"Received {len(request.cities_data)} city/state entries: {request.cities_data}")
         
         # Update job status
         cursor = conn.cursor()
@@ -503,10 +639,13 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                 break
             
             # Parse city and state
+            # Log the raw entry for debugging
+            logger.debug(f"Raw city_state entry: '{city_state}'")
             parts = city_state.split(",")
             if len(parts) >= 2:
                 city = parts[0].strip()
                 state = parts[1].strip()
+                logger.debug(f"Parsed city: '{city}', state: '{state}'")
                 
                 current_city = f"{city}, {state}"
                 progress = int((idx + 1) / len(request.cities_data) * 100)
@@ -578,16 +717,17 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
         logger.info(f"Job {job_id} completed successfully. Total businesses found: {len(all_results)}")
         
     except Exception as e:
-        logger.error(f"Job {job_id} failed with error: {str(e)}")
+        # Log full traceback for diagnostics
+        logger.exception(f"Job {job_id} failed with error: {repr(e)}")
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE jobs SET status = ?, error = ?, completed_at = ?
             WHERE job_id = ?
-        """, ("failed", str(e), datetime.now().isoformat(), job_id))
+        """, ("failed", repr(e), datetime.now().isoformat(), job_id))
         conn.commit()
         
         cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                      (job_id, f"Job failed with error: {str(e)}", datetime.now().isoformat()))
+                      (job_id, f"Job failed with error: {repr(e)}", datetime.now().isoformat()))
         conn.commit()
     
     finally:
@@ -814,15 +954,23 @@ async def health_check():
 @app.get("/api/states")
 async def get_states():
     """Get list of all available states"""
-    return {"states": list(STATES_CITIES_DATA.keys())}
+    # Return list of states for USA and list of regions for UK
+    return {
+        "USA": list(STATES_CITIES_DATA.keys()),
+        "UK": list(UK_REGIONS_DATA.keys())
+    }
 
 @app.get("/api/states/{state}/cities")
 async def get_cities(state: str):
     """Get list of cities for a specific state"""
-    if state not in STATES_CITIES_DATA:
-        raise HTTPException(status_code=404, detail="State not found")
-    
-    return {"state": state, "cities": STATES_CITIES_DATA[state]}
+    # Determine which country the request refers to based on a query parameter
+    # For backward compatibility, if the state exists in USA data we assume USA.
+    if state in STATES_CITIES_DATA:
+        return {"country": "USA", "state": state, "cities": STATES_CITIES_DATA[state]}
+    elif state in UK_REGIONS_DATA:
+        return {"country": "UK", "region": state, "cities": UK_REGIONS_DATA[state]}
+    else:
+        raise HTTPException(status_code=404, detail="State or region not found")
 
 if __name__ == "__main__":
     import uvicorn

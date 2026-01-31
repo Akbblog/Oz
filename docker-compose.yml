@@ -7,9 +7,33 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app
+      - DB_TYPE=mysql
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=scraper
+      - MYSQL_PASSWORD=scraper_pass
+      - MYSQL_DB=scraper_db
     volumes:
       - ./backend:/app
+    depends_on:
+      - mysql
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_pw
+      - MYSQL_DATABASE=scraper_db
+      - MYSQL_USER=scraper
+      - MYSQL_PASSWORD=scraper_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
 
   # Uncomment for production with nginx
   # nginx:

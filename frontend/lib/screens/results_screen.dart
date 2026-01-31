@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:csv/csv.dart';
+import 'package:file_saver/file_saver.dart';
+import 'dart:convert';
+import 'dart:typed_data';
 import '../providers/scraper_provider.dart';
 
 class ResultsScreen extends StatelessWidget {
@@ -76,9 +78,19 @@ class ResultsScreen extends StatelessWidget {
     try {
       final csvContent = await scraperProvider.downloadResults();
 
-      // In a real app, you'd write the file
+      final fileNameBase =
+          'business_results_${DateTime.now().millisecondsSinceEpoch}';
+      final bytes = utf8.encode(csvContent);
+
+      await FileSaver.instance.saveFile(
+        name: fileNameBase,
+        bytes: Uint8List.fromList(bytes),
+        ext: 'csv',
+        mimeType: MimeType.csv,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Results ready for download')),
+        SnackBar(content: Text('Results saved as $fileNameBase.csv')),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(

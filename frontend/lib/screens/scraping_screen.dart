@@ -49,7 +49,7 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
           return;
         }
       }
-      
+
       // For mobile, we'll show the CSV content in a dialog
       // In a real app, you'd use a file picker or share functionality
       showDialog(
@@ -57,7 +57,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
         builder: (context) => AlertDialog(
           title: Text('Results Downloaded'),
           content: SingleChildScrollView(
-            child: Text('CSV data ready. Length: ${csvContent.length} characters'),
+            child:
+                Text('CSV data ready. Length: ${csvContent.length} characters'),
           ),
           actions: [
             TextButton(
@@ -222,7 +223,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    prefixIcon: Icon(Icons.location_city, color: Color(0xFF667eea)),
+                    prefixIcon:
+                        Icon(Icons.location_city, color: Color(0xFF667eea)),
                     filled: true,
                     fillColor: Colors.white,
                   ),
@@ -252,7 +254,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    prefixIcon: Icon(Icons.format_list_numbered, color: Color(0xFF667eea)),
+                    prefixIcon: Icon(Icons.format_list_numbered,
+                        color: Color(0xFF667eea)),
                     filled: true,
                     fillColor: Colors.white,
                   ),
@@ -286,13 +289,15 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                   SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: scraperProvider.status == ScrapingStatus.running
+                      onPressed: scraperProvider.status ==
+                              ScrapingStatus.running
                           ? null
                           : () async {
                               if (_categoryController.text.isEmpty) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text('Please enter a search category'),
+                                    content:
+                                        Text('Please enter a search category'),
                                     backgroundColor: Colors.red,
                                   ),
                                 );
@@ -310,11 +315,13 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                               }
 
                               try {
+                                // The city list is formatted as "city, state" pairs separated by semicolons.
+                                // Split on ';' to keep each pair intact, then trim whitespace.
                                 final citiesText = _citiesController.text;
                                 final citiesList = citiesText
-                                    .split(',')
-                                    .map((city) => city.trim())
-                                    .where((city) => city.isNotEmpty)
+                                    .split(';')
+                                    .map((pair) => pair.trim())
+                                    .where((pair) => pair.isNotEmpty)
                                     .toList();
 
                                 if (citiesList.isEmpty) {
@@ -328,11 +335,13 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                                 }
 
                                 final maxResults =
-                                    int.tryParse(_maxResultsController.text) ?? 10;
+                                    int.tryParse(_maxResultsController.text) ??
+                                        10;
                                 if (maxResults <= 0) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
-                                      content: Text('Max results must be greater than 0'),
+                                      content: Text(
+                                          'Max results must be greater than 0'),
                                       backgroundColor: Colors.red,
                                     ),
                                   );
@@ -347,14 +356,16 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
 
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text('Scraping started successfully!'),
+                                    content:
+                                        Text('Scraping started successfully!'),
                                     backgroundColor: Colors.green,
                                   ),
                                 );
                               } catch (e) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text('Failed to start scraping: $e'),
+                                    content:
+                                        Text('Failed to start scraping: $e'),
                                     backgroundColor: Colors.red,
                                   ),
                                 );
@@ -390,7 +401,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                         Row(
                           children: [
                             CircularProgressIndicator(
-                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF667eea)),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                  Color(0xFF667eea)),
                             ),
                             SizedBox(width: 16),
                             Expanded(
@@ -406,9 +418,13 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                                   ),
                                   SizedBox(height: 8),
                                   LinearProgressIndicator(
-                                    value: (scraperProvider.currentJob?.progress ?? 0) / 100,
+                                    value:
+                                        (scraperProvider.currentJob?.progress ??
+                                                0) /
+                                            100,
                                     backgroundColor: Colors.grey[200],
-                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF667eea)),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        Color(0xFF667eea)),
                                     minHeight: 8,
                                   ),
                                   SizedBox(height: 8),
@@ -424,7 +440,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                             ),
                           ],
                         ),
-                        if (scraperProvider.currentJob?.currentCity != null) ...[
+                        if (scraperProvider.currentJob?.currentCity !=
+                            null) ...[
                           SizedBox(height: 16),
                           Container(
                             padding: EdgeInsets.all(12),
@@ -434,7 +451,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                             ),
                             child: Row(
                               children: [
-                                Icon(Icons.location_on, size: 16, color: Color(0xFF667eea)),
+                                Icon(Icons.location_on,
+                                    size: 16, color: Color(0xFF667eea)),
                                 SizedBox(width: 8),
                                 Text(
                                   'Current: ${scraperProvider.currentJob?.currentCity}',
@@ -488,7 +506,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.check_circle, color: Colors.white, size: 32),
+                            Icon(Icons.check_circle,
+                                color: Colors.white, size: 32),
                             SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -519,12 +538,14 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                         ElevatedButton.icon(
                           onPressed: () async {
                             try {
-                              final csvData = await scraperProvider.downloadResults();
+                              final csvData =
+                                  await scraperProvider.downloadResults();
                               await _saveCSVToFile(csvData, 'results.csv');
                             } catch (e) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
-                                  content: Text('Failed to download results: $e'),
+                                  content:
+                                      Text('Failed to download results: $e'),
                                   backgroundColor: Colors.red,
                                 ),
                               );
@@ -535,7 +556,8 @@ class _ScrapingScreenState extends State<ScrapingScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.white,
                             foregroundColor: Colors.green.shade700,
-                            padding: EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                            padding: EdgeInsets.symmetric(
+                                vertical: 12, horizontal: 24),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),

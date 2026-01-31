@@ -26,16 +26,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     try {
       final stats = await _apiService.getAdminStats();
       final users = await _apiService.getAllUsers();
-      setState(() {
-        _stats = stats;
-        _users = users;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _stats = stats;
+          _users = users;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading data: $e')),
-      );
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading data: $e')),
+        );
+      }
     }
   }
 
@@ -140,7 +144,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
                 // Content
                 Expanded(
-                  child: _selectedTab == 0 ? _buildStatsView() : _buildUsersView(),
+                  child:
+                      _selectedTab == 0 ? _buildStatsView() : _buildUsersView(),
                 ),
               ],
             ),
@@ -195,12 +200,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             crossAxisSpacing: 16,
             mainAxisSpacing: 16,
             children: [
-              _buildStatCard('Total Users', _stats!['total_users'].toString(), Icons.people, Colors.blue),
-              _buildStatCard('Approved Users', _stats!['approved_users'].toString(), Icons.check_circle, Colors.green),
-              _buildStatCard('Pending Users', _stats!['pending_users'].toString(), Icons.pending, Colors.orange),
-              _buildStatCard('Total Jobs', _stats!['total_jobs'].toString(), Icons.work, Colors.purple),
-              _buildStatCard('Completed Jobs', _stats!['completed_jobs'].toString(), Icons.done_all, Colors.teal),
-              _buildStatCard('Total Results', _stats!['total_results'].toString(), Icons.list, Colors.indigo),
+              _buildStatCard('Total Users', _stats!['total_users'].toString(),
+                  Icons.people, Colors.blue),
+              _buildStatCard(
+                  'Approved Users',
+                  _stats!['approved_users'].toString(),
+                  Icons.check_circle,
+                  Colors.green),
+              _buildStatCard(
+                  'Pending Users',
+                  _stats!['pending_users'].toString(),
+                  Icons.pending,
+                  Colors.orange),
+              _buildStatCard('Total Jobs', _stats!['total_jobs'].toString(),
+                  Icons.work, Colors.purple),
+              _buildStatCard(
+                  'Completed Jobs',
+                  _stats!['completed_jobs'].toString(),
+                  Icons.done_all,
+                  Colors.teal),
+              _buildStatCard(
+                  'Total Results',
+                  _stats!['total_results'].toString(),
+                  Icons.list,
+                  Colors.indigo),
             ],
           ),
           SizedBox(height: 24),
@@ -217,8 +240,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 margin: EdgeInsets.only(bottom: 8),
                 child: ListTile(
                   leading: Icon(
-                    job['status'] == 'completed' ? Icons.check_circle : Icons.pending,
-                    color: job['status'] == 'completed' ? Colors.green : Colors.orange,
+                    job['status'] == 'completed'
+                        ? Icons.check_circle
+                        : Icons.pending,
+                    color: job['status'] == 'completed'
+                        ? Colors.green
+                        : Colors.orange,
                   ),
                   title: Text(job['category']),
                   subtitle: Text('${job['username']} • ${job['status']}'),
@@ -233,7 +260,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+  Widget _buildStatCard(
+      String title, String value, IconData icon, Color color) {
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(
@@ -289,7 +317,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           child: ListTile(
             leading: CircleAvatar(
-              backgroundColor: user['is_approved'] ? Colors.green : Colors.orange,
+              backgroundColor:
+                  user['is_approved'] ? Colors.green : Colors.orange,
               child: Icon(
                 user['is_approved'] ? Icons.check : Icons.pending,
                 color: Colors.white,

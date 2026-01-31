@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter/services.dart' show rootBundle;
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import '../providers/scraper_provider.dart';
+import '../services/api_service.dart';
 import 'scraping_screen.dart';
 
 class StateSelectionScreen extends StatefulWidget {
@@ -12,6 +10,7 @@ class StateSelectionScreen extends StatefulWidget {
 }
 
 class _StateSelectionScreenState extends State<StateSelectionScreen> {
+  String? _selectedCountry = 'USA';
   String? _selectedState;
   List<String> _selectedCities = [];
   bool _selectAllCities = false;
@@ -23,11 +22,12 @@ class _StateSelectionScreenState extends State<StateSelectionScreen> {
   final TextEditingController _citySearchController = TextEditingController();
   bool _isStateSearchFocused = false;
   bool _isCitySearchFocused = false;
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
     super.initState();
-    _loadStatesData();
+    _loadInitialData();
     _stateSearchController.addListener(_filterStates);
     _citySearchController.addListener(_filterCities);
   }
@@ -59,54 +59,62 @@ class _StateSelectionScreenState extends State<StateSelectionScreen> {
     });
   }
 
-  Future<void> _loadStatesData() async {
+  Future<void> _loadInitialData() async {
     try {
-      // Fetch states from backend API
-      final response = await http.get(
-        Uri.parse('http://localhost:8000/api/states'),
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List<dynamic> states = data['states'];
-
-        // Fetch cities for each state
-        final Map<String, List<String>> statesData = {};
-        for (String state in states) {
-          final citiesResponse = await http.get(
-            Uri.parse(
-                'http://localhost:8000/api/states/${Uri.encodeComponent(state)}/cities'),
-          );
-
-          if (citiesResponse.statusCode == 200) {
-            final citiesData = json.decode(citiesResponse.body);
-            statesData[state] = List<String>.from(citiesData['cities']);
-          }
+      // 1. Load available countries (only set default on first load)
+      final countries = await _apiService.getCountries();
+      // Set default only if the user hasn't selected a country yet
+      if (_selectedCountry == null) {
+        if (countries.contains('USA')) {
+          _selectedCountry = 'USA';
+        } else if (countries.isNotEmpty) {
+          _selectedCountry = countries.first;
         }
+      }
 
+      // 2. Load states/regions for the selected country
+      final statesByCountry = await _apiService.getStates();
+      List<String> states = [];
+      // The backend returns a map where each country key maps to its list of states/regions.
+      // Example: {"USA": ["Alabama", ...], "UK": ["Greater London", ...]}
+      if (_selectedCountry != null &&
+          statesByCountry[_selectedCountry] != null) {
+        states = List<String>.from(statesByCountry[_selectedCountry]!);
+      }
+
+      // 3. Load cities for each state/region
+      final Map<String, List<String>> statesData = {};
+      for (String state in states) {
+        final cities = await _apiService.getCities(state);
+        statesData[state] = List<String>.from(cities);
+      }
+
+      if (mounted) {
         setState(() {
           _statesAndCities = statesData;
+          _filteredStates = states;
           _isLoading = false;
         });
-      } else {
-        throw Exception('Failed to load states');
       }
     } catch (e) {
-      print('Error loading states data: $e');
-      // Fallback to sample data if loading fails
-      setState(() {
-        _statesAndCities = {
-          'California': [
-            'Los Angeles',
-            'San Diego',
-            'San Jose',
-            'San Francisco'
-          ],
-          'New York': ['New York', 'Buffalo', 'Rochester'],
-          'Texas': ['Houston', 'Dallas', 'Austin'],
-        };
-        _isLoading = false;
-      });
+      print('Error loading initial data: $e');
+      // Fallback sample data
+      if (mounted) {
+        setState(() {
+          _statesAndCities = {
+            'California': [
+              'Los Angeles',
+              'San Diego',
+              'San Jose',
+              'San Francisco'
+            ],
+            'New York': ['New York', 'Buffalo', 'Rochester'],
+            'Texas': ['Houston', 'Dallas', 'Austin'],
+          };
+          _filteredStates = _statesAndCities.keys.toList();
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -126,6 +134,47 @@ class _StateSelectionScreenState extends State<StateSelectionScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // Country selector
+                  Card(
+                    elevation: 4,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        children: [
+                          Icon(Icons.public, color: Colors.blue),
+                          SizedBox(width: 8),
+                          Text('Select Country',
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
+                          Spacer(),
+                          // Expanded to give dropdown full width and avoid layout issues
+                          Expanded(
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                isExpanded: true,
+                                value: _selectedCountry,
+                                items: ['USA', 'UK']
+                                    .map((c) => DropdownMenuItem<String>(
+                                        value: c, child: Text(c)))
+                                    .toList(),
+                                onChanged: (val) async {
+                                  if (val != null && val != _selectedCountry) {
+                                    setState(() {
+                                      _selectedCountry = val;
+                                      _selectedState = null;
+                                      _statesAndCities = {};
+                                      _isLoading = true;
+                                    });
+                                    await _loadInitialData();
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   // Card for State Selection
                   Card(
                     elevation: 4,
@@ -365,9 +414,12 @@ class _StateSelectionScreenState extends State<StateSelectionScreen> {
                     onPressed:
                         _selectedState != null && _selectedCities.isNotEmpty
                             ? () {
+                                // Join each "city, state" pair with a semicolon to keep the pair together when split later
+                                // Build a semicolon‑separated list of "city, state" pairs.
+                                // The scraping screen now expects each pair to be separated by ';'.
                                 final citiesText = _selectedCities
                                     .map((city) => '$city, $_selectedState')
-                                    .join(', ');
+                                    .join('; ');
 
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
