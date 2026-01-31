@@ -35,8 +35,8 @@ RUN apt-get update && apt-get install -y \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
-RUN playwright install chromium --with-deps
+# Install Playwright browsers (system deps already installed above)
+RUN playwright install chromium
 
 # Copy application code
 COPY backend/ .
