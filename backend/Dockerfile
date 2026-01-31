@@ -32,14 +32,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers
 RUN playwright install chromium --with-deps
 
 # Copy application code
-COPY . .
+COPY backend/ .
 
 # Expose port (Railway uses $PORT env var)
 EXPOSE 8000
