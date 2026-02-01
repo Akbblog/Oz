@@ -137,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen>
                               ),
                               const SizedBox(height: AppSpacing.xs),
                               Text(
-                                'Sign in to continue scraping',
+                                'Sign in to continue lead discovery',
                                 style: AppTypography.bodyMedium.copyWith(
                                   color: AppColors.textSecondary,
                                 ),
@@ -242,7 +242,7 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         const SizedBox(height: AppSpacing.lg),
         Text(
-          'Business Scraper Pro',
+          'Infinity Leads',
           style: AppTypography.headlineMedium.copyWith(
             color: Colors.white,
             fontWeight: FontWeight.w700,
@@ -250,7 +250,7 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         const SizedBox(height: AppSpacing.xs),
         Text(
-          'Powerful data extraction tool',
+          'Global lead discovery platform',
           style: AppTypography.bodyMedium.copyWith(
             color: Colors.white.withValues(alpha: 0.7),
           ),

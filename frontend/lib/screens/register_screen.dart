@@ -108,7 +108,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     }
 
     if (success && mounted) {
-      _showSnackBar('Registration successful! Please wait for admin approval.');
+      _showSnackBar('Registration successful! Please wait for account approval.');
       Navigator.of(context).pop();
     } else if (mounted) {
       _showSnackBar('Registration failed. Please try again.', isError: true);
@@ -278,7 +278,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                           const SizedBox(width: AppSpacing.sm),
                                           Expanded(
                                             child: Text(
-                                              'Admin approval is required after registration',
+                                              'Your account is reviewed before activation',
                                               style: AppTypography.bodySmall.copyWith(
                                                 color: AppColors.info,
                                               ),
@@ -343,7 +343,7 @@ class _RegisterScreenState extends State<RegisterScreen>
         ),
         const SizedBox(height: AppSpacing.md),
         Text(
-          'Join Us Today',
+          'Join Infinity Leads',
           style: AppTypography.headlineSmall.copyWith(
             color: Colors.white,
             fontWeight: FontWeight.w700,

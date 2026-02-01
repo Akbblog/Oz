@@ -21,16 +21,156 @@ from urllib.parse import quote_plus
 import requests
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
+import base64
+from io import BytesIO
 
 # Fix for Windows asyncio event loop
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from database import init_database, get_db
+from database import init_database, get_db, get_credit_config, CREDITS_STARTING
 from auth import (
-    verify_password, get_password_hash, 
+    verify_password, get_password_hash,
     create_access_token, decode_access_token
 )
+
+# ==================== CREDIT SYSTEM UTILITIES ====================
+
+def estimate_credit_cost(num_cities: int, max_results_per_city: int) -> int:
+    """Calculate estimated credit cost for a job"""
+    config = get_credit_config()
+    cost = config["base"] + (num_cities * config["per_city"]) + (num_cities * max_results_per_city * config["per_result"])
+    return max(cost, config["min_job"])
+
+
+def get_user_credit_balance(user_id: int) -> int:
+    """Get user's current credit balance"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT credit_balance FROM users WHERE id = ?", (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 0
+
+
+def record_credit_transaction(user_id: int, amount: int, balance_after: int,
+                              transaction_type: str, reason: str = None,
+                              job_id: str = None, created_by: int = None):
+    """Record a credit transaction in the ledger"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO credit_ledger (user_id, job_id, amount, balance_after, transaction_type, reason, created_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, job_id, amount, balance_after, transaction_type, reason, datetime.now().isoformat(), created_by))
+    conn.commit()
+    conn.close()
+
+
+def deduct_credits(user_id: int, amount: int, job_id: str = None, reason: str = None) -> int:
+    """Deduct credits from user. Returns new balance."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT credit_balance FROM users WHERE id = ?", (user_id,))
+    current = cursor.fetchone()[0] or 0
+    new_balance = max(0, current - amount)
+    cursor.execute("UPDATE users SET credit_balance = ?, credit_updated_at = ? WHERE id = ?",
+                   (new_balance, datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    record_credit_transaction(user_id, -amount, new_balance, "debit", reason or "Job charge", job_id)
+    return new_balance
+
+
+def add_credits(user_id: int, amount: int, reason: str = None, created_by: int = None) -> int:
+    """Add credits to user. Returns new balance."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT credit_balance FROM users WHERE id = ?", (user_id,))
+    current = cursor.fetchone()[0] or 0
+    new_balance = current + amount
+    cursor.execute("UPDATE users SET credit_balance = ?, credit_updated_at = ? WHERE id = ?",
+                   (new_balance, datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    record_credit_transaction(user_id, amount, new_balance, "credit", reason or "Admin grant", None, created_by)
+    return new_balance
+
+
+def check_rate_limits(user_id: int) -> dict:
+    """Check user's rate limits. Returns dict with can_proceed, reason, stats."""
+    config = get_credit_config()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Get or create rate limit record
+    cursor.execute("SELECT window_start, jobs_in_window FROM rate_limits WHERE user_id = ?", (user_id,))
+    rate_record = cursor.fetchone()
+
+    now = datetime.now()
+    one_hour_ago = now - timedelta(hours=1)
+
+    if rate_record:
+        window_start = datetime.fromisoformat(rate_record[0]) if rate_record[0] else one_hour_ago
+        jobs_in_window = rate_record[1] or 0
+
+        # Reset window if more than 1 hour has passed
+        if window_start < one_hour_ago:
+            cursor.execute("UPDATE rate_limits SET window_start = ?, jobs_in_window = 0 WHERE user_id = ?",
+                          (now.isoformat(), user_id))
+            conn.commit()
+            jobs_in_window = 0
+    else:
+        # Create new rate limit record
+        cursor.execute("INSERT INTO rate_limits (user_id, window_start, jobs_in_window) VALUES (?, ?, ?)",
+                      (user_id, now.isoformat(), 0))
+        conn.commit()
+        jobs_in_window = 0
+
+    # Check concurrent jobs
+    cursor.execute("SELECT COUNT(*) FROM jobs WHERE user_id = ? AND status IN ('pending', 'running')", (user_id,))
+    concurrent_jobs = cursor.fetchone()[0]
+
+    conn.close()
+
+    if concurrent_jobs >= config["max_concurrent_jobs"]:
+        return {
+            "can_proceed": False,
+            "reason": f"Maximum concurrent jobs ({config['max_concurrent_jobs']}) reached. Wait for current jobs to complete.",
+            "concurrent_jobs": concurrent_jobs,
+            "jobs_in_hour": jobs_in_window
+        }
+
+    if jobs_in_window >= config["max_jobs_per_hour"]:
+        return {
+            "can_proceed": False,
+            "reason": f"Hourly job limit ({config['max_jobs_per_hour']}) reached. Try again later.",
+            "concurrent_jobs": concurrent_jobs,
+            "jobs_in_hour": jobs_in_window
+        }
+
+    return {
+        "can_proceed": True,
+        "reason": None,
+        "concurrent_jobs": concurrent_jobs,
+        "jobs_in_hour": jobs_in_window
+    }
+
+
+def increment_rate_limit(user_id: int):
+    """Increment user's job count in current rate limit window"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE rate_limits
+        SET jobs_in_window = jobs_in_window + 1, last_job_at = ?
+        WHERE user_id = ?
+    """, (datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
 
 # Initialize database
 init_database()
@@ -295,12 +435,12 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, username, email, is_approved, is_admin, created_at, last_login
+        SELECT id, username, email, is_approved, is_admin, credit_balance, created_at, last_login
         FROM users ORDER BY created_at DESC
     """)
     users = cursor.fetchall()
     conn.close()
-    
+
     return {
         "users": [
             {
@@ -309,8 +449,9 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "email": u[2],
                 "is_approved": bool(u[3]),
                 "is_admin": bool(u[4]),
-                "created_at": u[5],
-                "last_login": u[6]
+                "credit_balance": u[5] or 0,
+                "created_at": u[6],
+                "last_login": u[7]
             }
             for u in users
         ]
@@ -318,13 +459,40 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
 
 @app.post("/api/admin/users/{user_id}/approve")
 async def approve_user(user_id: int, admin: dict = Depends(get_admin_user)):
-    """Approve a user (admin only)"""
+    """Approve a user and grant starting credits (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET is_approved = 1 WHERE id = ?", (user_id,))
+
+    # Check if user exists and is not already approved
+    cursor.execute("SELECT is_approved, credit_balance FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user[0]:  # already approved
+        conn.close()
+        return {"message": "User already approved"}
+
+    # Approve user and grant starting credits
+    cursor.execute("""
+        UPDATE users SET is_approved = 1, credit_balance = ?, credit_updated_at = ?
+        WHERE id = ?
+    """, (CREDITS_STARTING, datetime.now().isoformat(), user_id))
     conn.commit()
     conn.close()
-    return {"message": "User approved successfully"}
+
+    # Record the credit grant in ledger
+    record_credit_transaction(
+        user_id=user_id,
+        amount=CREDITS_STARTING,
+        balance_after=CREDITS_STARTING,
+        transaction_type="credit",
+        reason="Starting credits on account approval",
+        created_by=admin["id"]
+    )
+
+    return {"message": f"User approved successfully with {CREDITS_STARTING} starting credits"}
 
 @app.delete("/api/admin/users/{user_id}")
 async def delete_user(user_id: int, admin: dict = Depends(get_admin_user)):
@@ -341,31 +509,39 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
     """Get admin dashboard statistics"""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     # Total users
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
-    
+
     # Approved users
     cursor.execute("SELECT COUNT(*) FROM users WHERE is_approved = 1")
     approved_users = cursor.fetchone()[0]
-    
+
     # Pending users
     cursor.execute("SELECT COUNT(*) FROM users WHERE is_approved = 0")
     pending_users = cursor.fetchone()[0]
-    
+
     # Total jobs
     cursor.execute("SELECT COUNT(*) FROM jobs")
     total_jobs = cursor.fetchone()[0]
-    
+
     # Completed jobs
     cursor.execute("SELECT COUNT(*) FROM jobs WHERE status = 'completed'")
     completed_jobs = cursor.fetchone()[0]
-    
+
     # Total results
     cursor.execute("SELECT COUNT(*) FROM results")
     total_results = cursor.fetchone()[0]
-    
+
+    # Total credits in circulation
+    cursor.execute("SELECT SUM(credit_balance) FROM users")
+    total_credits = cursor.fetchone()[0] or 0
+
+    # Pending credit requests
+    cursor.execute("SELECT COUNT(*) FROM credit_requests WHERE status = 'pending'")
+    pending_credit_requests = cursor.fetchone()[0]
+
     # Recent jobs
     cursor.execute("""
         SELECT j.job_id, j.category, j.status, j.created_at, u.username
@@ -384,9 +560,9 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
         }
         for j in cursor.fetchall()
     ]
-    
+
     conn.close()
-    
+
     return {
         "total_users": total_users,
         "approved_users": approved_users,
@@ -394,7 +570,292 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
         "total_jobs": total_jobs,
         "completed_jobs": completed_jobs,
         "total_results": total_results,
+        "total_credits": total_credits,
+        "pending_credit_requests": pending_credit_requests,
         "recent_jobs": recent_jobs
+    }
+
+
+# ==================== CREDIT ENDPOINTS ====================
+
+class CreditEstimateRequest(BaseModel):
+    num_cities: int
+    max_results_per_city: int = 10
+
+
+class CreditRequestModel(BaseModel):
+    amount_requested: int
+    reason: Optional[str] = None
+
+
+class AdminCreditGrant(BaseModel):
+    amount: int
+    reason: Optional[str] = None
+
+
+@app.get("/api/credits/config")
+async def get_credits_config(current_user: dict = Depends(get_current_user)):
+    """Get credit system configuration"""
+    return get_credit_config()
+
+
+@app.get("/api/credits/balance")
+async def get_credit_balance(current_user: dict = Depends(get_current_user)):
+    """Get current user's credit balance and rate limit status"""
+    balance = get_user_credit_balance(current_user["id"])
+    rate_status = check_rate_limits(current_user["id"])
+    config = get_credit_config()
+
+    return {
+        "balance": balance,
+        "rate_limits": {
+            "max_jobs_per_hour": config["max_jobs_per_hour"],
+            "max_concurrent_jobs": config["max_concurrent_jobs"],
+            "jobs_in_hour": rate_status["jobs_in_hour"],
+            "concurrent_jobs": rate_status["concurrent_jobs"],
+            "can_create_job": rate_status["can_proceed"]
+        }
+    }
+
+
+@app.post("/api/credits/estimate")
+async def estimate_job_cost(request: CreditEstimateRequest, current_user: dict = Depends(get_current_user)):
+    """Estimate credit cost for a job before submission"""
+    cost = estimate_credit_cost(request.num_cities, request.max_results_per_city)
+    balance = get_user_credit_balance(current_user["id"])
+
+    return {
+        "estimated_cost": cost,
+        "current_balance": balance,
+        "sufficient_credits": balance >= cost,
+        "balance_after": balance - cost if balance >= cost else 0
+    }
+
+
+@app.get("/api/credits/history")
+async def get_credit_history(current_user: dict = Depends(get_current_user)):
+    """Get user's credit transaction history"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, job_id, amount, balance_after, transaction_type, reason, created_at
+        FROM credit_ledger
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 50
+    """, (current_user["id"],))
+
+    transactions = [
+        {
+            "id": row[0],
+            "job_id": row[1],
+            "amount": row[2],
+            "balance_after": row[3],
+            "transaction_type": row[4],
+            "reason": row[5],
+            "created_at": row[6]
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+
+    return {"transactions": transactions}
+
+
+@app.post("/api/credits/request")
+async def request_credits(request: CreditRequestModel, current_user: dict = Depends(get_current_user)):
+    """Submit a request for more credits"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Check for pending requests
+    cursor.execute("SELECT COUNT(*) FROM credit_requests WHERE user_id = ? AND status = 'pending'", (current_user["id"],))
+    pending = cursor.fetchone()[0]
+    if pending > 0:
+        conn.close()
+        raise HTTPException(status_code=400, detail="You already have a pending credit request")
+
+    cursor.execute("""
+        INSERT INTO credit_requests (user_id, amount_requested, reason, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (current_user["id"], request.amount_requested, request.reason, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+    return {"message": "Credit request submitted successfully"}
+
+
+@app.get("/api/credits/requests")
+async def get_my_credit_requests(current_user: dict = Depends(get_current_user)):
+    """Get user's credit request history"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, amount_requested, reason, status, admin_note, created_at, reviewed_at
+        FROM credit_requests
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    """, (current_user["id"],))
+
+    requests = [
+        {
+            "id": row[0],
+            "amount_requested": row[1],
+            "reason": row[2],
+            "status": row[3],
+            "admin_note": row[4],
+            "created_at": row[5],
+            "reviewed_at": row[6]
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+
+    return {"requests": requests}
+
+
+# ==================== ADMIN CREDIT MANAGEMENT ====================
+
+@app.get("/api/admin/credits/requests")
+async def get_all_credit_requests(admin: dict = Depends(get_admin_user)):
+    """Get all pending credit requests (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT cr.id, cr.user_id, u.username, u.email, cr.amount_requested, cr.reason, cr.status, cr.created_at
+        FROM credit_requests cr
+        JOIN users u ON cr.user_id = u.id
+        WHERE cr.status = 'pending'
+        ORDER BY cr.created_at ASC
+    """)
+
+    requests = [
+        {
+            "id": row[0],
+            "user_id": row[1],
+            "username": row[2],
+            "email": row[3],
+            "amount_requested": row[4],
+            "reason": row[5],
+            "status": row[6],
+            "created_at": row[7]
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+
+    return {"requests": requests}
+
+
+@app.post("/api/admin/credits/requests/{request_id}/approve")
+async def approve_credit_request(request_id: int, admin: dict = Depends(get_admin_user)):
+    """Approve a credit request (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Get request details
+    cursor.execute("SELECT user_id, amount_requested FROM credit_requests WHERE id = ? AND status = 'pending'", (request_id,))
+    req = cursor.fetchone()
+    if not req:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Credit request not found or already processed")
+
+    user_id, amount = req
+
+    # Update request status
+    cursor.execute("""
+        UPDATE credit_requests SET status = 'approved', reviewed_by = ?, reviewed_at = ?
+        WHERE id = ?
+    """, (admin["id"], datetime.now().isoformat(), request_id))
+    conn.commit()
+    conn.close()
+
+    # Add credits to user
+    new_balance = add_credits(user_id, amount, "Credit request approved", admin["id"])
+
+    return {"message": "Credit request approved", "new_balance": new_balance}
+
+
+@app.post("/api/admin/credits/requests/{request_id}/deny")
+async def deny_credit_request(request_id: int, admin_note: Optional[str] = None, admin: dict = Depends(get_admin_user)):
+    """Deny a credit request (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE credit_requests SET status = 'denied', admin_note = ?, reviewed_by = ?, reviewed_at = ?
+        WHERE id = ? AND status = 'pending'
+    """, (admin_note, admin["id"], datetime.now().isoformat(), request_id))
+
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Credit request not found or already processed")
+
+    conn.commit()
+    conn.close()
+
+    return {"message": "Credit request denied"}
+
+
+@app.post("/api/admin/users/{user_id}/credits")
+async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, admin: dict = Depends(get_admin_user)):
+    """Manually grant credits to a user (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Verify user exists
+    cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+    conn.close()
+
+    new_balance = add_credits(user_id, grant.amount, grant.reason or "Admin manual grant", admin["id"])
+
+    return {"message": f"Granted {grant.amount} credits", "new_balance": new_balance}
+
+
+@app.get("/api/admin/users/{user_id}/credits")
+async def get_user_credits_admin(user_id: int, admin: dict = Depends(get_admin_user)):
+    """Get a user's credit balance and history (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Get user info
+    cursor.execute("SELECT username, email, credit_balance FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get recent transactions
+    cursor.execute("""
+        SELECT id, job_id, amount, balance_after, transaction_type, reason, created_at
+        FROM credit_ledger
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 20
+    """, (user_id,))
+
+    transactions = [
+        {
+            "id": row[0],
+            "job_id": row[1],
+            "amount": row[2],
+            "balance_after": row[3],
+            "transaction_type": row[4],
+            "reason": row[5],
+            "created_at": row[6]
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+
+    return {
+        "user_id": user_id,
+        "username": user[0],
+        "email": user[1],
+        "credit_balance": user[2],
+        "transactions": transactions
     }
 
 # ==================== SCRAPER ====================
@@ -739,37 +1200,70 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
 
 @app.post("/api/jobs", response_model=ScrapingJob)
 async def create_scraping_job(
-    request: ScrapingRequest, 
+    request: ScrapingRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new scraping job"""
+    """Create a new scraping job with credit check and rate limiting"""
+    user_id = current_user["id"]
+
+    # Check rate limits
+    rate_status = check_rate_limits(user_id)
+    if not rate_status["can_proceed"]:
+        raise HTTPException(status_code=429, detail=rate_status["reason"])
+
+    # Calculate credit cost
+    num_cities = len(request.cities_data)
+    credit_cost = estimate_credit_cost(num_cities, request.max_results_per_city)
+    current_balance = get_user_credit_balance(user_id)
+
+    # Check sufficient credits
+    if current_balance < credit_cost:
+        raise HTTPException(
+            status_code=402,  # Payment Required
+            detail=f"Insufficient credits. Required: {credit_cost}, Available: {current_balance}"
+        )
+
+    # Deduct credits upfront
+    new_balance = deduct_credits(user_id, credit_cost, reason=f"Job charge: {request.category}")
+
     job_id = str(uuid.uuid4())
-    
+
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Create job in database
+
+    # Create job in database with credit info
     cursor.execute("""
-        INSERT INTO jobs (job_id, user_id, category, cities_data, max_results_per_city, status, total_cities, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (job_id, user_id, category, cities_data, max_results_per_city, status, total_cities, credit_estimate, credit_charged, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        job_id, current_user["id"], request.category, 
+        job_id, user_id, request.category,
         json.dumps(request.cities_data), request.max_results_per_city,
-        "pending", len(request.cities_data), datetime.now().isoformat()
+        "pending", num_cities, credit_cost, credit_cost, datetime.now().isoformat()
     ))
     conn.commit()
+
+    # Update the credit ledger with job_id
+    cursor.execute("""
+        UPDATE credit_ledger SET job_id = ?
+        WHERE user_id = ? AND job_id IS NULL
+        ORDER BY created_at DESC LIMIT 1
+    """, (job_id, user_id))
+    conn.commit()
     conn.close()
-    
+
+    # Increment rate limit counter
+    increment_rate_limit(user_id)
+
     # Start background task
-    background_tasks.add_task(run_scraping_job, job_id, request, current_user["id"])
-    
+    background_tasks.add_task(run_scraping_job, job_id, request, user_id)
+
     # Return job
     return ScrapingJob(
         job_id=job_id,
         status=ScrapingStatus.PENDING,
         created_at=datetime.now().isoformat(),
-        logs=[f"Job created for category: {request.category}"]
+        logs=[f"Job created for category: {request.category}", f"Credits charged: {credit_cost}"]
     )
 
 @app.get("/api/jobs/{job_id}", response_model=ScrapingJob)
@@ -896,30 +1390,159 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
         "results": results
     }
 
+def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> bytes:
+    """Create a professionally formatted Excel file"""
+    wb = Workbook()
+    ws = wb.active
+
+    # Generate sheet title from category and location
+    sheet_title = f"{location}_{category}".replace(" ", "_")[:31]  # Excel sheet name limit
+    ws.title = sheet_title
+
+    # Define styles
+    header_font = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    cell_font = Font(name='Calibri', size=11)
+    cell_alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    link_font = Font(name='Calibri', size=11, color='0563C1', underline='single')
+
+    thin_border = Border(
+        left=Side(style='thin', color='D9D9D9'),
+        right=Side(style='thin', color='D9D9D9'),
+        top=Side(style='thin', color='D9D9D9'),
+        bottom=Side(style='thin', color='D9D9D9')
+    )
+
+    # Define column headers and widths
+    headers = ['#', 'Business Name', 'Phone', 'Website', 'Address', 'City', 'State', 'Google Maps']
+    col_widths = [5, 35, 18, 40, 50, 20, 15, 45]
+
+    # Write headers
+    for col, (header, width) in enumerate(zip(headers, col_widths), 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+        ws.column_dimensions[cell.column_letter].width = width
+
+    # Set row height for header
+    ws.row_dimensions[1].height = 25
+
+    # Write data
+    for row_idx, result in enumerate(results, 2):
+        # Row number
+        cell = ws.cell(row=row_idx, column=1, value=row_idx - 1)
+        cell.font = cell_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin_border
+
+        # Business Name
+        cell = ws.cell(row=row_idx, column=2, value=result.get('business_name', 'N/A'))
+        cell.font = Font(name='Calibri', size=11, bold=True)
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
+        # Phone
+        phone = result.get('phone', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=3, value=phone)
+        cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
+        # Website (as hyperlink if valid)
+        website = result.get('website', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=4)
+        if website and website != 'N/A' and website.startswith('http'):
+            cell.value = website
+            cell.hyperlink = website
+            cell.font = link_font
+        else:
+            cell.value = website
+            cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
+        # Address
+        address = result.get('address', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=5, value=address)
+        cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
+        # City
+        cell = ws.cell(row=row_idx, column=6, value=result.get('city', 'N/A'))
+        cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
+        # State
+        cell = ws.cell(row=row_idx, column=7, value=result.get('state', 'N/A'))
+        cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
+        # Google Maps URL (as hyperlink)
+        maps_url = result.get('google_maps_url', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=8)
+        if maps_url and maps_url != 'N/A' and maps_url.startswith('http'):
+            cell.value = 'View on Maps'
+            cell.hyperlink = maps_url
+            cell.font = link_font
+        else:
+            cell.value = 'N/A'
+            cell.font = cell_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin_border
+
+        # Alternate row coloring
+        if row_idx % 2 == 0:
+            alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+            for col in range(1, 9):
+                ws.cell(row=row_idx, column=col).fill = alt_fill
+
+    # Freeze the header row
+    ws.freeze_panes = 'A2'
+
+    # Add auto-filter
+    ws.auto_filter.ref = f"A1:H{len(results) + 1}"
+
+    # Save to bytes
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
 @app.get("/api/jobs/{job_id}/download")
 async def download_results(job_id: str, current_user: dict = Depends(get_current_user)):
-    """Download results as CSV"""
+    """Download results as formatted Excel (.xlsx) file"""
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Verify job ownership
-    cursor.execute("SELECT status FROM jobs WHERE job_id = ? AND user_id = ?", (job_id, current_user["id"]))
+
+    # Verify job ownership and get job details
+    cursor.execute("SELECT status, category FROM jobs WHERE job_id = ? AND user_id = ?", (job_id, current_user["id"]))
     job = cursor.fetchone()
     if not job:
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     if job[0] != "completed":
         conn.close()
         raise HTTPException(status_code=400, detail="Job not completed")
-    
+
+    category = job[1] or "Business"
+
     # Get results
     cursor.execute("""
         SELECT business_name, phone, website, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
-    
+
     results = []
+    cities_set = set()
     for row in cursor.fetchall():
         results.append({
             "business_name": row[0],
@@ -931,17 +1554,33 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
             "state": row[6],
             "google_maps_url": row[7]
         })
-    
+        if row[5]:
+            cities_set.add(row[5])
+
     conn.close()
-    
-    # Create CSV
-    df = pd.DataFrame(results)
-    csv_content = df.to_csv(index=False)
-    
+
+    # Generate location name for filename
+    if len(cities_set) == 1:
+        location = list(cities_set)[0].replace(" ", "_")
+    elif len(cities_set) > 1:
+        location = f"{len(cities_set)}_Cities"
+    else:
+        location = "Results"
+
+    # Create formatted Excel file
+    xlsx_bytes = create_formatted_xlsx(results, category, location)
+    xlsx_base64 = base64.b64encode(xlsx_bytes).decode('utf-8')
+
+    # Generate filename: Location_Category.xlsx (e.g., "City_of_London_Hotels.xlsx")
+    safe_category = category.replace(" ", "_").replace("/", "_")
+    safe_location = location.replace(" ", "_").replace("/", "_")
+    filename = f"{safe_location}_{safe_category}.xlsx"
+
     return {
-        "filename": f"business_results_{job_id}.csv",
-        "content": csv_content,
-        "content_type": "text/csv"
+        "filename": filename,
+        "content": xlsx_base64,
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "encoding": "base64"
     }
 
 # ==================== UTILITY ENDPOINTS ====================

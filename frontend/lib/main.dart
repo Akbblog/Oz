@@ -25,7 +25,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Business Scraper Pro',
+      title: 'Infinity Leads',
       theme: AppTheme.lightTheme,
       debugShowCheckedModeBanner: false,
       home: const AuthWrapper(),
@@ -78,7 +78,7 @@ class AuthWrapper extends StatelessWidget {
                 ),
                 const SizedBox(height: AppSpacing.xl),
                 Text(
-                  'Business Scraper Pro',
+                  'Infinity Leads',
                   style: AppTypography.headlineMediumLight,
                 ),
                 const SizedBox(height: AppSpacing.md),

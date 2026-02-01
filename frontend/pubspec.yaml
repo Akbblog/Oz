@@ -14,17 +14,28 @@ dependencies:
   http: ^1.1.0
   provider: ^6.1.1
   shared_preferences: ^2.2.2
-  permission_handler: ^11.3.0
-  csv: ^5.0.2
-  flutter_markdown: ^0.6.18
-  file_saver: ^0.2.12
-
+  permission_handler: ^12.0.1
+  csv: ^6.0.0
+  flutter_markdown: ^0.7.7+1
+  file_saver: ^0.3.1
+  universal_html: ^2.3.0
+  open_filex: ^4.5.0
+  url_launcher: ^6.2.5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/app_icon.png"
+  adaptive_icon_background: "#0A1929"
+  adaptive_icon_foreground: "assets/app_icon.png"
 
 flutter:
   uses-material-design: true
-  
+  assets:
+    - assets/

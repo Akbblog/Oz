@@ -149,7 +149,7 @@ class ScraperProvider with ChangeNotifier {
     }
   }
 
-  Future<String> downloadResults() async {
+  Future<Map<String, dynamic>> downloadResults() async {
     if (_currentJob == null) {
       throw Exception('No current job');
     }

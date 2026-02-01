@@ -3,8 +3,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Update this to your Railway URL after deployment
-  static const String baseUrl = 'https://YOUR-APP-NAME.up.railway.app';
+  // Railway production URL
+  static const String baseUrl = 'https://oz-production.up.railway.app';
   // For local development, use: 'http://127.0.0.1:8001'
 
   Future<String?> getToken() async {
@@ -163,7 +163,7 @@ class ApiService {
     }
   }
 
-  Future<String> downloadResults(String jobId) async {
+  Future<Map<String, dynamic>> downloadResults(String jobId) async {
     final headers = await _getHeaders();
     final response = await http.get(
       Uri.parse('$baseUrl/api/jobs/$jobId/download'),
@@ -172,7 +172,12 @@ class ApiService {
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      return data['content'];
+      return {
+        'filename': data['filename'] ?? 'results.xlsx',
+        'content': data['content'],
+        'content_type': data['content_type'] ?? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'encoding': data['encoding'] ?? 'base64',
+      };
     } else {
       throw Exception('Failed to download results');
     }
@@ -278,6 +283,187 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Failed to delete user');
+    }
+  }
+
+  // ==================== CREDIT ENDPOINTS ====================
+
+  Future<Map<String, dynamic>> getCreditConfig() async {
+    final headers = await _getHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/credits/config'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to get credit config');
+    }
+  }
+
+  Future<Map<String, dynamic>> getCreditBalance() async {
+    final headers = await _getHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/credits/balance'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to get credit balance');
+    }
+  }
+
+  Future<Map<String, dynamic>> estimateJobCost({
+    required int numCities,
+    int maxResultsPerCity = 10,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/credits/estimate'),
+      headers: headers,
+      body: jsonEncode({
+        'num_cities': numCities,
+        'max_results_per_city': maxResultsPerCity,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to estimate job cost');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getCreditHistory() async {
+    final headers = await _getHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/credits/history'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<Map<String, dynamic>>.from(data['transactions']);
+    } else {
+      throw Exception('Failed to get credit history');
+    }
+  }
+
+  Future<void> requestCredits({
+    required int amount,
+    String? reason,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/credits/request'),
+      headers: headers,
+      body: jsonEncode({
+        'amount_requested': amount,
+        'reason': reason,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      final error = jsonDecode(response.body);
+      throw Exception(error['detail'] ?? 'Failed to request credits');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getMyCreditRequests() async {
+    final headers = await _getHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/credits/requests'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<Map<String, dynamic>>.from(data['requests']);
+    } else {
+      throw Exception('Failed to get credit requests');
+    }
+  }
+
+  // ==================== ADMIN CREDIT MANAGEMENT ====================
+
+  Future<List<Map<String, dynamic>>> getAdminCreditRequests() async {
+    final headers = await _getHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/admin/credits/requests'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<Map<String, dynamic>>.from(data['requests']);
+    } else {
+      throw Exception('Failed to get credit requests');
+    }
+  }
+
+  Future<Map<String, dynamic>> approveCreditRequest(int requestId) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/credits/requests/$requestId/approve'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to approve credit request');
+    }
+  }
+
+  Future<void> denyCreditRequest(int requestId, {String? adminNote}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/credits/requests/$requestId/deny');
+    final response = await http.post(
+      adminNote != null ? uri.replace(queryParameters: {'admin_note': adminNote}) : uri,
+      headers: headers,
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to deny credit request');
+    }
+  }
+
+  Future<Map<String, dynamic>> grantCredits({
+    required int userId,
+    required int amount,
+    String? reason,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/credits'),
+      headers: headers,
+      body: jsonEncode({
+        'amount': amount,
+        'reason': reason,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to grant credits');
+    }
+  }
+
+  Future<Map<String, dynamic>> getUserCreditsAdmin(int userId) async {
+    final headers = await _getHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/admin/users/$userId/credits'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to get user credits');
     }
   }
 }

@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/scraper_provider.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
 import 'state_selection_screen.dart';
 import 'scraping_screen.dart';
 import 'results_screen.dart';
+import 'job_history_screen.dart';
 import 'admin_dashboard_screen.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,11 +22,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _currentIndex = 1; // Start on Scrape tab
   late PageController _pageController;
   late AnimationController _fabAnimationController;
+  final ApiService _apiService = ApiService();
+  int _creditBalance = 0;
+  bool _loadingCredits = true;
 
   final List<_NavItem> _navItems = const [
     _NavItem(icon: Icons.location_city_rounded, label: 'Cities'),
-    _NavItem(icon: Icons.rocket_launch_rounded, label: 'Scrape'),
+    _NavItem(icon: Icons.rocket_launch_rounded, label: 'Search'),
     _NavItem(icon: Icons.analytics_rounded, label: 'Results'),
+    _NavItem(icon: Icons.history_rounded, label: 'History'),
   ];
 
   @override
@@ -35,6 +42,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       vsync: this,
     );
     _fabAnimationController.forward();
+    _loadCreditBalance();
+  }
+
+  Future<void> _loadCreditBalance() async {
+    try {
+      final data = await _apiService.getCreditBalance();
+      if (mounted) {
+        setState(() {
+          _creditBalance = data['balance'] ?? 0;
+          _loadingCredits = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loadingCredits = false);
+      }
+    }
   }
 
   @override
@@ -50,6 +74,57 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       index,
       duration: AppSpacing.durationMedium,
       curve: Curves.easeInOutCubic,
+    );
+  }
+
+  Widget _buildCreditBadge() {
+    return GestureDetector(
+      onTap: _loadCreditBalance,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.success.withValues(alpha: 0.15),
+              AppColors.success.withValues(alpha: 0.05),
+            ],
+          ),
+          borderRadius: AppSpacing.borderRadiusRound,
+          border: Border.all(
+            color: AppColors.success.withValues(alpha: 0.3),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.account_balance_wallet,
+              size: 16,
+              color: AppColors.success,
+            ),
+            const SizedBox(width: 4),
+            _loadingCredits
+                ? SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.success),
+                    ),
+                  )
+                : Text(
+                    '$_creditBalance',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: AppColors.success,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -76,6 +151,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   StateSelectionScreen(),
                   ScrapingScreen(),
                   ResultsScreen(),
+                  JobHistoryScreen(),
                 ],
               ),
             ),
@@ -126,13 +202,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Business Scraper',
+                  'Infinity Leads',
                   style: AppTypography.titleMedium.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 Text(
-                  'Pro Edition',
+                  'Lead Discovery',
                   style: AppTypography.labelSmall.copyWith(
                     color: AppColors.primaryStart,
                   ),
@@ -140,6 +216,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ],
             ),
           ),
+
+          // Credit Balance
+          _buildCreditBadge(),
+          const SizedBox(width: AppSpacing.sm),
 
           // Admin Button
           if (authProvider.isAdmin)
@@ -231,7 +311,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         if (value == 'logout') {
           _showLogoutDialog(authProvider);
         } else if (value == 'profile') {
-          _showProfileDialog(authProvider);
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => const ProfileScreen(),
+            ),
+          );
         }
       },
       itemBuilder: (context) => [
@@ -284,92 +368,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
         ),
       ],
-    );
-  }
-
-  void _showProfileDialog(AuthProvider authProvider) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: AppSpacing.borderRadiusXl,
-        ),
-        child: Padding(
-          padding: AppSpacing.paddingLg,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    (authProvider.currentUser?['username'] ?? 'U')[0]
-                        .toUpperCase(),
-                    style: AppTypography.headlineLarge.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                authProvider.currentUser?['username'] ?? 'User',
-                style: AppTypography.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                authProvider.currentUser?['email'] ?? '',
-                style: AppTypography.bodyMedium.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              if (authProvider.isAdmin)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.md,
-                    vertical: AppSpacing.xs,
-                  ),
-                  decoration: BoxDecoration(
-                    gradient: AppColors.accentGradient,
-                    borderRadius: AppSpacing.borderRadiusRound,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.verified_rounded,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                      const SizedBox(width: AppSpacing.xs),
-                      Text(
-                        'Administrator',
-                        style: AppTypography.labelMedium.copyWith(
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              const SizedBox(height: AppSpacing.lg),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 
