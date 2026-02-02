@@ -215,10 +215,25 @@ with open('states_cities_data.json', 'r', encoding='utf-8') as f:
 with open('uk_regions_cities.json', 'r', encoding='utf-8') as f:
     UK_REGIONS_DATA = json.load(f)
 
+# Load UAE emirates and cities data
+with open('uae_cities_data.json', 'r', encoding='utf-8') as f:
+    UAE_CITIES_DATA = json.load(f)
+
+# Load KSA (Saudi Arabia) regions and cities data
+with open('ksa_cities_data.json', 'r', encoding='utf-8') as f:
+    KSA_CITIES_DATA = json.load(f)
+
+# Load Australia states and cities data
+with open('australia_cities_data.json', 'r', encoding='utf-8') as f:
+    AUSTRALIA_CITIES_DATA = json.load(f)
+
 # Mapping of country to its region/state data
 COUNTRIES_DATA = {
     "USA": STATES_CITIES_DATA,
-    "UK": UK_REGIONS_DATA
+    "UK": UK_REGIONS_DATA,
+    "UAE": UAE_CITIES_DATA,
+    "KSA": KSA_CITIES_DATA,
+    "Australia": AUSTRALIA_CITIES_DATA
 }
 
 # Results directory
@@ -1592,22 +1607,29 @@ async def health_check():
 
 @app.get("/api/states")
 async def get_states():
-    """Get list of all available states"""
-    # Return list of states for USA and list of regions for UK
+    """Get list of all available states/regions for all countries"""
     return {
         "USA": list(STATES_CITIES_DATA.keys()),
-        "UK": list(UK_REGIONS_DATA.keys())
+        "UK": list(UK_REGIONS_DATA.keys()),
+        "UAE": list(UAE_CITIES_DATA.keys()),
+        "KSA": list(KSA_CITIES_DATA.keys()),
+        "Australia": list(AUSTRALIA_CITIES_DATA.keys())
     }
 
 @app.get("/api/states/{state}/cities")
 async def get_cities(state: str):
-    """Get list of cities for a specific state"""
-    # Determine which country the request refers to based on a query parameter
-    # For backward compatibility, if the state exists in USA data we assume USA.
+    """Get list of cities for a specific state/region"""
+    # Check each country's data for the state/region
     if state in STATES_CITIES_DATA:
         return {"country": "USA", "state": state, "cities": STATES_CITIES_DATA[state]}
     elif state in UK_REGIONS_DATA:
         return {"country": "UK", "region": state, "cities": UK_REGIONS_DATA[state]}
+    elif state in UAE_CITIES_DATA:
+        return {"country": "UAE", "emirate": state, "cities": UAE_CITIES_DATA[state]}
+    elif state in KSA_CITIES_DATA:
+        return {"country": "KSA", "region": state, "cities": KSA_CITIES_DATA[state]}
+    elif state in AUSTRALIA_CITIES_DATA:
+        return {"country": "Australia", "state": state, "cities": AUSTRALIA_CITIES_DATA[state]}
     else:
         raise HTTPException(status_code=404, detail="State or region not found")
 
