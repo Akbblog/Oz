@@ -3,7 +3,7 @@ FastAPI Backend for Google Business Scraper
 Provides REST API for scraping functionality with authentication
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
@@ -187,6 +187,14 @@ def increment_rate_limit(user_id: int):
 init_database()
 
 app = FastAPI(title="Google Business Scraper API", version="2.0.0", debug=config.DEBUG)
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "Google Business Scraper API"}
+
+@app.get("/favicon.ico")
+async def favicon():
+    return Response(status_code=204)
 
 # ==================== COUNTRY ENDPOINTS ====================
 
