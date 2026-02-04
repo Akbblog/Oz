@@ -60,10 +60,78 @@ def init_database():
     try:
         applied_count = run_pending_migrations(migrations_dir)
         logger.info(f"✓ Database initialized successfully. Applied {applied_count} migration(s).")
+        try:
+            _ensure_default_admin_user(logger=logger)
+        except Exception as e:
+            logger.warning(f"Default admin bootstrap skipped/failed: {e}")
         return applied_count
     except Exception as e:
         logger.error(f"✗ Database initialization failed: {str(e)}")
         raise
+
+def _ensure_default_admin_user(logger=None) -> None:
+    """
+    Ensure at least one admin exists.
+
+    Repo docs expect a default admin for new/dev installs. This only creates (or
+    promotes) the configured DEFAULT_ADMIN_* identity, and only if no admin user
+    currently exists.
+    """
+    default_username = os.getenv("DEFAULT_ADMIN_USERNAME", "admin").strip()
+    default_email = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@tool.com").strip()
+    default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "tool.com")
+
+    if not default_username or not default_email:
+        return
+
+    # Allow disabling this behavior explicitly (recommended for production).
+    if os.getenv("DISABLE_DEFAULT_ADMIN", "false").lower() in ("true", "1", "t", "yes", "y"):
+        return
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # If any admin exists, do nothing.
+        cursor.execute("SELECT id FROM users WHERE is_admin = 1 LIMIT 1")
+        if cursor.fetchone():
+            return
+
+        ph = _get_placeholders()
+        cursor.execute(
+            f"SELECT id FROM users WHERE username = {ph} OR email = {ph} LIMIT 1",
+            (default_username, default_email),
+        )
+        existing = cursor.fetchone()
+        now = datetime.now().isoformat()
+
+        if existing:
+            user_id = int(existing[0])
+            cursor.execute(
+                f"UPDATE users SET is_admin = 1, is_approved = 1 WHERE id = {ph}",
+                (user_id,),
+            )
+            conn.commit()
+            if logger:
+                logger.info(f"✓ Promoted existing user id={user_id} to admin (username/email match).")
+            return
+
+        from auth import get_password_hash
+
+        cursor.execute(
+            f"""
+            INSERT INTO users (username, email, password_hash, is_approved, is_admin, created_at)
+            VALUES ({ph}, {ph}, {ph}, 1, 1, {ph})
+            """,
+            (default_username, default_email, get_password_hash(default_password), now),
+        )
+        conn.commit()
+        if logger:
+            logger.info(f"✓ Created default admin user '{default_username}' ({default_email}).")
+            logger.info("  Set DISABLE_DEFAULT_ADMIN=true to disable this auto-bootstrap.")
+    finally:
+        conn.close()
+
 
 def get_db():
     """Return a DB connection for the configured DB_TYPE"""

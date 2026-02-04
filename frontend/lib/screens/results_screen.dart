@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -32,7 +31,6 @@ class ResultsScreen extends StatefulWidget {
 
 class _ResultsScreenState extends State<ResultsScreen>
     with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-
   @override
   bool get wantKeepAlive => true;
   final ApiService _apiService = ApiService();
@@ -47,7 +45,11 @@ class _ResultsScreenState extends State<ResultsScreen>
   String _activeFilter = 'All'; // All, Has Phone, Has Website
   String _sortOption = 'Newest'; // Newest, Name A-Z, Category
   String _viewMode = 'Cards'; // Cards, Table
-  Set<String> _contactFilters = {'Phone', 'Website', 'Maps'}; // Contact type filters
+  Set<String> _contactFilters = {
+    'Phone',
+    'Website',
+    'Maps'
+  }; // Contact type filters
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -138,7 +140,8 @@ class _ResultsScreenState extends State<ResultsScreen>
     return scraperProvider.currentJob?.results ?? [];
   }
 
-  List<Map<String, dynamic>> _filterAndSortResults(List<Map<String, dynamic>> results) {
+  List<Map<String, dynamic>> _filterAndSortResults(
+      List<Map<String, dynamic>> results) {
     var filtered = results.where((business) {
       // Apply search filter
       if (_searchQuery.isNotEmpty) {
@@ -155,20 +158,21 @@ class _ResultsScreenState extends State<ResultsScreen>
       }
 
       // Apply contact type filters
-      final hasPhone = business['phone'] != null && 
+      final hasPhone = business['phone'] != null &&
           (business['phone'] ?? '').toString().isNotEmpty &&
           business['phone'] != 'N/A';
-      final hasWebsite = business['website'] != null && 
+      final hasWebsite = business['website'] != null &&
           (business['website'] ?? '').toString().isNotEmpty &&
           business['website'] != 'N/A';
 
       // If no filters selected, show all
       if (_contactFilters.isEmpty) return true;
-      
+
       // Check if business matches selected filters
       if (_contactFilters.contains('Phone') && hasPhone) return true;
       if (_contactFilters.contains('Website') && hasWebsite) return true;
-      if (_contactFilters.contains('Maps')) return true; // Maps is always available
+      if (_contactFilters.contains('Maps'))
+        return true; // Maps is always available
 
       return false;
 
@@ -295,9 +299,11 @@ class _ResultsScreenState extends State<ResultsScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  filter == 'Phone' ? Icons.phone_rounded
-                      : filter == 'Website' ? Icons.language_rounded
-                      : Icons.location_on_rounded,
+                  filter == 'Phone'
+                      ? Icons.phone_rounded
+                      : filter == 'Website'
+                          ? Icons.language_rounded
+                          : Icons.location_on_rounded,
                   size: 14,
                   color: isActive ? AppColors.primaryViolet : Colors.white70,
                 ),
@@ -350,6 +356,7 @@ class _ResultsScreenState extends State<ResultsScreen>
       ),
     );
   }
+
   Widget _buildBackgroundEffects() {
     return Stack(
       children: [
@@ -420,9 +427,8 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   Widget _downloadButton(int count) {
     return GestureDetector(
-      onTap: count > 0 && !_isDownloading
-          ? () => _downloadResults(context)
-          : null,
+      onTap:
+          count > 0 && !_isDownloading ? () => _downloadResults(context) : null,
       child: Container(
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.sm,
@@ -799,7 +805,8 @@ class _ResultsScreenState extends State<ResultsScreen>
     );
   }
 
-  Widget _buildContent(List<Map<String, dynamic>> results, LayoutType layoutType) {
+  Widget _buildContent(
+      List<Map<String, dynamic>> results, LayoutType layoutType) {
     if (_isLoading) {
       return _buildLoadingState();
     }
@@ -834,7 +841,8 @@ class _ResultsScreenState extends State<ResultsScreen>
         child: InfinityDataTable(
           layoutType: layoutType,
           columns: [
-            const InfinityDataColumn(label: 'Business Name', keyName: 'business_name'),
+            const InfinityDataColumn(
+                label: 'Business Name', keyName: 'business_name'),
             const InfinityDataColumn(label: 'Category', keyName: 'category'),
             const InfinityDataColumn(label: 'City', keyName: 'city'),
             const InfinityDataColumn(label: 'Phone', keyName: 'phone'),
@@ -925,6 +933,7 @@ class _ResultsScreenState extends State<ResultsScreen>
             ),
     );
   }
+
   Widget _buildLoadingState() {
     return Center(
       child: Column(
@@ -935,7 +944,8 @@ class _ResultsScreenState extends State<ResultsScreen>
             height: 48,
             child: CircularProgressIndicator(
               strokeWidth: 3,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryViolet),
+              valueColor:
+                  AlwaysStoppedAnimation<Color>(AppColors.primaryViolet),
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -1110,7 +1120,8 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   Future<void> _downloadResults(BuildContext context) async {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final scraperProvider = Provider.of<ScraperProvider>(context, listen: false);
+    final scraperProvider =
+        Provider.of<ScraperProvider>(context, listen: false);
 
     setState(() => _isDownloading = true);
 
@@ -1157,7 +1168,8 @@ class _LeadCard extends StatefulWidget {
   State<_LeadCard> createState() => _LeadCardState();
 }
 
-class _LeadCardState extends State<_LeadCard> with SingleTickerProviderStateMixin {
+class _LeadCardState extends State<_LeadCard>
+    with SingleTickerProviderStateMixin {
   late AnimationController _expandController;
   final Set<String> _expandedContacts = {};
 
@@ -1203,7 +1215,8 @@ class _LeadCardState extends State<_LeadCard> with SingleTickerProviderStateMixi
       decoration: BoxDecoration(
         color: AppColors.backgroundCard,
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.primaryViolet.withValues(alpha: 0.5)),
+        border:
+            Border.all(color: AppColors.primaryViolet.withValues(alpha: 0.5)),
         boxShadow: [
           BoxShadow(
             color: AppColors.primaryViolet.withValues(alpha: 0.2),

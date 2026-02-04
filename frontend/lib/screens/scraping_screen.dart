@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/scraper_provider.dart';
@@ -28,7 +27,6 @@ class ScrapingScreen extends StatefulWidget {
 
 class _ScrapingScreenState extends State<ScrapingScreen>
     with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-
   @override
   bool get wantKeepAlive => true;
   final TextEditingController _categoryController = TextEditingController();
@@ -64,7 +62,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
 
     _loadCreditBalance();
     _citiesController.addListener(_updateCostEstimate);
-    
+
     // Listen for job completion to auto-navigate
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupJobCompletionListener();
@@ -75,8 +73,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final provider = Provider.of<ScraperProvider>(context, listen: false);
     provider.addListener(() {
       final job = provider.currentJob;
-      if (job != null && 
-          job.status == ScrapingStatus.completed && 
+      if (job != null &&
+          job.status == ScrapingStatus.completed &&
           _lastCompletedJobId != job.jobId) {
         _lastCompletedJobId = job.jobId;
         _navigateToResults(job.jobId);
@@ -86,7 +84,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
 
   void _navigateToResults(String jobId) {
     if (!mounted) return;
-    
+
     // Auto-navigate with animation
     Navigator.of(context).push(
       PageRouteBuilder(
@@ -111,7 +109,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         transitionDuration: const Duration(milliseconds: 600),
       ),
     );
-    
+
     // Show success toast
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -314,6 +312,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       ),
     );
   }
+
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -542,9 +541,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           Wrap(
             spacing: AppSpacing.xs,
             runSpacing: AppSpacing.xs,
-            children: cities
-                .map((city) => _cityChip(city))
-                .toList(),
+            children: cities.map((city) => _cityChip(city)).toList(),
           ),
         ],
         const SizedBox(height: AppSpacing.md),
@@ -730,7 +727,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildActivitySection(int progress, List<String> logs, bool isRunning) {
+  Widget _buildActivitySection(
+      int progress, List<String> logs, bool isRunning) {
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
