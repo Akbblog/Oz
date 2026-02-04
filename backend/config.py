@@ -6,8 +6,8 @@ import os
 import logging
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from a local .env file (kept out of git)
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
 # General
 # Set to True for production, False for development

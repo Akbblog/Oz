@@ -155,11 +155,11 @@ Then open: `http://localhost:8080`
 
 ## Environment Configuration
 
-The app automatically detects the environment:
-- **Localhost** (development): Uses `http://127.0.0.1:8001` for API
-- **Production**: Uses `https://oz-production.up.railway.app` for API
+The frontend reads the API base URL from a build-time define:
 
-No environment variables needed!
+- **Recommended**: pass `--dart-define=API_URL=...` during your `flutter build web` (works with Vercel/Netlify/Firebase build pipelines).
+- **Local dev fallback**: uses `http://<current-host>:8080` (fallback `http://localhost:8080`).
+- **Production fallback**: same-origin (requires rewrites/proxy), otherwise set `API_URL`.
 
 ---
 

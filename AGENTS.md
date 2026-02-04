@@ -107,7 +107,9 @@ class Environment {
       return 'http://127.0.0.1:8001';
     }
     // Production Railway URL
-    return 'https://oz-production.up.railway.app';
+    // For production builds, pass `--dart-define=API_URL=...` to set the backend URL.
+    // If omitted, the app will fall back to same-origin (requires rewrites/proxy).
+    return html.window.location.origin ?? 'https://example.invalid';
   }
 }
 ```
@@ -424,7 +426,7 @@ static const Color primaryEnd = Color(0xFFA855F7);    // Purple
 ## Deployment
 
 ### Backend (Railway)
-- Currently deployed at: `https://oz-production.up.railway.app`
+- Backend deployment URL depends on your Railway project (set via env vars / build defines).
 - Environment: Python 3.11+, Playwright installed
 - Database: SQLite (persistent volume required for production)
 

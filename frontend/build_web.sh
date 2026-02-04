@@ -10,7 +10,13 @@ rm -rf build/web
 
 echo ""
 echo "Building Flutter web app (release mode)..."
-flutter build web --release --web-renderer canvaskit
+EXTRA_DEFINES=""
+if [ -n "${API_URL:-}" ]; then
+  echo "Using API_URL=$API_URL"
+  EXTRA_DEFINES="--dart-define=API_URL=$API_URL"
+fi
+
+flutter build web --release --web-renderer canvaskit $EXTRA_DEFINES
 
 if [ $? -eq 0 ]; then
     echo ""

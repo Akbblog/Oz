@@ -145,7 +145,9 @@ def get_db():
             pass
         return conn
     elif db_type == "mysql":
-        # Assumes DATABASE_URL is in the format: mysql+pymysql://user:password@host:port/db
+        # DATABASE_URL examples:
+        # - mysql://user:password@host:port/db
+        # - mysql+pymysql://user:password@host:port/db
         from urllib.parse import urlparse
         parsed_url = urlparse(config.DATABASE_URL)
         return pymysql.connect(

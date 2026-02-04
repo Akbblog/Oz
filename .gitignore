@@ -65,6 +65,12 @@ log/
 temp/
 tmp/
 
+# Environment variables (secrets)
+.env
+.env.*
+backend/.env
+backend/.env.*
+
 # Test results
 test_results/
 coverage/

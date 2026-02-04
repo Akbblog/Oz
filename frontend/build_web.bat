@@ -9,7 +9,13 @@ if exist build\web rmdir /s /q build\web
 
 echo.
 echo Building Flutter web app (release mode)...
-flutter build web --release --web-renderer canvaskit
+set DART_DEFINES=
+if not "%API_URL%"=="" (
+    echo Using API_URL=%API_URL%
+    set DART_DEFINES=--dart-define=API_URL=%API_URL%
+)
+
+flutter build web --release --web-renderer canvaskit %DART_DEFINES%
 
 if %errorlevel% == 0 (
     echo.

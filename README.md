@@ -65,7 +65,7 @@ Cross-platform:
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Note: `run_server.py` starts on port 8001 by default. Match your frontend `baseUrl` accordingly.
+Note: `run_server.py` starts on port 8001 by default. For Flutter web dev, either run the backend on 8080 or pass `--dart-define=API_URL=http://localhost:8001`.
 
 3) Health check
 
@@ -84,9 +84,10 @@ flutter pub get
 
 2) Set API base URL
 
-Update `baseUrl` in `frontend/lib/services/api_service.dart`:
-- Local dev: `http://127.0.0.1:8001`
-- Production: your deployed backend URL
+The app reads the API base URL from `frontend/lib/config/environment.dart`.
+
+- Local dev default: `http://<current-host>:8080` (fallback `http://localhost:8080`)
+- Production: pass `--dart-define=API_URL=https://<your-backend-host>` when building Flutter web.
 
 3) Run
 
@@ -105,7 +106,7 @@ flutter build web
 Backend options in `backend/database.py` and `backend/auth.py`:
 - `SECRET_KEY` (JWT secret)
 - `DB_TYPE` (`sqlite` or `mysql`)
-- `SQLITE_DB`, `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB`
+- `DATABASE_URL` (SQLite or MySQL connection string)
 - Credits: `CREDITS_BASE`, `CREDITS_PER_CITY`, `CREDITS_PER_RESULT`, `CREDITS_MIN_JOB`, `CREDITS_STARTING`
 - Rate limits: `MAX_JOBS_PER_HOUR`, `MAX_CONCURRENT_JOBS`
 
