@@ -47,6 +47,7 @@ class _ResultsScreenState extends State<ResultsScreen>
   String _activeFilter = 'All'; // All, Has Phone, Has Website
   String _sortOption = 'Newest'; // Newest, Name A-Z, Category
   String _viewMode = 'Cards'; // Cards, Table
+  Set<String> _contactFilters = {'Phone', 'Website', 'Maps'}; // Contact type filters
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -153,14 +154,23 @@ class _ResultsScreenState extends State<ResultsScreen>
         }
       }
 
-      // Apply data quality filters
-      if (_activeFilter == 'Has Phone') {
-        final phone = business['phone'] ?? '';
-        if (phone.isEmpty || phone == 'N/A') return false;
-      } else if (_activeFilter == 'Has Website') {
-        final website = business['website'] ?? '';
-        if (website.isEmpty || website == 'N/A') return false;
-      }
+      // Apply contact type filters
+      final hasPhone = business['phone'] != null && 
+          (business['phone'] ?? '').toString().isNotEmpty &&
+          business['phone'] != 'N/A';
+      final hasWebsite = business['website'] != null && 
+          (business['website'] ?? '').toString().isNotEmpty &&
+          business['website'] != 'N/A';
+
+      // If no filters selected, show all
+      if (_contactFilters.isEmpty) return true;
+      
+      // Check if business matches selected filters
+      if (_contactFilters.contains('Phone') && hasPhone) return true;
+      if (_contactFilters.contains('Website') && hasWebsite) return true;
+      if (_contactFilters.contains('Maps')) return true; // Maps is always available
+
+      return false;
 
       return true;
     }).toList();
@@ -245,6 +255,66 @@ class _ResultsScreenState extends State<ResultsScreen>
     } catch (e) {
       debugPrint('Error launching maps: $e');
     }
+  }
+
+  List<Widget> _buildContactFilterChips() {
+    const filters = ['Phone', 'Website', 'Maps'];
+    return filters.map((filter) {
+      final isActive = _contactFilters.contains(filter);
+      return Padding(
+        padding: const EdgeInsets.only(right: AppSpacing.xs),
+        child: GestureDetector(
+          onTap: () {
+            setState(() {
+              if (isActive) {
+                _contactFilters.remove(filter);
+              } else {
+                _contactFilters.add(filter);
+              }
+            });
+          },
+          child: AnimatedContainer(
+            duration: AppSpacing.durationFast,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xs,
+            ),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? AppColors.primaryViolet.withValues(alpha: 0.2)
+                  : AppColors.backgroundCard,
+              borderRadius: AppSpacing.borderRadiusSm,
+              border: Border.all(
+                color: isActive
+                    ? AppColors.primaryViolet
+                    : Colors.white.withValues(alpha: 0.1),
+                width: isActive ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  filter == 'Phone' ? Icons.phone_rounded
+                      : filter == 'Website' ? Icons.language_rounded
+                      : Icons.location_on_rounded,
+                  size: 14,
+                  color: isActive ? AppColors.primaryViolet : Colors.white70,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  filter,
+                  style: AppTypography.labelSmall.copyWith(
+                    color: isActive ? Colors.white : Colors.white70,
+                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }).toList();
   }
 
   @override
@@ -463,23 +533,28 @@ class _ResultsScreenState extends State<ResultsScreen>
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
-          // Filter and Sort chips
-          Row(
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _filterChip('All', Icons.list_rounded),
-                      const SizedBox(width: AppSpacing.xs),
-                      _filterChip('Has Phone', Icons.phone_rounded),
-                      const SizedBox(width: AppSpacing.xs),
-                      _filterChip('Has Website', Icons.language_rounded),
-                    ],
+          // Contact Type Filters
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                Text(
+                  'Show Results With:',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white60,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
+                const SizedBox(width: AppSpacing.sm),
+                ..._buildContactFilterChips(),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // Sort and View toggles
+          Row(
+            children: [
+              Expanded(child: SizedBox.shrink()),
               if (canTable) ...[
                 const SizedBox(width: AppSpacing.sm),
                 _viewToggle(),
@@ -1065,7 +1140,7 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 }
 
-class _LeadCard extends StatelessWidget {
+class _LeadCard extends StatefulWidget {
   final Map<String, dynamic> business;
   final VoidCallback? onPhoneTap;
   final VoidCallback? onWebsiteTap;
@@ -1079,16 +1154,49 @@ class _LeadCard extends StatelessWidget {
   });
 
   @override
+  State<_LeadCard> createState() => _LeadCardState();
+}
+
+class _LeadCardState extends State<_LeadCard> with SingleTickerProviderStateMixin {
+  late AnimationController _expandController;
+  final Set<String> _expandedContacts = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _expandController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+  }
+
+  @override
+  void dispose() {
+    _expandController.dispose();
+    super.dispose();
+  }
+
+  void _toggleContactExpanded(String contactType) {
+    setState(() {
+      if (_expandedContacts.contains(contactType)) {
+        _expandedContacts.remove(contactType);
+      } else {
+        _expandedContacts.add(contactType);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final hasPhone = business['phone'] != null &&
-        business['phone'] != 'N/A' &&
-        business['phone'].toString().isNotEmpty;
-    final hasWebsite = business['website'] != null &&
-        business['website'] != 'N/A' &&
-        business['website'].toString().isNotEmpty;
-    final hasAddress = business['address'] != null &&
-        business['address'] != 'N/A' &&
-        business['address'].toString().isNotEmpty;
+    final hasPhone = widget.business['phone'] != null &&
+        widget.business['phone'] != 'N/A' &&
+        widget.business['phone'].toString().isNotEmpty;
+    final hasWebsite = widget.business['website'] != null &&
+        widget.business['website'] != 'N/A' &&
+        widget.business['website'].toString().isNotEmpty;
+    final hasAddress = widget.business['address'] != null &&
+        widget.business['address'] != 'N/A' &&
+        widget.business['address'].toString().isNotEmpty;
 
     return Container(
       padding: AppSpacing.paddingMd,
@@ -1107,6 +1215,7 @@ class _LeadCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Business Info Header
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1115,19 +1224,23 @@ class _LeadCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      business['business_name'] ?? 'Unknown Business',
+                      widget.business['business_name'] ?? 'Unknown Business',
                       style: AppTypography.titleMedium.copyWith(
                         color: Colors.white,
                         fontWeight: FontWeight.w700,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
                     if (hasAddress)
                       Text(
-                        business['address'],
+                        widget.business['address'],
                         style: AppTypography.bodySmall.copyWith(
                           color: Colors.white60,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                   ],
                 ),
@@ -1145,7 +1258,7 @@ class _LeadCard extends StatelessWidget {
                   ),
                 ),
                 child: Text(
-                  business['category'] ?? 'Category',
+                  widget.business['category'] ?? 'Category',
                   style: AppTypography.labelSmall.copyWith(
                     color: AppColors.emerald,
                     fontWeight: FontWeight.w700,
@@ -1155,35 +1268,55 @@ class _LeadCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.md),
+          // Verified Badge
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: AppColors.emerald,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Verified Lead',
-                    style: AppTypography.labelSmall.copyWith(
-                      color: Colors.white60,
-                    ),
-                  ),
-                ],
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: AppColors.emerald,
+                  shape: BoxShape.circle,
+                ),
               ),
-              Row(
-                children: [
-                  if (hasPhone) _actionButton(Icons.call, onPhoneTap, 'Call'),
-                  if (hasWebsite) _actionButton(Icons.language, onWebsiteTap, 'Visit Website'),
-                  if (hasAddress) _actionButton(Icons.location_on, onAddressTap, 'View on Map'),
-                ],
+              const SizedBox(width: 6),
+              Text(
+                'Verified Lead',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white60,
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          // Animated Contact Buttons
+          Column(
+            children: [
+              if (hasPhone) ...[
+                _buildExpandableContactButton(
+                  'Phone',
+                  Icons.phone_rounded,
+                  widget.business['phone'] ?? '',
+                  widget.onPhoneTap,
+                ),
+                const SizedBox(height: AppSpacing.xs),
+              ],
+              if (hasWebsite) ...[
+                _buildExpandableContactButton(
+                  'Website',
+                  Icons.language_rounded,
+                  widget.business['website'] ?? '',
+                  widget.onWebsiteTap,
+                ),
+                const SizedBox(height: AppSpacing.xs),
+              ],
+              if (hasAddress)
+                _buildExpandableContactButton(
+                  'Maps',
+                  Icons.location_on_rounded,
+                  widget.business['address'] ?? '',
+                  widget.onAddressTap,
+                ),
             ],
           ),
         ],
@@ -1191,42 +1324,95 @@ class _LeadCard extends StatelessWidget {
     );
   }
 
-  Widget _actionButton(IconData icon, VoidCallback? onTap, String tooltip) {
-    return Padding(
-      padding: const EdgeInsets.only(left: AppSpacing.xs),
-      child: Tooltip(
-        message: tooltip,
+  Widget _buildExpandableContactButton(
+    String label,
+    IconData icon,
+    String value,
+    VoidCallback? onTap,
+  ) {
+    final isExpanded = _expandedContacts.contains(label);
+
+    return GestureDetector(
+      onTap: () {
+        if (isExpanded) {
+          // Second click: perform action
+          onTap?.call();
+          _toggleContactExpanded(label);
+        } else {
+          // First click: expand to show value
+          _toggleContactExpanded(label);
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: isExpanded ? AppSpacing.xs : AppSpacing.xxs,
+        ),
         decoration: BoxDecoration(
-          color: AppColors.backgroundCard,
-          borderRadius: AppSpacing.borderRadiusSm,
-          border: Border.all(
-            color: AppColors.primaryViolet.withValues(alpha: 0.5),
-          ),
-        ),
-        textStyle: AppTypography.labelSmall.copyWith(
-          color: Colors.white,
-          fontWeight: FontWeight.w500,
-        ),
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppColors.primaryViolet, AppColors.indigo],
-              ),
-              borderRadius: AppSpacing.borderRadiusSm,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryViolet.withValues(alpha: 0.4),
-                  blurRadius: 10,
-                  spreadRadius: -6,
+          gradient: isExpanded
+              ? LinearGradient(
+                  colors: [AppColors.primaryViolet, AppColors.indigo],
+                )
+              : LinearGradient(
+                  colors: [AppColors.primaryViolet, AppColors.indigo],
                 ),
-              ],
+          borderRadius: AppSpacing.borderRadiusSm,
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primaryViolet.withValues(
+                alpha: isExpanded ? 0.5 : 0.3,
+              ),
+              blurRadius: isExpanded ? 12 : 8,
+              spreadRadius: isExpanded ? -4 : -6,
             ),
-            child: Icon(icon, color: Colors.white, size: 18),
-          ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 16),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (isExpanded) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      value,
+                      style: AppTypography.bodySmall.copyWith(
+                        color: Colors.white70,
+                        fontSize: 11,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (isExpanded) ...[
+              const SizedBox(width: AppSpacing.xs),
+              Icon(
+                Icons.arrow_forward_rounded,
+                color: Colors.white,
+                size: 14,
+              ),
+            ] else
+              Icon(
+                Icons.expand_more_rounded,
+                color: Colors.white70,
+                size: 16,
+              ),
+          ],
         ),
       ),
     );

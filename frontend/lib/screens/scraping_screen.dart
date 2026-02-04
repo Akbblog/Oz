@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
+import 'results_screen.dart';
 
 class ScrapingScreen extends StatefulWidget {
   final String initialCategory;
@@ -39,6 +40,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   int _estimatedCost = 0;
   bool _loadingCredits = true;
   bool _canCreateJob = true;
+  String? _lastCompletedJobId; // Track job completion for auto-navigation
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
@@ -62,6 +64,71 @@ class _ScrapingScreenState extends State<ScrapingScreen>
 
     _loadCreditBalance();
     _citiesController.addListener(_updateCostEstimate);
+    
+    // Listen for job completion to auto-navigate
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupJobCompletionListener();
+    });
+  }
+
+  void _setupJobCompletionListener() {
+    final provider = Provider.of<ScraperProvider>(context, listen: false);
+    provider.addListener(() {
+      final job = provider.currentJob;
+      if (job != null && 
+          job.status == ScrapingStatus.completed && 
+          _lastCompletedJobId != job.jobId) {
+        _lastCompletedJobId = job.jobId;
+        _navigateToResults(job.jobId);
+      }
+    });
+  }
+
+  void _navigateToResults(String jobId) {
+    if (!mounted) return;
+    
+    // Auto-navigate with animation
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return ResultsScreen(jobId: jobId, showHeader: widget.showHeader);
+        },
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.3),
+                end: Offset.zero,
+              ).animate(CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOutCubic,
+              )),
+              child: child,
+            ),
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 600),
+      ),
+    );
+    
+    // Show success toast
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: 12),
+              Text('Search completed! Navigating to results...'),
+            ],
+          ),
+          backgroundColor: Colors.green.shade700,
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override

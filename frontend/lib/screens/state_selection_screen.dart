@@ -1,5 +1,6 @@
 
 import 'package:flutter/material.dart';
+import 'package:country_flags/country_flags.dart';
 import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
@@ -563,11 +564,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              _countryIcon(country),
-              color: isSelected ? _LocationColors.primary : _LocationColors.textSecondary,
-              size: 18,
-            ),
+            _buildCountryLeading(country, isSelected: isSelected),
             const SizedBox(width: AppSpacing.xs),
             Text(
               country,
@@ -582,20 +579,43 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  IconData _countryIcon(String country) {
+  Widget _buildCountryLeading(String country, {required bool isSelected}) {
+    final code = _countryCode(country);
+    if (code != null) {
+      return Semantics(
+        label: country,
+        child: CountryFlag.fromCountryCode(
+          code,
+          theme: const ImageTheme(
+            width: 22,
+            height: 16,
+            shape: RoundedRectangle(3),
+          ),
+        ),
+      );
+    }
+
+    return Icon(
+      Icons.public_rounded,
+      color: isSelected ? _LocationColors.primary : _LocationColors.textSecondary,
+      size: 18,
+    );
+  }
+
+  String? _countryCode(String country) {
     switch (country) {
       case 'USA':
-        return Icons.flag_rounded;
+        return 'US';
       case 'UK':
-        return Icons.flag_rounded;
+        return 'GB';
       case 'UAE':
-        return Icons.location_city_rounded;
+        return 'AE';
       case 'KSA':
-        return Icons.mosque_rounded;
+        return 'SA';
       case 'Australia':
-        return Icons.landscape_rounded;
+        return 'AU';
       default:
-        return Icons.public_rounded;
+        return null;
     }
   }
 
