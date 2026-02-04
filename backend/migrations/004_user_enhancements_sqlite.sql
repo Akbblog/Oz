@@ -97,13 +97,12 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(e
 CREATE TABLE IF NOT EXISTS rate_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
-    endpoint TEXT NOT NULL,
-    requests_count INTEGER DEFAULT 0,
     window_start TEXT NOT NULL,
-    window_end TEXT NOT NULL,
-    last_request_at TEXT,
+    jobs_in_window INTEGER DEFAULT 0,
+    concurrent_jobs INTEGER DEFAULT 0,
+    last_job_at TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_user_endpoint ON rate_limits(user_id, endpoint, window_start);
-CREATE INDEX IF NOT EXISTS idx_rate_limit_window ON rate_limits(window_start, window_end);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_user ON rate_limits(user_id);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_window ON rate_limits(window_start);

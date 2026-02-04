@@ -91,13 +91,12 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE TABLE IF NOT EXISTS rate_limits (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
-    endpoint VARCHAR(255) NOT NULL,
-    requests_count INT DEFAULT 0,
     window_start TEXT NOT NULL,
-    window_end TEXT NOT NULL,
-    last_request_at TEXT,
-    UNIQUE KEY unique_rate_limit (user_id, endpoint, window_start),
-    INDEX idx_rate_limit_window (window_start(64), window_end(64)),
+    jobs_in_window INT DEFAULT 0,
+    concurrent_jobs INT DEFAULT 0,
+    last_job_at TEXT,
+    UNIQUE KEY unique_rate_limit (user_id),
+    INDEX idx_rate_limit_window (window_start(64)),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
