@@ -12,6 +12,24 @@ class ApiService {
   // Default timeout duration
   static const Duration timeout = Duration(seconds: 30);
 
+  List<Map<String, dynamic>> _decodeListOfMaps(String body, {String? key}) {
+    final decoded = jsonDecode(body);
+    dynamic listValue = decoded;
+
+    if (decoded is Map<String, dynamic> && key != null && decoded.containsKey(key)) {
+      listValue = decoded[key];
+    }
+
+    if (listValue is List) {
+      return listValue
+          .where((e) => e is Map)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    }
+
+    return const <Map<String, dynamic>>[];
+  }
+
   Future<String?> getToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('auth_token');
@@ -946,8 +964,7 @@ class ApiService {
     ).timeout(timeout);
 
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['packages'] ?? data);
+      return _decodeListOfMaps(response.body, key: 'packages');
     } else {
       throw Exception('Failed to load credit packages');
     }
@@ -1020,8 +1037,7 @@ class ApiService {
     ).timeout(timeout);
 
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['transactions'] ?? data);
+      return _decodeListOfMaps(response.body, key: 'transactions');
     } else {
       throw Exception('Failed to load payment transactions');
     }
@@ -1051,8 +1067,7 @@ class ApiService {
     ).timeout(timeout);
 
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['methods'] ?? data);
+      return _decodeListOfMaps(response.body, key: 'methods');
     } else {
       throw Exception('Failed to load payment methods');
     }
@@ -1108,8 +1123,7 @@ class ApiService {
     ).timeout(timeout);
 
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['plans'] ?? data);
+      return _decodeListOfMaps(response.body, key: 'plans');
     } else {
       throw Exception('Failed to load subscription plans');
     }
@@ -1210,8 +1224,7 @@ class ApiService {
     ).timeout(timeout);
 
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['invoices'] ?? data);
+      return _decodeListOfMaps(response.body, key: 'invoices');
     } else {
       throw Exception('Failed to load invoices');
     }

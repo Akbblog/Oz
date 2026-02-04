@@ -78,7 +78,7 @@ def _ensure_default_admin_user(logger=None) -> None:
     currently exists.
     """
     default_username = os.getenv("DEFAULT_ADMIN_USERNAME", "admin").strip()
-    default_email = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@tool.com").strip()
+    default_email = os.getenv("DEFAULT_ADMIN_EMAIL", "akb@tool.com").strip()
     default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "tool.com")
 
     if not default_username or not default_email:
