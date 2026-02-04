@@ -2401,7 +2401,7 @@ async def my_subscription(current_user: dict = Depends(get_current_user)):
 
     sub = get_user_active_subscription(current_user["id"])
     if not sub:
-        return None
+        raise HTTPException(status_code=404, detail="No active subscription")
     return {
         "id": sub[0],
         "user_id": sub[1],
