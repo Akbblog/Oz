@@ -1,12 +1,12 @@
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
-import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
-import '../widgets/gradient_background.dart';
-import '../widgets/glass_card.dart';
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_breakpoints.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -57,7 +57,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       try {
         creditReqs = await _apiService.getAdminCreditRequests();
       } catch (_) {
-        // Credit requests endpoint may fail, continue without it
+        // Ignore credit request failures.
       }
       if (mounted) {
         setState(() {
@@ -70,7 +70,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        _showSnackBar('Error loading data: $e', AppColors.error);
+        _showSnackBar('Error loading data: $e', AppColors.rose);
       }
     }
   }
@@ -79,9 +79,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       await _apiService.approveUser(userId);
       _loadData();
-      _showSnackBar('User approved successfully', AppColors.success);
+      _showSnackBar('User approved successfully', AppColors.emerald);
     } catch (e) {
-      _showSnackBar('Error approving user: $e', AppColors.error);
+      _showSnackBar('Error approving user: $e', AppColors.rose);
     }
   }
 
@@ -95,75 +95,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       try {
         await _apiService.deleteUser(userId);
         _loadData();
-        _showSnackBar('User deleted successfully', AppColors.success);
+        _showSnackBar('User deleted successfully', AppColors.emerald);
       } catch (e) {
-        _showSnackBar('Error deleting user: $e', AppColors.error);
+        _showSnackBar('Error deleting user: $e', AppColors.rose);
       }
     }
   }
 
-  Widget _buildDeleteDialog() {
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      child: GlassCard(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.error.withValues(alpha: 0.2),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.warning_rounded,
-                color: AppColors.error,
-                size: 40,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              'Delete User',
-              style: AppTypography.titleLarge.copyWith(color: Colors.white),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'Are you sure you want to delete this user?\nThis action cannot be undone.',
-              textAlign: TextAlign.center,
-              style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white70,
-                      side: const BorderSide(color: Colors.white30),
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                    ),
-                    child: const Text('Cancel'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.error,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                    ),
-                    child: const Text('Delete'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
+  Future<void> _approveCreditRequest(int requestId) async {
+    try {
+      await _apiService.approveCreditRequest(requestId);
+      _loadData();
+      _showSnackBar('Credit request approved', AppColors.emerald);
+    } catch (e) {
+      _showSnackBar('Error approving request: $e', AppColors.rose);
+    }
+  }
+
+  Future<void> _denyCreditRequest(int requestId) async {
+    try {
+      await _apiService.denyCreditRequest(requestId);
+      _loadData();
+      _showSnackBar('Credit request denied', AppColors.amber);
+    } catch (e) {
+      _showSnackBar('Error denying request: $e', AppColors.rose);
+    }
   }
 
   void _showSnackBar(String message, Color color) {
@@ -173,7 +129,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         content: Row(
           children: [
             Icon(
-              color == AppColors.success
+              color == AppColors.emerald
                   ? Icons.check_circle
                   : Icons.error_outline,
               color: Colors.white,
@@ -195,115 +151,168 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
+    final layoutType =
+        AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
     if (!authProvider.isAdmin) {
       return _buildAccessDenied();
     }
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: _buildAppBar(authProvider),
-      body: GradientBackground(
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: _isLoading ? _buildLoading() : _buildContent(),
+      backgroundColor: AppColors.backgroundDark,
+      body: SafeArea(
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: Stack(
+            children: [
+              _buildBackgroundPattern(),
+              Column(
+                children: [
+                  _buildHeader(authProvider),
+                  Expanded(
+                    child: _isLoading
+                        ? _buildLoading()
+                        : _buildContent(layoutType),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+  Widget _buildBackgroundPattern() {
+    return Positioned.fill(
+      child: CustomPaint(
+        painter: _GeoPatternPainter(),
+      ),
+    );
+  }
+
+  Widget _buildHeader(AuthProvider authProvider) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundDark.withValues(alpha: 0.95),
+        border: Border(
+          bottom: BorderSide(
+            color: AppColors.cardDarkHighlight.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [AppColors.purplePrimary, AppColors.purpleDark],
+              ),
+              borderRadius: AppSpacing.borderRadiusMd,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.purplePrimary.withValues(alpha: 0.2),
+                  blurRadius: 12,
+                  spreadRadius: -6,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.all_inclusive, color: Colors.white),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Infinity Leads',
+                  style: AppTypography.titleMedium.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Admin Dashboard',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white60,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Revenue',
+            onPressed: () => Navigator.of(context).pushNamed('/admin/revenue'),
+            icon: const Icon(Icons.show_chart_rounded, color: Colors.white70),
+          ),
+          IconButton(
+            tooltip: 'Pricing',
+            onPressed: () => Navigator.of(context).pushNamed('/admin/pricing'),
+            icon: const Icon(Icons.tune_rounded, color: Colors.white70),
+          ),
+          IconButton(
+            tooltip: 'Promos',
+            onPressed: () => Navigator.of(context).pushNamed('/admin/promos'),
+            icon: const Icon(Icons.confirmation_number_rounded,
+                color: Colors.white70),
+          ),
+          IconButton(
+            onPressed: _loadData,
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+          ),
+          IconButton(
+            onPressed: () async {
+              await authProvider.logout();
+              if (mounted) {
+                Navigator.of(context).pushReplacementNamed('/login');
+              }
+            },
+            icon: const Icon(Icons.logout_rounded, color: Colors.white70),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildAccessDenied() {
     return Scaffold(
-      body: GradientBackground(
-        child: Center(
-          child: GlassCard(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withValues(alpha: 0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.lock,
-                    color: AppColors.error,
-                    size: 48,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text(
-                  'Access Denied',
-                  style: AppTypography.headlineSmall.copyWith(color: Colors.white),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  'You do not have permission to access this area.',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar(AuthProvider authProvider) {
-    return AppBar(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      leading: IconButton(
-        icon: Container(
-          padding: const EdgeInsets.all(8),
+      backgroundColor: AppColors.backgroundDark,
+      body: Center(
+        child: Container(
+          padding: AppSpacing.paddingLg,
           decoration: BoxDecoration(
-            color: AppColors.glassWhite,
-            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+            color: AppColors.cardDark,
+            borderRadius: AppSpacing.borderRadiusLg,
+            border: Border.all(color: AppColors.cardDarkHighlight),
           ),
-          child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.lock, color: AppColors.rose, size: 48),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'Access Denied',
+                style: AppTypography.titleMedium.copyWith(
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'You do not have permission to access this area.',
+                textAlign: TextAlign.center,
+                style: AppTypography.bodySmall.copyWith(
+                  color: Colors.white60,
+                ),
+              ),
+            ],
+          ),
         ),
-        onPressed: () => Navigator.pop(context),
       ),
-      title: Text(
-        'Admin Dashboard',
-        style: AppTypography.headlineSmallLight,
-      ),
-      centerTitle: true,
-      actions: [
-        IconButton(
-          icon: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColors.glassWhite,
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-            ),
-            child: const Icon(Icons.refresh, color: Colors.white, size: 20),
-          ),
-          onPressed: _loadData,
-        ),
-        const SizedBox(width: AppSpacing.xs),
-        IconButton(
-          icon: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColors.glassWhite,
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-            ),
-            child: const Icon(Icons.logout, color: Colors.white, size: 20),
-          ),
-          onPressed: () async {
-            await authProvider.logout();
-            if (mounted) {
-              Navigator.of(context).pushReplacementNamed('/login');
-            }
-          },
-        ),
-        const SizedBox(width: AppSpacing.md),
-      ],
     );
   }
 
@@ -312,36 +321,36 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 60,
-            height: 60,
+          const SizedBox(
+            width: 56,
+            height: 56,
             child: CircularProgressIndicator(
               strokeWidth: 4,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.secondaryStart),
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.purplePrimary),
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
           Text(
             'Loading dashboard...',
-            style: AppTypography.titleMediumLight,
+            style: AppTypography.bodyMedium.copyWith(
+              color: Colors.white70,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildContent() {
+  Widget _buildContent(LayoutType layoutType) {
     return Column(
       children: [
-        // Tab Selector
         Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: _buildTabSelector(),
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: _buildTabs(),
         ),
-        // Content
         Expanded(
           child: _selectedTab == 0
-              ? _buildStatsView()
+              ? _buildStatsView(layoutType)
               : _selectedTab == 1
                   ? _buildUsersView()
                   : _buildCreditsView(),
@@ -350,14 +359,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  Widget _buildTabSelector() {
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.xs),
+  Widget _buildTabs() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.cardDarkHighlight),
+      ),
       child: Row(
         children: [
-          Expanded(child: _buildTab(0, 'Stats', Icons.analytics)),
-          Expanded(child: _buildTab(1, 'Users', Icons.people)),
-          Expanded(child: _buildTab(2, 'Credits', Icons.account_balance_wallet)),
+          Expanded(child: _buildTab(0, 'Stats', Icons.query_stats)),
+          Expanded(child: _buildTab(1, 'Users', Icons.group)),
+          Expanded(child: _buildTab(2, 'Credits', Icons.credit_card)),
         ],
       ),
     );
@@ -369,25 +383,29 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       onTap: () => setState(() => _selectedTab = index),
       child: AnimatedContainer(
         duration: AppSpacing.durationFast,
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
         decoration: BoxDecoration(
-          gradient: isSelected ? AppColors.primaryGradient : null,
-          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+          color: isSelected ? AppColors.purplePrimary : Colors.transparent,
+          borderRadius: AppSpacing.borderRadiusMd,
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: AppColors.purplePrimary.withValues(alpha: 0.25),
+                    blurRadius: 12,
+                    spreadRadius: -6,
+                  ),
+                ]
+              : null,
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
           children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.white : Colors.white60,
-              size: 20,
-            ),
-            const SizedBox(width: AppSpacing.xs),
+            Icon(icon, size: 18, color: isSelected ? Colors.white : Colors.white54),
+            const SizedBox(height: 4),
             Text(
               label,
-              style: AppTypography.labelLarge.copyWith(
-                color: isSelected ? Colors.white : Colors.white60,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              style: AppTypography.labelSmall.copyWith(
+                color: isSelected ? Colors.white : Colors.white54,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
@@ -395,8 +413,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       ),
     );
   }
-
-  Widget _buildStatsView() {
+  Widget _buildStatsView(LayoutType layoutType) {
     if (_stats == null) {
       return Center(
         child: Text(
@@ -406,213 +423,305 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       );
     }
 
+    final crossAxisCount = layoutType == LayoutType.desktopLarge
+        ? 6
+        : layoutType == LayoutType.desktopMedium
+            ? 4
+            : layoutType == LayoutType.desktopSmall
+                ? 3
+                : 2;
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Stats Grid
+          _buildSectionHeader('Overview', 'Last 24h'),
+          const SizedBox(height: AppSpacing.sm),
           GridView.count(
-            crossAxisCount: 2,
+            crossAxisCount: crossAxisCount,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: AppSpacing.md,
-            mainAxisSpacing: AppSpacing.md,
-            childAspectRatio: 1.1,
+            crossAxisSpacing: AppSpacing.sm,
+            mainAxisSpacing: AppSpacing.sm,
+            childAspectRatio: layoutType.index >= LayoutType.desktopSmall.index
+                ? 1.5
+                : 1.15,
             children: [
               _buildStatCard(
                 'Total Users',
                 _stats!['total_users'].toString(),
-                Icons.people,
-                AppColors.blueGradient,
-              ),
-              _buildStatCard(
-                'Approved',
-                _stats!['approved_users'].toString(),
-                Icons.check_circle,
-                AppColors.tealGradient,
+                Icons.group_add,
+                AppColors.purplePrimary,
               ),
               _buildStatCard(
                 'Pending',
                 _stats!['pending_users'].toString(),
-                Icons.pending,
-                AppColors.orangeGradient,
+                Icons.pending_actions,
+                AppColors.amber,
               ),
               _buildStatCard(
                 'Total Jobs',
                 _stats!['total_jobs'].toString(),
                 Icons.work,
-                AppColors.purpleGradient,
+                AppColors.blue,
               ),
               _buildStatCard(
-                'Completed',
-                _stats!['completed_jobs'].toString(),
-                Icons.done_all,
-                AppColors.secondaryGradient,
+                'Credits',
+                (_stats!['total_credits'] ?? 0).toString(),
+                Icons.payments,
+                AppColors.purple,
               ),
-              _buildStatCard(
-                'Results',
-                _stats!['total_results'].toString(),
-                Icons.list_alt,
-                AppColors.pinkGradient,
-              ),
-              _buildStatCard(
-                'Total Credits',
-                _stats!['total_credits']?.toString() ?? '0',
-                Icons.account_balance_wallet,
-                AppColors.successGradient,
-              ),
-              _buildStatCard(
-                'Credit Requests',
-                _stats!['pending_credit_requests']?.toString() ?? '0',
-                Icons.request_quote,
-                AppColors.warningGradient,
-              ),
+              if (layoutType.index >= LayoutType.desktopMedium.index)
+                _buildStatCard(
+                  'Active Sessions',
+                  (_stats!['active_sessions'] ?? 0).toString(),
+                  Icons.online_prediction,
+                  AppColors.blue,
+                ),
+              if (layoutType.index >= LayoutType.desktopMedium.index)
+                _buildStatCard(
+                  'API Health',
+                  (_stats!['api_health'] ?? 'OK').toString(),
+                  Icons.health_and_safety_rounded,
+                  AppColors.emerald,
+                ),
             ],
           ),
-          const SizedBox(height: AppSpacing.xl),
-          // Recent Jobs Section
-          _buildRecentJobsSection(),
+          const SizedBox(height: AppSpacing.lg),
+          if (layoutType.index >= LayoutType.desktopSmall.index)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 55,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildSectionHeader('Recent Users', 'View All'),
+                      const SizedBox(height: AppSpacing.sm),
+                      ..._users.take(5).map(_buildUserPreview).toList(),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.lg),
+                Expanded(
+                  flex: 45,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildSectionHeader(
+                          'Credit Requests', '${_creditRequests.length}'),
+                      const SizedBox(height: AppSpacing.sm),
+                      if (_creditRequests.isEmpty)
+                        _buildEmptyCard('No credit requests')
+                      else
+                        ..._creditRequests
+                            .take(3)
+                            .map(_buildCreditRequestCard)
+                            .toList(),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          else ...[
+            _buildSectionHeader('Recent Users', 'View All'),
+            const SizedBox(height: AppSpacing.sm),
+            ..._users.take(3).map(_buildUserPreview).toList(),
+            const SizedBox(height: AppSpacing.lg),
+            _buildSectionHeader('Credit Requests', '${_creditRequests.length}'),
+            const SizedBox(height: AppSpacing.sm),
+            if (_creditRequests.isEmpty)
+              _buildEmptyCard('No credit requests')
+            else
+              ..._creditRequests.take(2).map(_buildCreditRequestCard).toList(),
+          ],
           const SizedBox(height: AppSpacing.xl),
         ],
       ),
     );
   }
 
-  Widget _buildStatCard(
-    String title,
-    String value,
-    IconData icon,
-    LinearGradient gradient,
-  ) {
-    return GlassCard(
-      padding: EdgeInsets.zero,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: gradient,
-          borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
+  Widget _buildSectionHeader(String title, String trailing) {
+    return Row(
+      children: [
+        Text(
+          title,
+          style: AppTypography.titleMedium.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: Colors.white, size: 24),
+        const Spacer(),
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xs,
+            vertical: AppSpacing.xxs,
+          ),
+          decoration: BoxDecoration(
+            color: AppColors.cardDark,
+            borderRadius: AppSpacing.borderRadiusRound,
+            border: Border.all(color: AppColors.cardDarkHighlight),
+          ),
+          child: Text(
+            trailing,
+            style: AppTypography.labelSmall.copyWith(
+              color: Colors.white54,
             ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              value,
-              style: AppTypography.headlineMedium.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            Text(
-              title,
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white70,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
-  Widget _buildRecentJobsSection() {
-    final recentJobs = _stats!['recent_jobs'] as List? ?? [];
-
-    return GlassCard(
+  Widget _buildStatCard(String title, String value, IconData icon, Color accent) {
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.cardDarkHighlight),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: AppColors.info.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                  color: accent.withValues(alpha: 0.15),
+                  borderRadius: AppSpacing.borderRadiusSm,
                 ),
-                child: const Icon(
-                  Icons.history,
-                  color: AppColors.info,
-                  size: 20,
-                ),
+                child: Icon(icon, color: accent, size: 18),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('Recent Jobs', style: AppTypography.titleMediumLight),
+              if (title == 'Pending')
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.15),
+                    borderRadius: AppSpacing.borderRadiusSm,
+                  ),
+                  child: Text(
+                    'Action',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: accent,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: AppSpacing.md),
-          if (recentJobs.isEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.lg),
-                child: Text(
-                  'No recent jobs',
-                  style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
-                ),
-              ),
-            )
-          else
-            ...recentJobs.map((job) => _buildJobItem(job)),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            title.toUpperCase(),
+            style: AppTypography.labelSmall.copyWith(
+              color: Colors.white54,
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: AppTypography.headlineSmall.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
   }
-
-  Widget _buildJobItem(Map<String, dynamic> job) {
-    final isCompleted = job['status'] == 'completed';
+  Widget _buildUserPreview(Map<String, dynamic> user) {
+    final isApproved = user['is_approved'] == true;
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: const EdgeInsets.all(AppSpacing.sm),
+      padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+        color: AppColors.cardDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(
+          color: isApproved
+              ? AppColors.cardDarkHighlight
+              : AppColors.amber.withValues(alpha: 0.4),
+        ),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: (isCompleted ? AppColors.success : AppColors.warning)
-                  .withValues(alpha: 0.2),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              isCompleted ? Icons.check_circle : Icons.pending,
-              color: isCompleted ? AppColors.success : AppColors.warning,
-              size: 16,
-            ),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  job['category'] ?? 'Unknown',
-                  style: AppTypography.labelMedium.copyWith(color: Colors.white),
+          Row(
+            children: [
+              _buildAvatar(
+                user['username'] ?? 'U',
+                isApproved ? AppColors.emerald : AppColors.amber,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      user['username'] ?? 'Unknown',
+                      style: AppTypography.titleSmall.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      user['email'] ?? '',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: Colors.white60,
+                      ),
+                    ),
+                  ],
                 ),
-                Text(
-                  '${job['username']} • ${job['status']}',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xs,
+                  vertical: AppSpacing.xxs,
                 ),
-              ],
-            ),
+                decoration: BoxDecoration(
+                  color: isApproved
+                      ? AppColors.emerald.withValues(alpha: 0.12)
+                      : AppColors.amber.withValues(alpha: 0.12),
+                  borderRadius: AppSpacing.borderRadiusRound,
+                ),
+                child: Text(
+                  isApproved ? 'Active' : 'Pending',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: isApproved ? AppColors.emerald : AppColors.amber,
+                  ),
+                ),
+              ),
+            ],
           ),
-          Text(
-            _formatDate(job['created_at']),
-            style: AppTypography.labelSmall.copyWith(
-              color: Colors.white.withValues(alpha: 0.4),
-            ),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              if (!isApproved)
+                Expanded(
+                  child: _smallButton(
+                    label: 'Approve',
+                    color: AppColors.purplePrimary,
+                    onTap: () => _approveUser(user['id']),
+                  ),
+                ),
+              if (!isApproved) const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: _smallButton(
+                  label: isApproved ? 'Grant Credits' : 'Reject',
+                  color: isApproved
+                      ? AppColors.cardDarkHighlight
+                      : AppColors.cardDark,
+                  textColor: isApproved ? Colors.white : Colors.white70,
+                  onTap: isApproved
+                      ? () => _showGrantCreditsDialog(user)
+                      : () => _deleteUser(user['id']),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -622,46 +731,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Widget _buildUsersView() {
     if (_users.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.people_outline,
-              color: Colors.white30,
-              size: 64,
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              'No users found',
-              style: AppTypography.titleMediumLight,
-            ),
-          ],
+        child: Text(
+          'No users found',
+          style: AppTypography.titleMedium.copyWith(color: Colors.white60),
         ),
       );
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       itemCount: _users.length,
       itemBuilder: (context, index) {
         final user = _users[index];
-        return TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.0, end: 1.0),
-          duration: Duration(milliseconds: 200 + (index * 50).clamp(0, 300)),
-          curve: Curves.easeOut,
-          builder: (context, value, child) {
-            return Transform.translate(
-              offset: Offset(0, 20 * (1 - value)),
-              child: Opacity(
-                opacity: value,
-                child: child,
-              ),
-            );
-          },
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.md),
-            child: _buildUserCard(user),
-          ),
+        return Padding(
+          padding: const EdgeInsets.only(bottom: AppSpacing.md),
+          child: _buildUserCard(user),
         );
       },
     );
@@ -671,182 +755,108 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final isApproved = user['is_approved'] == true;
     final isAdmin = user['is_admin'] == true;
 
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      child: Row(
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.cardDarkHighlight),
+      ),
+      child: Column(
         children: [
-          // Avatar
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              gradient: isApproved
-                  ? AppColors.successGradient
-                  : AppColors.warningGradient,
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                (user['username'] as String? ?? 'U')[0].toUpperCase(),
-                style: AppTypography.titleLarge.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+          Row(
+            children: [
+              _buildAvatar(
+                user['username'] ?? 'U',
+                isApproved ? AppColors.emerald : AppColors.amber,
               ),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          // User Info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      child: Text(
-                        user['username'] ?? 'Unknown',
-                        style: AppTypography.titleMedium.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (isAdmin) ...[
-                      const SizedBox(width: AppSpacing.xs),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.xs,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.accentStart.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'ADMIN',
-                          style: AppTypography.labelSmall.copyWith(
-                            color: AppColors.accentStart,
-                            fontSize: 9,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            user['username'] ?? 'Unknown',
+                            style: AppTypography.titleSmall.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  user['email'] ?? '',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white60),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.sm,
-                        vertical: AppSpacing.xxs,
-                      ),
-                      decoration: BoxDecoration(
-                        color: (isApproved ? AppColors.success : AppColors.warning)
-                            .withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                        border: Border.all(
-                          color: (isApproved ? AppColors.success : AppColors.warning)
-                              .withValues(alpha: 0.5),
-                        ),
-                      ),
-                      child: Text(
-                        isApproved ? 'Approved' : 'Pending',
-                        style: AppTypography.labelSmall.copyWith(
-                          color: isApproved ? AppColors.success : AppColors.warning,
-                        ),
+                        if (isAdmin) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.purplePrimary.withValues(alpha: 0.2),
+                              borderRadius: AppSpacing.borderRadiusSm,
+                            ),
+                            child: Text(
+                              'ADMIN',
+                              style: AppTypography.labelSmall.copyWith(
+                                color: AppColors.purplePrimary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Text(
+                      user['email'] ?? '',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: Colors.white60,
                       ),
                     ),
-                    if (isApproved) ...[
-                      const SizedBox(width: AppSpacing.xs),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.sm,
-                          vertical: AppSpacing.xxs,
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        _pill(
+                          isApproved ? 'Approved' : 'Pending',
+                          isApproved ? AppColors.emerald : AppColors.amber,
                         ),
-                        decoration: BoxDecoration(
-                          color: AppColors.info.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.account_balance_wallet, size: 12, color: AppColors.info),
-                            const SizedBox(width: 4),
-                            Text(
-                              '${user['credit_balance'] ?? 0}',
-                              style: AppTypography.labelSmall.copyWith(color: AppColors.info),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                        if (isApproved) ...[
+                          const SizedBox(width: 6),
+                          _pill(
+                            '${user['credit_balance'] ?? 0} Credits',
+                            AppColors.blue,
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          // Actions
+          const SizedBox(height: AppSpacing.sm),
           Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
               if (!isApproved)
-                IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: AppColors.success.withValues(alpha: 0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.check,
-                      color: AppColors.success,
-                      size: 16,
-                    ),
-                  ),
-                  onPressed: () => _approveUser(user['id']),
-                  tooltip: 'Approve',
-                ),
-              if (isApproved)
-                IconButton(
-                  icon: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: AppColors.info.withValues(alpha: 0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.add_card,
-                      color: AppColors.info,
-                      size: 16,
-                    ),
-                  ),
-                  onPressed: () => _showGrantCreditsDialog(user),
-                  tooltip: 'Grant Credits',
-                ),
-              IconButton(
-                icon: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withValues(alpha: 0.2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.delete,
-                    color: AppColors.error,
-                    size: 16,
+                Expanded(
+                  child: _smallButton(
+                    label: 'Approve',
+                    color: AppColors.purplePrimary,
+                    onTap: () => _approveUser(user['id']),
                   ),
                 ),
-                onPressed: () => _deleteUser(user['id']),
-                tooltip: 'Delete',
+              if (!isApproved) const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: _smallButton(
+                  label: isApproved ? 'Grant Credits' : 'Delete',
+                  color: AppColors.cardDarkHighlight,
+                  textColor: Colors.white,
+                  onTap: isApproved
+                      ? () => _showGrantCreditsDialog(user)
+                      : () => _deleteUser(user['id']),
+                ),
               ),
             ],
           ),
@@ -854,188 +864,39 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       ),
     );
   }
-
   Widget _buildCreditsView() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Credit Stats Summary
-          _buildCreditStatsCard(),
-          const SizedBox(height: AppSpacing.lg),
-          // Pending Credit Requests
-          _buildCreditRequestsSection(),
+          _buildSectionHeader('Credit Requests', '${_creditRequests.length}'),
+          const SizedBox(height: AppSpacing.sm),
+          if (_creditRequests.isEmpty)
+            _buildEmptyCard('No pending requests')
+          else
+            ..._creditRequests.map(_buildCreditRequestCard).toList(),
           const SizedBox(height: AppSpacing.xl),
         ],
       ),
     );
   }
 
-  Widget _buildCreditStatsCard() {
-    final totalCredits = _stats?['total_credits'] ?? 0;
-    final pendingRequests = _stats?['pending_credit_requests'] ?? 0;
-
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  gradient: AppColors.successGradient,
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                ),
-                child: const Icon(Icons.account_balance_wallet, color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('Credit System Overview', style: AppTypography.titleMediumLight),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Row(
-            children: [
-              Expanded(
-                child: _buildCreditStatItem(
-                  'Total Credits',
-                  totalCredits.toString(),
-                  Icons.monetization_on,
-                  AppColors.success,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: _buildCreditStatItem(
-                  'Pending Requests',
-                  pendingRequests.toString(),
-                  Icons.pending_actions,
-                  pendingRequests > 0 ? AppColors.warning : AppColors.textMuted,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCreditStatItem(String label, String value, IconData icon, Color color) {
+  Widget _buildCreditRequestCard(Map<String, dynamic> request) {
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            value,
-            style: AppTypography.headlineSmall.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          Text(
-            label,
-            style: AppTypography.labelSmall.copyWith(color: Colors.white60),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCreditRequestsSection() {
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.warning.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                ),
-                child: const Icon(Icons.request_quote, color: AppColors.warning, size: 20),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('Pending Credit Requests', style: AppTypography.titleMediumLight),
-              const Spacer(),
-              if (_creditRequests.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.warning.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                  ),
-                  child: Text(
-                    '${_creditRequests.length}',
-                    style: AppTypography.labelSmall.copyWith(color: AppColors.warning),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          if (_creditRequests.isEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.xl),
-                child: Column(
-                  children: [
-                    Icon(Icons.check_circle_outline, color: AppColors.success, size: 48),
-                    const SizedBox(height: AppSpacing.sm),
-                    Text(
-                      'No pending requests',
-                      style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else
-            ...List.generate(_creditRequests.length, (index) {
-              final request = _creditRequests[index];
-              return _buildCreditRequestItem(request);
-            }),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCreditRequestItem(Map<String, dynamic> request) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+        color: AppColors.cardDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.cardDarkHighlight),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  gradient: AppColors.warningGradient,
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    (request['username'] as String? ?? 'U')[0].toUpperCase(),
-                    style: AppTypography.titleMedium.copyWith(color: Colors.white),
-                  ),
-                ),
-              ),
+              _buildAvatar(request['username'] ?? 'U', AppColors.purplePrimary),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
@@ -1043,77 +904,76 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   children: [
                     Text(
                       request['username'] ?? 'Unknown',
-                      style: AppTypography.labelMedium.copyWith(color: Colors.white),
+                      style: AppTypography.titleSmall.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     Text(
                       request['email'] ?? '',
-                      style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                      style: AppTypography.bodySmall.copyWith(
+                        color: Colors.white60,
+                      ),
                     ),
                   ],
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: AppSpacing.xxs,
+                ),
                 decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
+                  color: AppColors.purplePrimary.withValues(alpha: 0.12),
+                  borderRadius: AppSpacing.borderRadiusRound,
+                  border: Border.all(
+                    color: AppColors.purplePrimary.withValues(alpha: 0.25),
+                  ),
                 ),
                 child: Text(
                   '+${request['amount_requested']} credits',
-                  style: AppTypography.labelSmall.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                  style: AppTypography.labelSmall.copyWith(
+                    color: AppColors.purplePrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
           ),
-          if (request['reason'] != null && (request['reason'] as String).isNotEmpty) ...[
+          if (request['reason'] != null &&
+              (request['reason'] as String).isNotEmpty) ...[
             const SizedBox(height: AppSpacing.sm),
             Container(
               padding: const EdgeInsets.all(AppSpacing.sm),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                color: AppColors.cardDarkHighlight,
+                borderRadius: AppSpacing.borderRadiusSm,
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.message, size: 14, color: Colors.white38),
-                  const SizedBox(width: AppSpacing.xs),
-                  Expanded(
-                    child: Text(
-                      request['reason'],
-                      style: AppTypography.bodySmall.copyWith(color: Colors.white70),
-                    ),
-                  ),
-                ],
+              child: Text(
+                request['reason'],
+                style: AppTypography.bodySmall.copyWith(
+                  color: Colors.white70,
+                ),
               ),
             ),
           ],
-          const SizedBox(height: AppSpacing.md),
+          const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
               Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _denyCreditRequest(request['id']),
-                  icon: const Icon(Icons.close, size: 16),
-                  label: const Text('Deny'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.error,
-                    side: BorderSide(color: AppColors.error.withValues(alpha: 0.5)),
-                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                  ),
+                child: _smallButton(
+                  label: 'Approve',
+                  color: AppColors.emerald,
+                  onTap: () => _approveCreditRequest(request['id']),
                 ),
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _approveCreditRequest(request['id']),
-                  icon: const Icon(Icons.check, size: 16),
-                  label: const Text('Approve'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                  ),
+                child: _smallButton(
+                  label: 'Deny',
+                  color: AppColors.cardDarkHighlight,
+                  textColor: Colors.white,
+                  onTap: () => _denyCreditRequest(request['id']),
                 ),
               ),
             ],
@@ -1123,24 +983,141 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  Future<void> _approveCreditRequest(int requestId) async {
-    try {
-      await _apiService.approveCreditRequest(requestId);
-      _loadData();
-      _showSnackBar('Credit request approved', AppColors.success);
-    } catch (e) {
-      _showSnackBar('Error approving request: $e', AppColors.error);
-    }
+  Widget _buildEmptyCard(String label) {
+    return Container(
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.cardDarkHighlight),
+      ),
+      child: Center(
+        child: Text(
+          label,
+          style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
+        ),
+      ),
+    );
   }
 
-  Future<void> _denyCreditRequest(int requestId) async {
-    try {
-      await _apiService.denyCreditRequest(requestId);
-      _loadData();
-      _showSnackBar('Credit request denied', AppColors.warning);
-    } catch (e) {
-      _showSnackBar('Error denying request: $e', AppColors.error);
-    }
+  Widget _buildAvatar(String name, Color accent) {
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: AppColors.cardDarkHighlight,
+        shape: BoxShape.circle,
+        border: Border.all(color: accent.withValues(alpha: 0.4)),
+      ),
+      child: Center(
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : 'U',
+          style: AppTypography.titleMedium.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pill(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.xs,
+        vertical: AppSpacing.xxs,
+      ),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: AppSpacing.borderRadiusRound,
+      ),
+      child: Text(
+        label,
+        style: AppTypography.labelSmall.copyWith(
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _smallButton({
+    required String label,
+    required Color color,
+    Color? textColor,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: AppSpacing.borderRadiusMd,
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: AppTypography.labelSmall.copyWith(
+              color: textColor ?? Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeleteDialog() {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        padding: AppSpacing.paddingMd,
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: AppSpacing.borderRadiusLg,
+          border: Border.all(color: AppColors.cardDarkHighlight),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.warning_rounded, color: AppColors.rose, size: 40),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Delete User',
+              style: AppTypography.titleMedium.copyWith(color: Colors.white),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Are you sure you want to delete this user?',
+              textAlign: TextAlign.center,
+              style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Row(
+              children: [
+                Expanded(
+                  child: _smallButton(
+                    label: 'Cancel',
+                    color: AppColors.cardDarkHighlight,
+                    textColor: Colors.white,
+                    onTap: () => Navigator.pop(context, false),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _smallButton(
+                    label: 'Delete',
+                    color: AppColors.rose,
+                    onTap: () => Navigator.pop(context, true),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _showGrantCreditsDialog(Map<String, dynamic> user) async {
@@ -1151,101 +1128,97 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       context: context,
       builder: (context) => Dialog(
         backgroundColor: Colors.transparent,
-        child: GlassCard(
+        child: Container(
+          padding: AppSpacing.paddingMd,
+          decoration: BoxDecoration(
+            color: AppColors.cardDark,
+            borderRadius: AppSpacing.borderRadiusLg,
+            border: Border.all(color: AppColors.cardDarkHighlight),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: AppColors.successGradient,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.add_card, color: Colors.white, size: 32),
-              ),
-              const SizedBox(height: AppSpacing.lg),
+              Icon(Icons.add_card, color: AppColors.emerald, size: 32),
+              const SizedBox(height: AppSpacing.md),
               Text(
                 'Grant Credits',
-                style: AppTypography.titleLarge.copyWith(color: Colors.white),
+                style: AppTypography.titleMedium.copyWith(color: Colors.white),
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
                 'to ${user['username']}',
-                style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
+                style: AppTypography.bodySmall.copyWith(color: Colors.white60),
               ),
-              const SizedBox(height: AppSpacing.lg),
+              const SizedBox(height: AppSpacing.md),
               TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
                   labelText: 'Amount',
-                  labelStyle: TextStyle(color: Colors.white60),
+                  labelStyle: const TextStyle(color: Colors.white60),
                   filled: true,
-                  fillColor: Colors.white.withValues(alpha: 0.1),
+                  fillColor: AppColors.cardDarkHighlight,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                    borderRadius: AppSpacing.borderRadiusMd,
                     borderSide: BorderSide.none,
                   ),
-                  prefixIcon: Icon(Icons.monetization_on, color: AppColors.success),
+                  prefixIcon:
+                      const Icon(Icons.monetization_on, color: AppColors.emerald),
                 ),
               ),
-              const SizedBox(height: AppSpacing.md),
+              const SizedBox(height: AppSpacing.sm),
               TextField(
                 controller: reasonController,
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
                   labelText: 'Reason (optional)',
-                  labelStyle: TextStyle(color: Colors.white60),
+                  labelStyle: const TextStyle(color: Colors.white60),
                   filled: true,
-                  fillColor: Colors.white.withValues(alpha: 0.1),
+                  fillColor: AppColors.cardDarkHighlight,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                    borderRadius: AppSpacing.borderRadiusMd,
                     borderSide: BorderSide.none,
                   ),
-                  prefixIcon: Icon(Icons.note, color: Colors.white38),
+                  prefixIcon:
+                      const Icon(Icons.note, color: Colors.white54),
                 ),
               ),
-              const SizedBox(height: AppSpacing.lg),
+              const SizedBox(height: AppSpacing.md),
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white70,
-                        side: const BorderSide(color: Colors.white30),
-                        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                      ),
-                      child: const Text('Cancel'),
+                    child: _smallButton(
+                      label: 'Cancel',
+                      color: AppColors.cardDarkHighlight,
+                      textColor: Colors.white,
+                      onTap: () => Navigator.pop(context, false),
                     ),
                   ),
-                  const SizedBox(width: AppSpacing.md),
+                  const SizedBox(width: AppSpacing.sm),
                   Expanded(
-                    child: ElevatedButton(
-                      onPressed: () async {
+                    child: _smallButton(
+                      label: 'Grant',
+                      color: AppColors.emerald,
+                      onTap: () async {
                         final amount = int.tryParse(amountController.text);
                         if (amount == null || amount <= 0) {
-                          _showSnackBar('Please enter a valid amount', AppColors.error);
+                          _showSnackBar('Please enter a valid amount', AppColors.rose);
                           return;
                         }
                         try {
                           await _apiService.grantCredits(
                             userId: user['id'],
                             amount: amount,
-                            reason: reasonController.text.isEmpty ? null : reasonController.text,
+                            reason: reasonController.text.isEmpty
+                                ? null
+                                : reasonController.text,
                           );
                           if (context.mounted) Navigator.pop(context, true);
                         } catch (e) {
-                          _showSnackBar('Error granting credits: $e', AppColors.error);
+                          _showSnackBar('Error granting credits: $e', AppColors.rose);
                         }
                       },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.success,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                      ),
-                      child: const Text('Grant'),
                     ),
                   ),
                 ],
@@ -1258,7 +1231,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
     if (result == true) {
       _loadData();
-      _showSnackBar('Credits granted successfully', AppColors.success);
+      _showSnackBar('Credits granted successfully', AppColors.emerald);
     }
   }
 
@@ -1271,4 +1244,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       return dateString;
     }
   }
+}
+
+// Colors now consolidated in AppColors
+
+class _GeoPatternPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = AppColors.purplePrimary.withValues(alpha: 0.05)
+      ..strokeWidth = 1;
+
+    const spacing = 60.0;
+    for (double x = 0; x <= size.width; x += spacing) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y <= size.height; y += spacing) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

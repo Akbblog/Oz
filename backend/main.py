@@ -3,7 +3,7 @@ FastAPI Backend for Google Business Scraper
 Provides REST API for scraping functionality with authentication
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from enum import Enum
 import asyncio
 import sys
+import secrets
+import hashlib
 from urllib.parse import quote_plus
 import requests
 from bs4 import BeautifulSoup
@@ -25,7 +27,16 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
 import base64
+import base64
 from io import BytesIO
+import config
+
+from payments.coinbase_service import CoinbaseCommerceService
+from payments.payment_processor import PaymentProcessor
+from payments.pricing_engine import PricingEngine
+from payments.webhook_handler import WebhookHandler
+from promotions.promo_service import PromoService
+from subscriptions.subscription_manager import SubscriptionManager
 
 # Fix for Windows asyncio event loop
 if sys.platform == 'win32':
@@ -41,9 +52,9 @@ from auth import (
 
 def estimate_credit_cost(num_cities: int, max_results_per_city: int) -> int:
     """Calculate estimated credit cost for a job"""
-    config = get_credit_config()
-    cost = config["base"] + (num_cities * config["per_city"]) + (num_cities * max_results_per_city * config["per_result"])
-    return max(cost, config["min_job"])
+    credit_config = get_credit_config()
+    cost = credit_config["base"] + (num_cities * credit_config["per_city"]) + (num_cities * max_results_per_city * credit_config["per_result"])
+    return max(cost, credit_config["min_job"])
 
 
 def get_user_credit_balance(user_id: int) -> int:
@@ -102,7 +113,7 @@ def add_credits(user_id: int, amount: int, reason: str = None, created_by: int =
 
 def check_rate_limits(user_id: int) -> dict:
     """Check user's rate limits. Returns dict with can_proceed, reason, stats."""
-    config = get_credit_config()
+    credit_config = get_credit_config()
     conn = get_db()
     cursor = conn.cursor()
 
@@ -136,18 +147,18 @@ def check_rate_limits(user_id: int) -> dict:
 
     conn.close()
 
-    if concurrent_jobs >= config["max_concurrent_jobs"]:
+    if concurrent_jobs >= credit_config["max_concurrent_jobs"]:
         return {
             "can_proceed": False,
-            "reason": f"Maximum concurrent jobs ({config['max_concurrent_jobs']}) reached. Wait for current jobs to complete.",
+            "reason": f"Maximum concurrent jobs ({credit_config['max_concurrent_jobs']}) reached. Wait for current jobs to complete.",
             "concurrent_jobs": concurrent_jobs,
             "jobs_in_hour": jobs_in_window
         }
 
-    if jobs_in_window >= config["max_jobs_per_hour"]:
+    if jobs_in_window >= credit_config["max_jobs_per_hour"]:
         return {
             "can_proceed": False,
-            "reason": f"Hourly job limit ({config['max_jobs_per_hour']}) reached. Try again later.",
+            "reason": f"Hourly job limit ({credit_config['max_jobs_per_hour']}) reached. Try again later.",
             "concurrent_jobs": concurrent_jobs,
             "jobs_in_hour": jobs_in_window
         }
@@ -175,7 +186,7 @@ def increment_rate_limit(user_id: int):
 # Initialize database
 init_database()
 
-app = FastAPI(title="Google Business Scraper API", version="2.0.0")
+app = FastAPI(title="Google Business Scraper API", version="2.0.0", debug=config.DEBUG)
 
 # ==================== COUNTRY ENDPOINTS ====================
 
@@ -187,7 +198,7 @@ async def get_countries():
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,33 +209,33 @@ security = HTTPBearer()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=config.LOG_LEVEL,
+    format=config.LOG_FORMAT,
     handlers=[
-        logging.FileHandler("scraper.log"),
+        logging.FileHandler(config.LOG_FILE),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 # Load states and cities data for USA
-with open('states_cities_data.json', 'r', encoding='utf-8') as f:
+with open(config.USA_DATA_FILE, 'r', encoding='utf-8') as f:
     STATES_CITIES_DATA = json.load(f)
 
 # Load UK regions and cities data
-with open('uk_regions_cities.json', 'r', encoding='utf-8') as f:
+with open(config.UK_DATA_FILE, 'r', encoding='utf-8') as f:
     UK_REGIONS_DATA = json.load(f)
 
 # Load UAE emirates and cities data
-with open('uae_cities_data.json', 'r', encoding='utf-8') as f:
+with open(config.UAE_DATA_FILE, 'r', encoding='utf-8') as f:
     UAE_CITIES_DATA = json.load(f)
 
 # Load KSA (Saudi Arabia) regions and cities data
-with open('ksa_cities_data.json', 'r', encoding='utf-8') as f:
+with open(config.KSA_DATA_FILE, 'r', encoding='utf-8') as f:
     KSA_CITIES_DATA = json.load(f)
 
 # Load Australia states and cities data
-with open('australia_cities_data.json', 'r', encoding='utf-8') as f:
+with open(config.AUSTRALIA_DATA_FILE, 'r', encoding='utf-8') as f:
     AUSTRALIA_CITIES_DATA = json.load(f)
 
 # Mapping of country to its region/state data
@@ -237,7 +248,7 @@ COUNTRIES_DATA = {
 }
 
 # Results directory
-RESULTS_DIR = "results"
+RESULTS_DIR = config.RESULTS_DIR
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # ==================== MODELS ====================
@@ -252,10 +263,18 @@ class UserRegister(BaseModel):
     username: str
     email: EmailStr
     password: str
+    referral_code: Optional[str] = None
 
 class UserLogin(BaseModel):
     username: str
     password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
 
 class ScrapingRequest(BaseModel):
     category: str
@@ -278,6 +297,139 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: dict
+
+
+class PurchaseRequest(BaseModel):
+    package_id: int
+    quantity: int = 1
+    promo_code: Optional[str] = None
+    provider: str = "stripe"  # 'stripe' or 'coinbase'
+    idempotency_key: str
+
+
+class PromoValidateRequest(BaseModel):
+    code: str
+    package_id: Optional[int] = None
+    quantity: int = 1
+    applies_to: str = "packages"  # 'packages' or 'subscriptions'
+
+
+class PriceCalcRequest(BaseModel):
+    package_id: int
+    quantity: int = 1
+    promo_code: Optional[str] = None
+
+
+class SubscribeRequest(BaseModel):
+    plan_id: int
+    idempotency_key: str
+
+
+class AddPaymentMethodRequest(BaseModel):
+    stripe_payment_method_id: str
+    is_default: bool = False
+
+
+class PricingTierCreateRequest(BaseModel):
+    name: str
+    min_monthly_credits: int = 0
+    max_monthly_credits: Optional[int] = None
+    price_per_credit_cents: float
+    discount_percentage: float = 0.0
+    requires_approval: bool = False
+    is_active: bool = True
+
+
+class PricingTierUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    min_monthly_credits: Optional[int] = None
+    max_monthly_credits: Optional[int] = None
+    price_per_credit_cents: Optional[float] = None
+    discount_percentage: Optional[float] = None
+    requires_approval: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class PromoCreateRequest(BaseModel):
+    code: str
+    type: str  # percentage_off|fixed_amount_off|bonus_credits
+    discount_percentage: float = 0.0
+    discount_amount_cents: int = 0
+    bonus_credits: int = 0
+    max_uses: Optional[int] = None
+    max_uses_per_user: int = 1
+    min_purchase_cents: int = 0
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    applies_to: str = "all"
+    is_active: bool = True
+
+
+class PromoUpdateRequest(BaseModel):
+    code: Optional[str] = None
+    type: Optional[str] = None
+    discount_percentage: Optional[float] = None
+    discount_amount_cents: Optional[int] = None
+    bonus_credits: Optional[int] = None
+    max_uses: Optional[int] = None
+    max_uses_per_user: Optional[int] = None
+    min_purchase_cents: Optional[int] = None
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    applies_to: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class CreditPackageCreateRequest(BaseModel):
+    name: str
+    credits: int
+    base_price_cents: int
+    display_price_cents: int
+    discount_percentage: float = 0.0
+    tier_id: Optional[int] = None
+    is_active: bool = True
+    is_featured: bool = False
+    features: Optional[dict] = None
+
+
+class CreditPackageUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    credits: Optional[int] = None
+    base_price_cents: Optional[int] = None
+    display_price_cents: Optional[int] = None
+    discount_percentage: Optional[float] = None
+    tier_id: Optional[int] = None
+    is_active: Optional[bool] = None
+    is_featured: Optional[bool] = None
+    features: Optional[dict] = None
+
+
+class SubscriptionPlanCreateRequest(BaseModel):
+    name: str
+    billing_interval: str  # monthly|yearly
+    credits_per_period: int
+    base_price_cents: int
+    stripe_price_id: Optional[str] = None
+    rollover_credits: bool = True
+    max_rollover_credits: int = 0
+    trial_days: int = 0
+    is_active: bool = True
+    is_featured: bool = False
+    features: Optional[dict] = None
+
+
+class SubscriptionPlanUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    billing_interval: Optional[str] = None
+    credits_per_period: Optional[int] = None
+    base_price_cents: Optional[int] = None
+    stripe_price_id: Optional[str] = None
+    rollover_credits: Optional[bool] = None
+    max_rollover_credits: Optional[int] = None
+    trial_days: Optional[int] = None
+    is_active: Optional[bool] = None
+    is_featured: Optional[bool] = None
+    features: Optional[dict] = None
 
 # ==================== AUTHENTICATION ====================
 
@@ -363,6 +515,18 @@ async def register(user_data: UserRegister):
     conn.commit()
     user_id = cursor.lastrowid
     conn.close()
+
+    # Optional referral capture (doesn't require approval, just records link)
+    try:
+        from promotions.referral_service import ReferralService
+
+        if user_data.referral_code:
+            ReferralService().record_referral_signup(
+                referred_user_id=int(user_id),
+                referral_code=user_data.referral_code,
+            )
+    except Exception:
+        pass
     
     return {"message": "Registration successful. Please wait for admin approval."}
 
@@ -417,6 +581,124 @@ async def login(credentials: UserLogin):
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """Get current user information"""
     return current_user
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """Request password reset token"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Check if email exists
+    cursor.execute("SELECT id, username FROM users WHERE email = ?", (request.email,))
+    user = cursor.fetchone()
+
+    # Always return success message (security best practice - don't reveal if email exists)
+    if not user:
+        conn.close()
+        return {"message": "If that email is registered, a password reset link has been sent."}
+
+    user_id = user[0]
+
+    # Generate secure random token
+    reset_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(reset_token.encode()).hexdigest()
+
+    # Token expires in 24 hours
+    expires_at = (datetime.now() + timedelta(hours=24)).isoformat()
+
+    # Store token in database
+    cursor.execute("""
+        INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, token_hash, expires_at, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+    # TODO: Send email with reset link
+    # For MVP, log the token to console
+    reset_url = f"http://localhost:8000/reset-password/{reset_token}"
+    print(f"\n{'='*60}")
+    print(f"PASSWORD RESET TOKEN FOR: {request.email}")
+    print(f"Reset URL: {reset_url}")
+    print(f"Token: {reset_token}")
+    print(f"{'='*60}\n")
+
+    return {"message": "If that email is registered, a password reset link has been sent."}
+
+@app.get("/api/auth/verify-reset-token/{token}")
+async def verify_reset_token(token: str):
+    """Verify if reset token is valid"""
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT rt.id, rt.user_id, rt.expires_at, rt.used, u.email
+        FROM password_reset_tokens rt
+        JOIN users u ON rt.user_id = u.id
+        WHERE rt.token_hash = ?
+    """, (token_hash,))
+
+    token_data = cursor.fetchone()
+    conn.close()
+
+    if not token_data:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    token_id, user_id, expires_at, used, email = token_data
+
+    if used:
+        raise HTTPException(status_code=400, detail="Reset token has already been used")
+
+    if datetime.fromisoformat(expires_at) < datetime.now():
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+
+    return {"valid": True, "email": email}
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    """Reset password using token"""
+    token_hash = hashlib.sha256(request.token.encode()).hexdigest()
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Verify token
+    cursor.execute("""
+        SELECT id, user_id, expires_at, used
+        FROM password_reset_tokens
+        WHERE token_hash = ?
+    """, (token_hash,))
+
+    token_data = cursor.fetchone()
+
+    if not token_data:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    token_id, user_id, expires_at, used = token_data
+
+    if used:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Reset token has already been used")
+
+    if datetime.fromisoformat(expires_at) < datetime.now():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+
+    # Update password
+    new_password_hash = get_password_hash(request.new_password)
+    cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_password_hash, user_id))
+
+    # Mark token as used
+    cursor.execute("UPDATE password_reset_tokens SET used = 1, used_at = ? WHERE id = ?",
+                   (datetime.now().isoformat(), token_id))
+
+    conn.commit()
+    conn.close()
+
+    return {"message": "Password reset successful"}
 
 
 # Debug endpoint: list users (local dev only)
@@ -496,6 +778,13 @@ async def approve_user(user_id: int, admin: dict = Depends(get_admin_user)):
     """, (CREDITS_STARTING, datetime.now().isoformat(), user_id))
     conn.commit()
     conn.close()
+
+    # Ensure user has a referral code for sharing
+    try:
+        from promotions.referral_service import ReferralService
+        ReferralService().ensure_user_referral_code(user_id)
+    except Exception:
+        pass
 
     # Record the credit grant in ledger
     record_credit_transaction(
@@ -884,8 +1173,7 @@ class GoogleBusinessScraper:
         self.page = None
         # Determine headless mode from param or environment
         if headless is None:
-            env_val = os.getenv('PLAYWRIGHT_HEADLESS', 'True').lower()
-            self.headless = False if env_val in ('0','false','no') else True
+            self.headless = config.PLAYWRIGHT_HEADLESS
         else:
             self.headless = headless
 
@@ -908,7 +1196,7 @@ class GoogleBusinessScraper:
             )
 
             # Create browser context with realistic settings
-            user_agent = os.getenv("PLAYWRIGHT_USER_AGENT") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent = config.PLAYWRIGHT_USER_AGENT
 
             self.context = await self.browser.new_context(
                 viewport={"width": 1280, "height": 800},
@@ -1598,12 +1886,1006 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
         "encoding": "base64"
     }
 
+# ==================== PAYMENTS & SUBSCRIPTIONS ====================
+
+_payment_processor = PaymentProcessor()
+_pricing_engine = PricingEngine()
+_promo_service = PromoService()
+_subscription_manager = SubscriptionManager()
+_webhook_handler = WebhookHandler()
+_coinbase_service = CoinbaseCommerceService()
+
+
+@app.get("/api/payments/packages")
+async def get_credit_packages(current_user: dict = Depends(get_current_user)):
+    """List active credit packages"""
+    from db.payment_crud import list_active_packages
+
+    packages = []
+    for row in list_active_packages():
+        # credit_packages schema: (id, name, credits, base_price_cents, display_price_cents, discount_percentage,
+        #                          tier_id, is_active, is_featured, features, created_at, updated_at)
+        features = None
+        try:
+            features = json.loads(row[9]) if row[9] else None
+        except Exception:
+            features = None
+
+        packages.append({
+            "id": row[0],
+            "name": row[1],
+            "credits": row[2],
+            "base_price_cents": row[3],
+            "display_price_cents": row[4],
+            "discount_percentage": row[5],
+            "tier_id": row[6],
+            "is_active": bool(row[7]),
+            "is_featured": bool(row[8]),
+            "features": features,
+        })
+
+    return packages
+
+
+@app.get("/api/payments/packages/{package_id}")
+async def get_credit_package_details(package_id: int, current_user: dict = Depends(get_current_user)):
+    """Get a single credit package"""
+    from db.payment_crud import get_credit_package
+
+    row = get_credit_package(package_id)
+    if not row or not bool(row[7]):
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    features = None
+    try:
+        features = json.loads(row[9]) if row[9] else None
+    except Exception:
+        features = None
+
+    return {
+        "id": row[0],
+        "name": row[1],
+        "credits": row[2],
+        "base_price_cents": row[3],
+        "display_price_cents": row[4],
+        "discount_percentage": row[5],
+        "tier_id": row[6],
+        "is_active": bool(row[7]),
+        "is_featured": bool(row[8]),
+        "features": features,
+    }
+
+
+@app.post("/api/payments/calculate-price")
+async def calculate_price(req: PriceCalcRequest, current_user: dict = Depends(get_current_user)):
+    """Calculate final price for a credit package (tier + promo + tax)"""
+    try:
+        price = _pricing_engine.calculate_for_package(
+            user_id=current_user["id"],
+            package_id=req.package_id,
+            quantity=req.quantity,
+            promo_code=req.promo_code,
+        )
+        return {
+            "subtotal_cents": price["subtotal_cents"],
+            "discount_cents": price["discount_cents"],
+            "tax_cents": price["tax_cents"],
+            "total_cents": price["total_cents"],
+            "credits_to_receive": price["credits_to_receive"],
+            "bonus_credits": price["bonus_credits"],
+            "promo_code_applied": price["promo"].code if price.get("promo") else None,
+            "pricing_tier": price["tier"].name if price.get("tier") else None,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/payments/purchase")
+async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
+    """Initiate a Stripe PaymentIntent or Coinbase charge for a credit package"""
+    if req.quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity must be > 0")
+
+    provider = (req.provider or "stripe").lower()
+    if provider not in ("stripe", "coinbase"):
+        raise HTTPException(status_code=400, detail="provider must be 'stripe' or 'coinbase'")
+
+    try:
+        if provider == "stripe":
+            result = _payment_processor.initiate_stripe_package_purchase(
+                user_id=current_user["id"],
+                email=current_user["email"],
+                package_id=req.package_id,
+                quantity=req.quantity,
+                promo_code=req.promo_code,
+                idempotency_key=req.idempotency_key,
+                currency=config.PAYMENT_CONFIG.get("currency", "USD"),
+            )
+            return {
+                "transaction_id": result.transaction_id,
+                "payment_provider": result.provider,
+                "amount_cents": result.amount_cents,
+                "currency": result.currency,
+                "credits_purchased": result.credits,
+                "bonus_credits": result.bonus_credits,
+                "provider_transaction_id": result.provider_transaction_id,
+                "client_secret": result.client_secret,
+            }
+
+        # coinbase
+        result = _payment_processor.initiate_coinbase_package_purchase(
+            user_id=current_user["id"],
+            package_id=req.package_id,
+            quantity=req.quantity,
+            promo_code=req.promo_code,
+            idempotency_key=req.idempotency_key,
+            currency=config.PAYMENT_CONFIG.get("currency", "USD"),
+        )
+        return {
+            "transaction_id": result.transaction_id,
+            "payment_provider": result.provider,
+            "amount_cents": result.amount_cents,
+            "currency": result.currency,
+            "credits_purchased": result.credits,
+            "bonus_credits": result.bonus_credits,
+            "provider_transaction_id": result.provider_transaction_id,
+            "hosted_url": result.hosted_url,
+        }
+
+    except ValueError as e:
+        # Idempotency conflict etc
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/payments/crypto/create-charge")
+async def create_crypto_charge(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
+    """
+    Back-compat alias for initiating a Coinbase Commerce purchase.
+    Prefer POST /api/payments/purchase with provider='coinbase'.
+    """
+    req.provider = "coinbase"
+    return await purchase_credits(req, current_user=current_user)
+
+
+@app.get("/api/payments/methods")
+async def list_payment_methods(current_user: dict = Depends(get_current_user)):
+    """List saved payment methods"""
+    from db.payment_crud import get_user_payment_methods
+
+    rows = get_user_payment_methods(current_user["id"])
+    methods = []
+    for r in rows:
+        methods.append({
+            "id": r[0],
+            "user_id": r[1],
+            "stripe_payment_method_id": r[2],
+            "type": r[3],
+            "is_default": bool(r[4]),
+            "card_brand": r[5],
+            "card_last4": r[6],
+            "card_exp_month": r[7],
+            "card_exp_year": r[8],
+            "billing_name": r[9],
+            "billing_email": r[10],
+            "billing_address": r[11],
+            "created_at": r[12],
+            "updated_at": r[13],
+        })
+    return methods
+
+
+@app.post("/api/payments/methods")
+async def add_payment_method(req: AddPaymentMethodRequest, current_user: dict = Depends(get_current_user)):
+    """Store a Stripe payment method ID and (best-effort) attach it to the user's Stripe customer."""
+    from db.payment_crud import create_payment_method, set_default_payment_method
+
+    # Best-effort Stripe attach + card details fetch
+    card_brand = None
+    card_last4 = None
+    card_exp_month = None
+    card_exp_year = None
+
+    try:
+        import stripe
+        # If keys are left as placeholders, skip talking to Stripe.
+        if config.STRIPE_SECRET_KEY and not config.STRIPE_SECRET_KEY.startswith("sk_test_..."):
+            stripe.api_key = config.STRIPE_SECRET_KEY
+            # Ensure customer exists
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT stripe_customer_id FROM users WHERE id = ?", (current_user["id"],))
+            customer_id = cursor.fetchone()[0]
+            conn.close()
+
+            if not customer_id:
+                customer = stripe.Customer.create(email=current_user["email"], metadata={"user_id": str(current_user["id"])})
+                customer_id = customer["id"]
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE users SET stripe_customer_id = ? WHERE id = ?", (customer_id, current_user["id"]))
+                conn.commit()
+                conn.close()
+
+            stripe.PaymentMethod.attach(req.stripe_payment_method_id, customer=str(customer_id))
+            pm = stripe.PaymentMethod.retrieve(req.stripe_payment_method_id)
+            card = pm.get("card") or {}
+            card_brand = card.get("brand")
+            card_last4 = card.get("last4")
+            card_exp_month = card.get("exp_month")
+            card_exp_year = card.get("exp_year")
+    except Exception:
+        # Don't block storing the ID if Stripe is unreachable/misconfigured during dev.
+        pass
+
+    method_id = create_payment_method(
+        user_id=current_user["id"],
+        stripe_payment_method_id=req.stripe_payment_method_id,
+        method_type="card",
+        is_default=req.is_default,
+        card_brand=card_brand,
+        card_last4=card_last4,
+        card_exp_month=card_exp_month,
+        card_exp_year=card_exp_year,
+    )
+
+    if req.is_default:
+        set_default_payment_method(current_user["id"], int(method_id))
+
+    return {"id": int(method_id)}
+
+
+@app.delete("/api/payments/methods/{method_id}")
+async def remove_payment_method(method_id: int, current_user: dict = Depends(get_current_user)):
+    from db.payment_crud import delete_payment_method
+
+    # Minimal safety: delete by ID (CRUD helper doesn't verify user_id)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, stripe_payment_method_id FROM payment_methods WHERE id = ?", (method_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or row[0] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+
+    stripe_pm_id = row[1]
+    try:
+        import stripe
+        if config.STRIPE_SECRET_KEY and not config.STRIPE_SECRET_KEY.startswith("sk_test_..."):
+            stripe.api_key = config.STRIPE_SECRET_KEY
+            stripe.PaymentMethod.detach(stripe_pm_id)
+    except Exception:
+        pass
+
+    ok = delete_payment_method(method_id)
+    return {"deleted": bool(ok)}
+
+
+@app.put("/api/payments/methods/{method_id}/default")
+async def set_default_method(method_id: int, current_user: dict = Depends(get_current_user)):
+    from db.payment_crud import set_default_payment_method
+
+    ok = set_default_payment_method(current_user["id"], method_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    return {"ok": True}
+
+
+@app.get("/api/payments/transactions")
+async def list_my_transactions(current_user: dict = Depends(get_current_user)):
+    """List current user's payment transactions"""
+    from db.payment_crud import get_user_transactions
+
+    rows = get_user_transactions(current_user["id"], limit=100)
+    txns = []
+    for r in rows:
+        txns.append({
+            "id": r[0],
+            "transaction_id": r[1],
+            "user_id": r[2],
+            "payment_provider": r[3],
+            "provider_transaction_id": r[4],
+            "amount_cents": r[5],
+            "currency": r[6],
+            "status": r[7],
+            "credits_purchased": r[8],
+            "idempotency_key": r[9],
+            "package_id": r[10],
+            "subscription_id": r[11],
+            "promo_code_id": r[12],
+            "invoice_id": r[13],
+            "created_at": r[14],
+            "updated_at": r[15],
+        })
+    return txns
+
+
+@app.get("/api/payments/transactions/{transaction_id}")
+async def get_transaction_details(transaction_id: str, current_user: dict = Depends(get_current_user)):
+    """Get payment transaction details (and provider status if available)"""
+    from db.payment_crud import get_transaction
+
+    txn = get_transaction(transaction_id)
+    if not txn or txn[2] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    resp = {
+        "id": txn[0],
+        "transaction_id": txn[1],
+        "user_id": txn[2],
+        "payment_provider": txn[3],
+        "provider_transaction_id": txn[4],
+        "amount_cents": txn[5],
+        "currency": txn[6],
+        "status": txn[7],
+        "credits_purchased": txn[8],
+        "invoice_id": txn[13],
+        "created_at": txn[14],
+        "updated_at": txn[15],
+    }
+
+    # Optional: enrich Coinbase status
+    if resp["payment_provider"] == "coinbase" and resp.get("provider_transaction_id"):
+        try:
+            charge = _coinbase_service.get_charge(resp["provider_transaction_id"])
+            timeline = charge.get("timeline") or []
+            last_status = timeline[-1]["status"] if timeline else None
+            resp["provider_status"] = last_status
+        except Exception:
+            resp["provider_status"] = None
+
+    return resp
+
+
+@app.get("/api/payments/crypto/status/{charge_id}")
+async def get_crypto_status(charge_id: str, current_user: dict = Depends(get_current_user)):
+    """Poll Coinbase Commerce charge status"""
+    try:
+        charge = _coinbase_service.get_charge(charge_id)
+        timeline = charge.get("timeline") or []
+        status_value = timeline[-1]["status"] if timeline else "NEW"
+        return {"charge_id": charge_id, "status": status_value, "hosted_url": charge.get("hosted_url")}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """Stripe webhook endpoint (signature-verified)"""
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature")
+    if not sig:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature header")
+
+    try:
+        return _webhook_handler.handle_stripe_webhook(payload, sig)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/webhooks/coinbase")
+async def coinbase_webhook(request: Request):
+    """Coinbase Commerce webhook endpoint (signature-verified)"""
+    payload = await request.body()
+    sig = request.headers.get("x-cc-webhook-signature") or request.headers.get("X-CC-Webhook-Signature")
+    if not sig:
+        raise HTTPException(status_code=400, detail="Missing Coinbase signature header")
+
+    try:
+        return _webhook_handler.handle_coinbase_webhook(payload, sig)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/subscriptions/plans")
+async def list_subscription_plans(current_user: dict = Depends(get_current_user)):
+    """List active subscription plans"""
+    from db.payment_crud import list_active_subscription_plans
+
+    plans = []
+    for row in list_active_subscription_plans():
+        # schema: id, name, billing_interval, credits_per_period, base_price_cents, stripe_price_id,
+        # rollover_credits, max_rollover_credits, trial_days, is_active, is_featured, features, created_at, updated_at
+        features = None
+        try:
+            features = json.loads(row[11]) if row[11] else None
+        except Exception:
+            features = None
+        plans.append({
+            "id": row[0],
+            "name": row[1],
+            "billing_interval": row[2],
+            "credits_per_period": row[3],
+            "base_price_cents": row[4],
+            "stripe_price_id": row[5],
+            "rollover_credits": bool(row[6]),
+            "max_rollover_credits": row[7],
+            "trial_days": row[8],
+            "is_active": bool(row[9]),
+            "is_featured": bool(row[10]),
+            "features": features,
+        })
+    return plans
+
+
+# ==================== INVOICES ====================
+
+@app.get("/api/invoices")
+async def list_invoices(current_user: dict = Depends(get_current_user)):
+    from db.payment_crud import get_user_invoices
+
+    rows = get_user_invoices(current_user["id"])
+    invoices = []
+    for r in rows:
+        invoices.append({
+            "id": r[0],
+            "invoice_number": r[1],
+            "user_id": r[2],
+            "transaction_id": r[3],
+            "subscription_id": r[4],
+            "invoice_type": r[5],
+            "amount_cents": r[6],
+            "tax_amount_cents": r[7],
+            "total_amount_cents": r[8],
+            "status": r[9],
+            "pdf_path": r[10],
+            "created_at": r[15],
+        })
+    return {"invoices": invoices}
+
+
+@app.get("/api/invoices/{invoice_id}")
+async def invoice_details(invoice_id: int, current_user: dict = Depends(get_current_user)):
+    from db.payment_crud import get_invoice_by_id
+
+    inv = get_invoice_by_id(invoice_id)
+    if not inv or inv[2] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return {
+        "id": inv[0],
+        "invoice_number": inv[1],
+        "user_id": inv[2],
+        "transaction_id": inv[3],
+        "subscription_id": inv[4],
+        "invoice_type": inv[5],
+        "amount_cents": inv[6],
+        "tax_amount_cents": inv[7],
+        "total_amount_cents": inv[8],
+        "status": inv[9],
+        "pdf_path": inv[10],
+        "created_at": inv[15],
+        "updated_at": inv[16],
+    }
+
+
+@app.get("/api/invoices/{invoice_id}/download")
+async def download_invoice(invoice_id: int, current_user: dict = Depends(get_current_user)):
+    from db.payment_crud import get_invoice_by_id
+    from invoices.invoice_service import ensure_invoice_pdf
+
+    inv = get_invoice_by_id(invoice_id)
+    if not inv or inv[2] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    _, pdf_bytes = ensure_invoice_pdf(invoice_id)
+    b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    filename = f"{inv[1]}.pdf"
+    return {
+        "filename": filename,
+        "content": b64,
+        "content_type": "application/pdf",
+        "encoding": "base64",
+    }
+
+
+@app.post("/api/subscriptions/subscribe")
+async def subscribe(req: SubscribeRequest, current_user: dict = Depends(get_current_user)):
+    """Create a Stripe subscription and return the payment client_secret if needed"""
+    try:
+        result = _subscription_manager.create_subscription(
+            user_id=current_user["id"],
+            email=current_user["email"],
+            plan_id=req.plan_id,
+            idempotency_key=req.idempotency_key,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/subscriptions/my-subscription")
+async def my_subscription(current_user: dict = Depends(get_current_user)):
+    """Get current user's active subscription record"""
+    from db.payment_crud import get_user_active_subscription
+
+    sub = get_user_active_subscription(current_user["id"])
+    if not sub:
+        return None
+    return {
+        "id": sub[0],
+        "user_id": sub[1],
+        "subscription_plan_id": sub[2],
+        "stripe_subscription_id": sub[3],
+        "status": sub[4],
+        "current_period_start": sub[5],
+        "current_period_end": sub[6],
+        "next_billing_date": sub[7],
+        "cancel_at_period_end": bool(sub[8]) if len(sub) > 8 else False,
+    }
+
+
+@app.put("/api/subscriptions/{stripe_subscription_id}/cancel")
+async def cancel_subscription(stripe_subscription_id: str, immediate: bool = False, current_user: dict = Depends(get_current_user)):
+    """Cancel subscription (at period end by default)"""
+    try:
+        return _subscription_manager.cancel(stripe_subscription_id, at_period_end=not immediate)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/subscriptions/{stripe_subscription_id}/pause")
+async def pause_subscription(stripe_subscription_id: str, current_user: dict = Depends(get_current_user)):
+    try:
+        return _subscription_manager.pause(stripe_subscription_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/subscriptions/{stripe_subscription_id}/resume")
+async def resume_subscription(stripe_subscription_id: str, current_user: dict = Depends(get_current_user)):
+    try:
+        return _subscription_manager.resume(stripe_subscription_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/promos/validate")
+async def validate_promo(req: PromoValidateRequest, current_user: dict = Depends(get_current_user)):
+    """Validate a promo code and return its effect for the given package"""
+    code = (req.code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="code is required")
+
+    if req.applies_to not in ("packages", "subscriptions"):
+        raise HTTPException(status_code=400, detail="applies_to must be 'packages' or 'subscriptions'")
+
+    if req.applies_to == "packages" and not req.package_id:
+        raise HTTPException(status_code=400, detail="package_id is required for package promos")
+
+    # Compute a baseline subtotal without promo, then validate against it.
+    baseline = _pricing_engine.calculate_for_package(
+        user_id=current_user["id"],
+        package_id=req.package_id,
+        quantity=req.quantity,
+        promo_code=None,
+    )
+
+    effect = _promo_service.validate_and_calculate(
+        user_id=current_user["id"],
+        code=code,
+        subtotal_cents=int(baseline["subtotal_cents"]),
+        applies_to=req.applies_to,
+    )
+
+    if not effect:
+        return {"valid": False}
+
+    return {
+        "valid": True,
+        "code": effect.code,
+        "discount_cents": effect.discount_cents,
+        "bonus_credits": effect.bonus_credits,
+    }
+
+
+@app.get("/api/promos/my-referral-code")
+async def my_referral_code(current_user: dict = Depends(get_current_user)):
+    from promotions.referral_service import ReferralService
+
+    code = ReferralService().ensure_user_referral_code(current_user["id"])
+    return {"referral_code": code}
+
+
+@app.get("/api/promos/referral-stats")
+async def referral_stats(current_user: dict = Depends(get_current_user)):
+    from promotions.referral_service import ReferralService
+
+    return ReferralService().get_referrer_stats(current_user["id"])
+
+
+@app.get("/api/pricing/my-tier")
+async def my_pricing_tier(current_user: dict = Depends(get_current_user)):
+    tier = _pricing_engine.get_user_pricing_tier(current_user["id"])
+    if not tier:
+        return None
+    return {
+        "id": tier.id,
+        "name": tier.name,
+        "price_per_credit_cents": tier.price_per_credit_cents,
+        "discount_percentage": tier.discount_percentage,
+        "requires_approval": tier.requires_approval,
+    }
+
+
+@app.get("/api/pricing/tiers")
+async def list_pricing_tiers(current_user: dict = Depends(get_current_user)):
+    from db.payment_crud import list_pricing_tiers as _list
+
+    tiers = []
+    for r in _list(active_only=True):
+        # schema: id, name, min_monthly_credits, max_monthly_credits, price_per_credit_cents,
+        # discount_percentage, requires_approval, is_active, created_at, updated_at
+        tiers.append({
+            "id": r[0],
+            "name": r[1],
+            "min_monthly_credits": r[2],
+            "max_monthly_credits": r[3],
+            "price_per_credit_cents": r[4],
+            "discount_percentage": r[5],
+            "requires_approval": bool(r[6]),
+            "is_active": bool(r[7]),
+        })
+    return tiers
+
+
+@app.post("/api/admin/pricing/tiers")
+async def admin_create_pricing_tier(req: PricingTierCreateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import create_pricing_tier
+
+    tier_id = create_pricing_tier(
+        name=req.name,
+        min_monthly_credits=req.min_monthly_credits,
+        max_monthly_credits=req.max_monthly_credits,
+        price_per_credit_cents=req.price_per_credit_cents,
+        discount_percentage=req.discount_percentage,
+        requires_approval=req.requires_approval,
+        is_active=req.is_active,
+    )
+    return {"id": int(tier_id)}
+
+
+@app.put("/api/admin/pricing/tiers/{tier_id}")
+async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import update_pricing_tier
+
+    updates = {}
+    for field in ("name", "min_monthly_credits", "max_monthly_credits", "price_per_credit_cents", "discount_percentage", "requires_approval", "is_active"):
+        value = getattr(req, field)
+        if value is not None:
+            if field in ("requires_approval", "is_active"):
+                updates[field] = 1 if bool(value) else 0
+            else:
+                updates[field] = value
+
+    ok = update_pricing_tier(tier_id, updates)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Tier not found")
+    return {"ok": True}
+
+
+# ==================== ADMIN PROMO MANAGEMENT ====================
+
+@app.post("/api/admin/promos")
+async def admin_create_promo(req: PromoCreateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import create_promo_code
+
+    promo_id = create_promo_code(
+        code=req.code,
+        promo_type=req.type,
+        discount_percentage=req.discount_percentage,
+        discount_amount_cents=req.discount_amount_cents,
+        bonus_credits=req.bonus_credits,
+        max_uses=req.max_uses,
+        max_uses_per_user=req.max_uses_per_user,
+        min_purchase_cents=req.min_purchase_cents,
+        valid_from=req.valid_from,
+        valid_until=req.valid_until,
+        applies_to=req.applies_to,
+        is_active=req.is_active,
+    )
+    return {"id": int(promo_id)}
+
+
+@app.get("/api/admin/promos")
+async def admin_list_promos(admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import list_promo_codes
+
+    promos = []
+    for r in list_promo_codes(active_only=False):
+        # schema: id, code, type, discount_percentage, discount_amount_cents, bonus_credits, max_uses, uses_count,
+        # max_uses_per_user, min_purchase_cents, valid_from, valid_until, applies_to, is_active, created_at, updated_at
+        promos.append({
+            "id": r[0],
+            "code": r[1],
+            "type": r[2],
+            "discount_percentage": r[3],
+            "discount_amount_cents": r[4],
+            "bonus_credits": r[5],
+            "max_uses": r[6],
+            "uses_count": r[7],
+            "max_uses_per_user": r[8],
+            "min_purchase_cents": r[9],
+            "valid_from": r[10],
+            "valid_until": r[11],
+            "applies_to": r[12],
+            "is_active": bool(r[13]),
+            "created_at": r[14],
+            "updated_at": r[15],
+        })
+    return {"promos": promos}
+
+
+@app.put("/api/admin/promos/{promo_id}")
+async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import update_promo_code
+
+    updates = {}
+    for field in (
+        "code",
+        "type",
+        "discount_percentage",
+        "discount_amount_cents",
+        "bonus_credits",
+        "max_uses",
+        "max_uses_per_user",
+        "min_purchase_cents",
+        "valid_from",
+        "valid_until",
+        "applies_to",
+        "is_active",
+    ):
+        value = getattr(req, field)
+        if value is not None:
+            if field == "code" and isinstance(value, str):
+                updates[field] = value.upper()
+            elif field == "is_active":
+                updates[field] = 1 if bool(value) else 0
+            else:
+                updates[field] = value
+
+    ok = update_promo_code(promo_id, updates)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/promos/{promo_id}")
+async def admin_deactivate_promo(promo_id: int, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import deactivate_promo_code
+
+    ok = deactivate_promo_code(promo_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return {"ok": True}
+
+
+@app.get("/api/admin/promos/{promo_id}/usage")
+async def admin_promo_usage(promo_id: int, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import get_promo_usage_stats
+
+    return get_promo_usage_stats(promo_id)
+
+
+# ==================== ADMIN PACKAGES & PLANS ====================
+
+@app.post("/api/admin/payments/packages")
+async def admin_create_credit_package(req: CreditPackageCreateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import create_credit_package
+
+    features_json = json.dumps(req.features) if req.features is not None else None
+    pkg_id = create_credit_package(
+        name=req.name,
+        credits=req.credits,
+        base_price_cents=req.base_price_cents,
+        display_price_cents=req.display_price_cents,
+        discount_percentage=req.discount_percentage,
+        tier_id=req.tier_id,
+        is_active=req.is_active,
+        is_featured=req.is_featured,
+        features=features_json,
+    )
+    return {"id": int(pkg_id)}
+
+
+@app.get("/api/admin/payments/packages")
+async def admin_list_credit_packages(admin_user: dict = Depends(get_admin_user)):
+    from db.base import execute_query
+
+    rows = execute_query("SELECT * FROM credit_packages ORDER BY display_price_cents ASC", fetch_all=True, commit=False)
+    packages = []
+    for row in rows or []:
+        features = None
+        try:
+            features = json.loads(row[9]) if row[9] else None
+        except Exception:
+            features = None
+        packages.append({
+            "id": row[0],
+            "name": row[1],
+            "credits": row[2],
+            "base_price_cents": row[3],
+            "display_price_cents": row[4],
+            "discount_percentage": row[5],
+            "tier_id": row[6],
+            "is_active": bool(row[7]),
+            "is_featured": bool(row[8]),
+            "features": features,
+        })
+    return {"packages": packages}
+
+
+@app.put("/api/admin/payments/packages/{package_id}")
+async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import update_credit_package
+
+    updates = {}
+    for field in ("name", "credits", "base_price_cents", "display_price_cents", "discount_percentage", "tier_id"):
+        value = getattr(req, field)
+        if value is not None:
+            updates[field] = value
+    if req.is_active is not None:
+        updates["is_active"] = 1 if bool(req.is_active) else 0
+    if req.is_featured is not None:
+        updates["is_featured"] = 1 if bool(req.is_featured) else 0
+    if req.features is not None:
+        updates["features"] = json.dumps(req.features)
+
+    ok = update_credit_package(package_id, updates)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Package not found")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/payments/packages/{package_id}")
+async def admin_delete_credit_package(package_id: int, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import delete_credit_package
+
+    ok = delete_credit_package(package_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Package not found")
+    return {"ok": True}
+
+
+@app.post("/api/admin/subscriptions/plans")
+async def admin_create_subscription_plan(req: SubscriptionPlanCreateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import create_subscription_plan
+
+    features_json = json.dumps(req.features) if req.features is not None else None
+    plan_id = create_subscription_plan(
+        name=req.name,
+        billing_interval=req.billing_interval,
+        credits_per_period=req.credits_per_period,
+        base_price_cents=req.base_price_cents,
+        stripe_price_id=req.stripe_price_id,
+        rollover_credits=req.rollover_credits,
+        max_rollover_credits=req.max_rollover_credits,
+        trial_days=req.trial_days,
+        is_active=req.is_active,
+        is_featured=req.is_featured,
+        features=features_json,
+    )
+    return {"id": int(plan_id)}
+
+
+@app.get("/api/admin/subscriptions/plans")
+async def admin_list_subscription_plans(admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import list_subscription_plans
+
+    plans = []
+    for row in list_subscription_plans(active_only=False):
+        features = None
+        try:
+            features = json.loads(row[11]) if row[11] else None
+        except Exception:
+            features = None
+        plans.append({
+            "id": row[0],
+            "name": row[1],
+            "billing_interval": row[2],
+            "credits_per_period": row[3],
+            "base_price_cents": row[4],
+            "stripe_price_id": row[5],
+            "rollover_credits": bool(row[6]),
+            "max_rollover_credits": row[7],
+            "trial_days": row[8],
+            "is_active": bool(row[9]),
+            "is_featured": bool(row[10]),
+            "features": features,
+        })
+    return {"plans": plans}
+
+
+@app.put("/api/admin/subscriptions/plans/{plan_id}")
+async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import update_subscription_plan
+
+    updates = {}
+    for field in ("name", "billing_interval", "credits_per_period", "base_price_cents", "stripe_price_id", "max_rollover_credits", "trial_days"):
+        value = getattr(req, field)
+        if value is not None:
+            updates[field] = value
+    if req.rollover_credits is not None:
+        updates["rollover_credits"] = 1 if bool(req.rollover_credits) else 0
+    if req.is_active is not None:
+        updates["is_active"] = 1 if bool(req.is_active) else 0
+    if req.is_featured is not None:
+        updates["is_featured"] = 1 if bool(req.is_featured) else 0
+    if req.features is not None:
+        updates["features"] = json.dumps(req.features)
+
+    ok = update_subscription_plan(plan_id, updates)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/subscriptions/plans/{plan_id}")
+async def admin_delete_subscription_plan(plan_id: int, admin_user: dict = Depends(get_admin_user)):
+    from db.payment_crud import delete_subscription_plan
+
+    ok = delete_subscription_plan(plan_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return {"ok": True}
+
 # ==================== UTILITY ENDPOINTS ====================
 
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+
+# ==================== ANALYTICS ====================
+
+@app.get("/api/analytics/spending")
+async def user_spending_analytics(current_user: dict = Depends(get_current_user)):
+    from analytics.user_analytics import get_spending_series
+
+    return {"series": get_spending_series(current_user["id"], months=6)}
+
+
+@app.get("/api/analytics/usage")
+async def user_usage_analytics(current_user: dict = Depends(get_current_user)):
+    from analytics.user_analytics import get_usage_summary
+
+    return get_usage_summary(current_user["id"], days=30)
+
+
+@app.get("/api/admin/analytics/revenue")
+async def admin_revenue_dashboard(admin: dict = Depends(get_admin_user)):
+    from analytics.revenue_analytics import get_revenue_dashboard
+
+    return get_revenue_dashboard()
+
+
+@app.get("/api/admin/analytics/mrr")
+async def admin_mrr(admin: dict = Depends(get_admin_user)):
+    from analytics.revenue_analytics import get_mrr_cents, get_mrr_series
+
+    return {"mrr_cents": get_mrr_cents(), "series": get_mrr_series(months=6)}
+
+
+@app.get("/api/admin/analytics/churn")
+async def admin_churn(admin: dict = Depends(get_admin_user)):
+    from analytics.revenue_analytics import get_churn_summary
+
+    return get_churn_summary()
+
+
+@app.get("/api/admin/analytics/top-customers")
+async def admin_top_customers(admin: dict = Depends(get_admin_user)):
+    from analytics.revenue_analytics import get_top_customers
+
+    return {"customers": get_top_customers(limit=25)}
+
+
+@app.get("/api/admin/analytics/conversion")
+async def admin_conversion(admin: dict = Depends(get_admin_user)):
+    from analytics.revenue_analytics import get_conversion_funnel
+
+    return get_conversion_funnel()
 
 @app.get("/api/states")
 async def get_states():

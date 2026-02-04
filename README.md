@@ -1,186 +1,148 @@
-# Business Scraper API + Flutter/Web App
+# Business Scraper API + Flutter App
 
-A complete end-to-end solution for scraping Google Business data with API-first architecture. Works as both a Flutter mobile app and web application.
+End-to-end Google Business data scraping platform with a FastAPI backend and a Flutter client (mobile + web). The backend handles authentication, credit/rate limiting, job execution with Playwright, and Excel exports. The Flutter app provides login, job creation, progress tracking, results, and admin tools.
 
-## 🚀 Features
+## Features
 
-- **REST API Backend** - FastAPI with async Playwright scraping
-- **Flutter Mobile App** - Cross-platform mobile application
-- **Web Interface** - Responsive web app with Bootstrap
-- **Real-time Progress** - Live progress tracking during scraping
-- **CSV Export** - Download results in CSV format
-- **Docker Support** - Containerized deployment
-- **GitHub Actions** - CI/CD automation
+Backend
+- Auth with JWT, user approval, and admin roles
+- Credit system with ledgers, rate limits, and credit requests
+- Job lifecycle management with live progress + logs
+- Countries/regions data: USA, UK, UAE, KSA, Australia
+- Formatted Excel export (.xlsx) with hyperlinks
 
-## 📁 Project Structure
+Flutter App (mobile + web)
+- Login/register flow and profile
+- City/region selection and job creation
+- Progress view, results list, and job history
+- Admin dashboard for approvals and credits
+- Modern UI system (gradients, glass cards, custom fields)
+
+Deploy
+- Docker support for backend
+- Vercel serverless API (static data endpoints only)
+
+## Project Structure
 
 ```
 business_scraper_api/
-├── backend/                 # FastAPI backend
-│   ├── main.py             # FastAPI application
-│   ├── requirements.txt    # Python dependencies
-│   └── Dockerfile         # Container configuration
-├── frontend/               # Flutter mobile app
-│   ├── lib/
-│   │   ├── main.dart      # Flutter app entry
-│   │   ├── screens/       # UI screens
-│   │   ├── services/      # API service layer
-│   │   └── providers/     # State management
-│   └── pubspec.yaml       # Flutter dependencies
-├── web/                    # Web interface
-│   ├── index.html         # Main HTML page
-│   ├── styles.css         # CSS styles
-│   └── app.js             # JavaScript application
-├── docker-compose.yml     # Docker setup
-└── .github/workflows/     # CI/CD pipelines
++-- backend/                 # FastAPI backend (scraping, auth, credits)
+�   +-- main.py              # API routes and scraping logic
+�   +-- database.py          # SQLite/MySQL + credit system
+�   +-- auth.py              # JWT auth helpers
+�   +-- run_server.py        # Windows-friendly server entry
+�   +-- requirements.txt     # Python deps
++-- api/                     # Vercel serverless (no Playwright)
+�   +-- index.py             # Static data endpoints
+�   +-- requirements.txt
++-- frontend/                # Flutter app (mobile + web)
+�   +-- lib/                 # UI, providers, services
+�   +-- pubspec.yaml
++-- docker-compose.yml       # Backend container setup
++-- setup.bat / setup.sh     # Local setup helpers
++-- test_backend.py          # Basic backend smoke test
 ```
 
-## 🛠 Installation & Setup
+## Quick Start (Backend)
 
-### Backend Setup
+1) Install dependencies
 
-1. **Install dependencies:**
 ```bash
 cd backend
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-2. **Run backend:**
+2) Run the API
+
+Windows (recommended):
+```bash
+python run_server.py
+```
+
+Cross-platform:
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-3. **Test API:**
+Note: `run_server.py` starts on port 8001 by default. Match your frontend `baseUrl` accordingly.
+
+3) Health check
+
 ```bash
-curl http://localhost:8000/api/health
+curl http://localhost:8001/api/health
 ```
 
-### Flutter Setup
+## Flutter App (Mobile + Web)
 
-1. **Install Flutter SDK**
-2. **Install dependencies:**
+1) Install dependencies
+
 ```bash
 cd frontend
 flutter pub get
 ```
 
-3. **Run Flutter app:**
+2) Set API base URL
+
+Update `baseUrl` in `frontend/lib/services/api_service.dart`:
+- Local dev: `http://127.0.0.1:8001`
+- Production: your deployed backend URL
+
+3) Run
+
 ```bash
 flutter run
 ```
 
-### Web Setup
-
-1. **Serve web files:**
+For web builds:
 ```bash
-cd web
-# Use any static file server
-python -m http.server 8080
+flutter build web
 ```
 
-2. **Open in browser:** http://localhost:8080
 
-## 🐳 Docker Deployment
+## Configuration (Environment Variables)
 
-### Local Development
-```bash
-docker-compose up --build
-```
+Backend options in `backend/database.py` and `backend/auth.py`:
+- `SECRET_KEY` (JWT secret)
+- `DB_TYPE` (`sqlite` or `mysql`)
+- `SQLITE_DB`, `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB`
+- Credits: `CREDITS_BASE`, `CREDITS_PER_CITY`, `CREDITS_PER_RESULT`, `CREDITS_MIN_JOB`, `CREDITS_STARTING`
+- Rate limits: `MAX_JOBS_PER_HOUR`, `MAX_CONCURRENT_JOBS`
 
-### Production Build
-```bash
-docker build -t business-scraper-backend ./backend
-```
+## API Endpoints (Summary)
 
-## 📱 Mobile App Usage
+Auth
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
 
-1. **Start the backend API**
-2. **Update API URL** in `frontend/lib/services/api_service.dart`
-3. **Build Flutter app:**
-```bash
-cd frontend
-flutter build apk --release
-```
+Credits / Admin
+- `GET /api/credits/balance`
+- `POST /api/credits/estimate`
+- `POST /api/credits/request`
+- `GET /api/admin/users`
+- `POST /api/admin/users/{user_id}/approve`
+- `POST /api/admin/users/{user_id}/credits`
 
-4. **Install APK** on Android device
+Jobs
+- `POST /api/jobs`
+- `GET /api/jobs`
+- `GET /api/jobs/{job_id}`
+- `GET /api/jobs/{job_id}/results`
+- `GET /api/jobs/{job_id}/download`
 
-## 🌐 Web App Usage
+Reference Data
+- `GET /api/countries`
+- `GET /api/states`
+- `GET /api/states/{state}/cities`
 
-1. **Deploy backend** to a public URL
-2. **Update API URL** in `web/app.js`
-3. **Deploy web files** to any static hosting service
+## Deployment Notes
 
-## 🔧 API Endpoints
+- Docker: use `docker-compose.yml` for backend.
+- Vercel: `api/index.py` is a serverless entry that serves static data endpoints only (no scraping/Playwright).
 
-- `POST /api/jobs` - Create scraping job
-- `GET /api/jobs/{job_id}` - Get job status
-- `GET /api/jobs/{job_id}/results` - Get results
-- `GET /api/jobs/{job_id}/download` - Download CSV
-- `GET /api/health` - Health check
+## Troubleshooting
 
-## 📊 Sample Data
-
-The app includes California cities data:
-- Los Angeles, California
-- San Diego, California
-- San Jose, California
-- ...and 17 more cities
-
-## 🚀 Deployment Options
-
-### Backend Deployment
-- **Render** - Easy Python hosting
-- **Railway** - Modern app platform
-- **Heroku** - Traditional PaaS
-- **AWS/GCP** - Cloud providers
-
-### Frontend Deployment
-- **Flutter** - Build APK/AAB for Play Store
-- **Web** - Deploy to Vercel, Netlify, GitHub Pages
-
-## 🔒 Security Considerations
-
-- Use environment variables for API keys
-- Implement rate limiting
-- Add authentication for production
-- Use HTTPS in production
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Commit changes
-4. Push to branch
-5. Open pull request
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🆘 Troubleshooting
-
-### Common Issues
-
-**Backend won't start:**
-- Check Python version (3.8+ required)
-- Install Playwright browsers: `playwright install chromium`
-
-**Flutter build fails:**
-- Ensure Flutter SDK is installed
-- Run `flutter doctor` to check setup
-
-**Web app can't connect to API:**
-- Update API URL in `web/app.js`
-- Check CORS settings
-
-## 📞 Support
-
-For issues and questions:
-1. Check existing GitHub issues
-2. Create new issue with details
-3. Include error logs and environment info
-
----
-
-Built with ❤️ using FastAPI, Flutter, and modern web technologies.
+- Playwright errors: run `playwright install chromium`.
+- Auth errors: ensure `SECRET_KEY` is set in production.
+- Frontend failing to connect: verify `baseUrl` and CORS settings.

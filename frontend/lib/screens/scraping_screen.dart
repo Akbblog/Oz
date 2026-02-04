@@ -1,29 +1,24 @@
-import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/scraper_provider.dart';
-import '../providers/scraper_provider.dart' show ScrapingStatus;
 import '../services/api_service.dart';
-import 'state_selection_screen.dart';
-import '../core/theme/app_colors.dart';
-import '../core/theme/app_spacing.dart';
-import '../core/theme/app_typography.dart';
-import '../widgets/gradient_background.dart';
-import '../widgets/glass_card.dart';
-import '../widgets/gradient_button.dart';
-import '../widgets/custom_text_field.dart';
-import '../core/download_helper.dart';
+import '../core/theme/app_theme.dart';
+import '../core/theme/app_breakpoints.dart';
+import '../core/utils/responsive_utils.dart';
 
 class ScrapingScreen extends StatefulWidget {
   final String initialCategory;
   final String initialCities;
   final String initialMaxResults;
+  final bool showHeader;
 
   const ScrapingScreen({
     super.key,
     this.initialCategory = '',
     this.initialCities = '',
-    this.initialMaxResults = '10',
+    this.initialMaxResults = '50',
+    this.showHeader = true,
   });
 
   @override
@@ -31,32 +26,29 @@ class ScrapingScreen extends StatefulWidget {
 }
 
 class _ScrapingScreenState extends State<ScrapingScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+
+  @override
+  bool get wantKeepAlive => true;
   final TextEditingController _categoryController = TextEditingController();
   final TextEditingController _citiesController = TextEditingController();
-  final TextEditingController _maxResultsController =
-      TextEditingController(text: '10');
   final ApiService _apiService = ApiService();
 
-  late AnimationController _fadeController;
-  late AnimationController _pulseController;
-  late Animation<double> _fadeAnimation;
-  late Animation<double> _pulseAnimation;
-
-  // Credit system state
+  int _maxResults = 50;
   int _creditBalance = 0;
   int _estimatedCost = 0;
   bool _loadingCredits = true;
   bool _canCreateJob = true;
-  int _jobsInHour = 0;
-  int _maxJobsPerHour = 5;
+
+  late AnimationController _fadeController;
+  late Animation<double> _fadeAnimation;
 
   @override
   void initState() {
     super.initState();
     _categoryController.text = widget.initialCategory;
     _citiesController.text = widget.initialCities;
-    _maxResultsController.text = widget.initialMaxResults;
+    _maxResults = int.tryParse(widget.initialMaxResults) ?? 50;
 
     _fadeController = AnimationController(
       vsync: this,
@@ -68,18 +60,17 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
     _fadeController.forward();
 
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    );
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-    _pulseController.repeat(reverse: true);
-
     _loadCreditBalance();
     _citiesController.addListener(_updateCostEstimate);
-    _maxResultsController.addListener(_updateCostEstimate);
+  }
+
+  @override
+  void dispose() {
+    _citiesController.removeListener(_updateCostEstimate);
+    _categoryController.dispose();
+    _citiesController.dispose();
+    _fadeController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCreditBalance() async {
@@ -89,8 +80,6 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         setState(() {
           _creditBalance = data['balance'] ?? 0;
           _canCreateJob = data['rate_limits']?['can_create_job'] ?? true;
-          _jobsInHour = data['rate_limits']?['jobs_in_hour'] ?? 0;
-          _maxJobsPerHour = data['rate_limits']?['max_jobs_per_hour'] ?? 5;
           _loadingCredits = false;
         });
         _updateCostEstimate();
@@ -102,25 +91,27 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     }
   }
 
-  Future<void> _updateCostEstimate() async {
-    final citiesText = _citiesController.text;
-    final citiesList = citiesText
-        .split(';')
-        .map((pair) => pair.trim())
-        .where((pair) => pair.isNotEmpty)
+  List<String> _parseCities() {
+    final text = _citiesController.text.trim();
+    if (text.isEmpty) return [];
+    return text
+        .split(RegExp(r'[;\n]'))
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
         .toList();
+  }
 
-    if (citiesList.isEmpty) {
+  Future<void> _updateCostEstimate() async {
+    final cities = _parseCities();
+    if (cities.isEmpty) {
       setState(() => _estimatedCost = 0);
       return;
     }
 
-    final maxResults = int.tryParse(_maxResultsController.text) ?? 10;
-
     try {
       final data = await _apiService.estimateJobCost(
-        numCities: citiesList.length,
-        maxResultsPerCity: maxResults,
+        numCities: cities.length,
+        maxResultsPerCity: _maxResults,
       );
       if (mounted) {
         setState(() {
@@ -128,262 +119,175 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         });
       }
     } catch (e) {
-      // Silently fail - estimate will show 0
+      if (mounted) {
+        setState(() => _estimatedCost = 0);
+      }
     }
   }
 
-  @override
-  void dispose() {
-    _citiesController.removeListener(_updateCostEstimate);
-    _maxResultsController.removeListener(_updateCostEstimate);
-    _categoryController.dispose();
-    _citiesController.dispose();
-    _maxResultsController.dispose();
-    _fadeController.dispose();
-    _pulseController.dispose();
-    super.dispose();
+  Future<void> _startScraping(ScraperProvider provider) async {
+    final category = _categoryController.text.trim();
+    final cities = _parseCities();
+
+    if (category.isEmpty || cities.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter category and cities')),
+      );
+      return;
+    }
+
+    if (!_canCreateJob) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Rate limit reached. Try again later.')),
+      );
+      return;
+    }
+
+    await provider.startScraping(
+      category: category,
+      citiesData: cities,
+      maxResultsPerCity: _maxResults,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
     final scraperProvider = Provider.of<ScraperProvider>(context);
     final isRunning = scraperProvider.status == ScrapingStatus.running;
-    final isCompleted = scraperProvider.status == ScrapingStatus.completed;
+    final progress = scraperProvider.currentJob?.progress ?? 0;
+    final logs = scraperProvider.getCurrentLogs();
+    final layoutType =
+        AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: _buildAppBar(),
-      body: GradientBackground(
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const SizedBox(height: AppSpacing.md),
-                  _buildApiStatusCard(scraperProvider),
-                  const SizedBox(height: AppSpacing.md),
-                  _buildCreditBalanceCard(),
-                  const SizedBox(height: AppSpacing.xl),
-                  _buildInputSection(),
-                  const SizedBox(height: AppSpacing.md),
-                  _buildCostEstimateCard(),
-                  const SizedBox(height: AppSpacing.xl),
-                  _buildActionButtons(scraperProvider, isRunning),
-                  const SizedBox(height: AppSpacing.lg),
-                  if (isRunning) _buildProgressCard(scraperProvider),
-                  if (isCompleted) _buildCompletionCard(scraperProvider),
-                  const SizedBox(height: AppSpacing.lg),
-                  _buildLogsCard(scraperProvider),
-                  const SizedBox(height: AppSpacing.xl),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      leading: IconButton(
-        icon: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: AppColors.glassWhite,
-            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-          ),
-          child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
-        ),
-        onPressed: () => Navigator.pop(context),
-      ),
-      title: Text(
-        'Start Lead Search',
-        style: AppTypography.headlineSmallLight,
-      ),
-      centerTitle: true,
-    );
-  }
-
-  Widget _buildApiStatusCard(ScraperProvider provider) {
-    final isConnected = provider.isApiConnected;
-
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: isConnected
-              ? LinearGradient(
-                  colors: [
-                    AppColors.success.withValues(alpha: 0.3),
-                    AppColors.success.withValues(alpha: 0.1),
+      backgroundColor: _ScrapeColors.background,
+      body: SafeArea(
+        top: widget.showHeader,
+        bottom: false,
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: layoutType == LayoutType.mobile
+              ? Column(
+                  children: [
+                    if (widget.showHeader) _buildHeader(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.md,
+                          AppSpacing.md,
+                          AppSpacing.md,
+                          AppSpacing.xl,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildStatsRow(scraperProvider, layoutType),
+                            const SizedBox(height: AppSpacing.lg),
+                            _buildConfigSection(),
+                            const SizedBox(height: AppSpacing.lg),
+                            _buildStartButton(scraperProvider, isRunning),
+                            const SizedBox(height: AppSpacing.lg),
+                            _buildActivitySection(progress, logs, isRunning),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 )
-              : LinearGradient(
-                  colors: [
-                    AppColors.error.withValues(alpha: 0.3),
-                    AppColors.error.withValues(alpha: 0.1),
+              : Column(
+                  children: [
+                    if (widget.showHeader) _buildHeader(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                          ResponsiveUtils.getScreenPadding(layoutType),
+                          ResponsiveUtils.getScreenPadding(layoutType),
+                          ResponsiveUtils.getScreenPadding(layoutType),
+                          AppSpacing.xl,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildStatsRow(scraperProvider, layoutType),
+                            const SizedBox(height: AppSpacing.lg),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: layoutType == LayoutType.desktopSmall
+                                      ? 45
+                                      : 40,
+                                  child: Column(
+                                    children: [
+                                      _buildConfigSection(),
+                                      const SizedBox(height: AppSpacing.lg),
+                                      _buildStartButton(
+                                          scraperProvider, isRunning),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.lg),
+                                Expanded(
+                                  flex: layoutType == LayoutType.desktopSmall
+                                      ? 55
+                                      : 60,
+                                  child: _buildActivitySection(
+                                      progress, logs, isRunning),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-        ),
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Row(
-          children: [
-            AnimatedBuilder(
-              animation: _pulseAnimation,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: isConnected ? 1.0 : _pulseAnimation.value,
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      gradient: isConnected
-                          ? AppColors.successGradient
-                          : AppColors.errorGradient,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: (isConnected ? AppColors.success : AppColors.error)
-                              .withValues(alpha: 0.4),
-                          blurRadius: 12,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      isConnected ? Icons.wifi : Icons.wifi_off,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(width: AppSpacing.lg),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isConnected ? 'API Connected' : 'API Disconnected',
-                    style: AppTypography.titleMediumLight,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    isConnected
-                        ? 'Ready to discover leads'
-                        : 'Please check your connection',
-                    style: AppTypography.bodySmallLight,
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.xs,
-              ),
-              decoration: BoxDecoration(
-                color: (isConnected ? AppColors.success : AppColors.error)
-                    .withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                border: Border.all(
-                  color: isConnected ? AppColors.success : AppColors.error,
-                  width: 1,
-                ),
-              ),
-              child: Text(
-                isConnected ? 'ONLINE' : 'OFFLINE',
-                style: AppTypography.labelSmall.copyWith(
-                  color: isConnected ? AppColors.success : AppColors.error,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );
   }
-
-  Widget _buildCreditBalanceCard() {
-    final hasEnoughCredits = _creditBalance >= _estimatedCost || _estimatedCost == 0;
-
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: _ScrapeColors.background.withValues(alpha: 0.95),
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+      ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(10),
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
-              gradient: hasEnoughCredits ? AppColors.successGradient : AppColors.warningGradient,
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+              color: _ScrapeColors.card,
+              borderRadius: AppSpacing.borderRadiusRound,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.06),
+              ),
             ),
-            child: Icon(
-              Icons.account_balance_wallet,
+            child: const Icon(
+              Icons.search_rounded,
               color: Colors.white,
               size: 20,
             ),
           ),
-          const SizedBox(width: AppSpacing.md),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Credit Balance',
-                  style: AppTypography.labelMedium.copyWith(color: Colors.white70),
-                ),
-                const SizedBox(height: 2),
-                _loadingCredits
-                    ? SizedBox(
-                        width: 60,
-                        height: 16,
-                        child: LinearProgressIndicator(
-                          backgroundColor: Colors.white24,
-                          valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryStart),
-                        ),
-                      )
-                    : Text(
-                        '$_creditBalance credits',
-                        style: AppTypography.titleMediumLight.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm,
-              vertical: AppSpacing.xs,
-            ),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.schedule,
-                  size: 14,
-                  color: _canCreateJob ? AppColors.success : AppColors.warning,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '$_jobsInHour/$_maxJobsPerHour jobs/hr',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: _canCreateJob ? AppColors.success : AppColors.warning,
-                  ),
-                ),
-              ],
+            child: Text(
+              'Scrape Config',
+              style: AppTypography.titleMedium.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+              ),
             ),
           ),
         ],
@@ -391,472 +295,367 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildCostEstimateCard() {
-    if (_estimatedCost == 0) return const SizedBox.shrink();
-
-    final hasEnoughCredits = _creditBalance >= _estimatedCost;
-    final balanceAfter = _creditBalance - _estimatedCost;
-
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: hasEnoughCredits
-                ? [AppColors.info.withValues(alpha: 0.2), AppColors.info.withValues(alpha: 0.05)]
-                : [AppColors.error.withValues(alpha: 0.2), AppColors.error.withValues(alpha: 0.05)],
-          ),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-        ),
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildStatsRow(ScraperProvider provider, LayoutType layoutType) {
+    final apiOnline = provider.isApiConnected;
+    final cards = [
+      _statCard(
+        title: 'API Status',
+        value: apiOnline ? 'ONLINE' : 'OFFLINE',
+        icon: Icons.wifi,
+        accent: apiOnline ? _ScrapeColors.emerald : _ScrapeColors.rose,
+        extra: Row(
           children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.calculate,
-                  color: hasEnoughCredits ? AppColors.info : AppColors.error,
-                  size: 20,
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                Text(
-                  'Search Cost Estimate',
-                  style: AppTypography.labelMedium.copyWith(
-                    color: hasEnoughCredits ? AppColors.info : AppColors.error,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildCostRow('Cost', '$_estimatedCost credits', hasEnoughCredits ? AppColors.info : AppColors.error),
-                _buildCostRow('Balance', '$_creditBalance credits', Colors.white70),
-                _buildCostRow(
-                  'After',
-                  '${balanceAfter >= 0 ? balanceAfter : 0} credits',
-                  hasEnoughCredits ? AppColors.success : AppColors.error,
-                ),
-              ],
-            ),
-            if (!hasEnoughCredits) ...[
-              const SizedBox(height: AppSpacing.sm),
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                  border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber, color: AppColors.error, size: 16),
-                    const SizedBox(width: AppSpacing.xs),
-                    Expanded(
-                      child: Text(
-                        'Insufficient credits. Need ${_estimatedCost - _creditBalance} more.',
-                        style: AppTypography.bodySmall.copyWith(color: AppColors.error),
-                      ),
-                    ),
-                  ],
-                ),
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: apiOnline ? _ScrapeColors.emerald : _ScrapeColors.rose,
+                shape: BoxShape.circle,
               ),
-            ],
+            ),
+            const SizedBox(width: 6),
+            Text(
+              apiOnline ? 'Connected' : 'Disconnected',
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white70,
+              ),
+            ),
           ],
         ),
+      ),
+      _statCard(
+        title: 'Est. Cost',
+        value: _loadingCredits ? '...' : '$_estimatedCost Credits',
+        icon: Icons.monetization_on_rounded,
+        accent: _ScrapeColors.primary,
+        extra: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                minHeight: 4,
+                value: _creditBalance == 0
+                    ? 0
+                    : (_estimatedCost / _creditBalance).clamp(0, 1),
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  _ScrapeColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      _statCard(
+        title: 'Credit Balance',
+        value: _loadingCredits ? '...' : '$_creditBalance Credits',
+        icon: Icons.account_balance_wallet_rounded,
+        accent: _ScrapeColors.primaryLight,
+      ),
+      _statCard(
+        title: 'Results/City',
+        value: '$_maxResults Leads',
+        icon: Icons.list_alt_rounded,
+        accent: _ScrapeColors.emerald,
+      ),
+    ];
+
+    if (layoutType == LayoutType.mobile || layoutType == LayoutType.tablet) {
+      return Row(
+        children: [
+          Expanded(child: cards[0]),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(child: cards[1]),
+        ],
+      );
+    }
+
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: layoutType == LayoutType.desktopSmall ? 3 : 4,
+      crossAxisSpacing: AppSpacing.md,
+      mainAxisSpacing: AppSpacing.md,
+      childAspectRatio: 1.6,
+      children: cards,
+    );
+  }
+
+  Widget _statCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color accent,
+    Widget? extra,
+  }) {
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: _ScrapeColors.card,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(
+          color: accent.withValues(alpha: 0.3),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.12),
+            blurRadius: 14,
+            spreadRadius: -8,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                title,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white70,
+                  letterSpacing: 1.1,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Icon(icon, color: accent, size: 20),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (extra != null) extra,
+        ],
       ),
     );
   }
 
-  Widget _buildCostRow(String label, String value, Color color) {
+  Widget _buildConfigSection() {
+    final cities = _parseCities();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.tune_rounded, color: _ScrapeColors.primary, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Target Criteria',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white70,
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.md),
+        _buildInputField(
+          label: 'Lead Category',
+          controller: _categoryController,
+          hint: 'Software Companies',
+          icon: Icons.business_center_rounded,
+        ),
+        const SizedBox(height: AppSpacing.md),
+        _buildInputField(
+          label: 'Target Cities',
+          controller: _citiesController,
+          hint: 'Add location...',
+          icon: Icons.location_on_rounded,
+        ),
+        if (cities.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xs,
+            children: cities
+                .map((city) => _cityChip(city))
+                .toList(),
+          ),
+        ],
+        const SizedBox(height: AppSpacing.md),
+        _buildSlider(),
+      ],
+    );
+  }
+
+  Widget _buildInputField({
+    required String label,
+    required TextEditingController controller,
+    required String hint,
+    required IconData icon,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
-          style: AppTypography.labelSmall.copyWith(color: Colors.white54),
-        ),
-        Text(
-          value,
-          style: AppTypography.bodyMedium.copyWith(
-            color: color,
+          style: AppTypography.bodySmall.copyWith(
+            color: Colors.white70,
             fontWeight: FontWeight.w600,
           ),
         ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: AppTypography.bodySmall.copyWith(
+              color: Colors.white54,
+            ),
+            filled: true,
+            fillColor: _ScrapeColors.input,
+            border: OutlineInputBorder(
+              borderRadius: AppSpacing.borderRadiusLg,
+              borderSide: BorderSide(
+                color: _ScrapeColors.primary.withValues(alpha: 0.3),
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: AppSpacing.borderRadiusLg,
+              borderSide: BorderSide(
+                color: Colors.white.withValues(alpha: 0.12),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: AppSpacing.borderRadiusLg,
+              borderSide: BorderSide(
+                color: _ScrapeColors.primary,
+              ),
+            ),
+            suffixIcon: Icon(icon, color: _ScrapeColors.primary),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.md,
+            ),
+          ),
+          onChanged: (_) => _updateCostEstimate(),
+        ),
       ],
     );
   }
 
-  Widget _buildInputSection() {
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _cityChip(String city) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xxs,
+      ),
+      decoration: BoxDecoration(
+        color: _ScrapeColors.primary.withValues(alpha: 0.12),
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(
+          color: _ScrapeColors.primary.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                ),
-                child: const Icon(Icons.tune, color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('Search Configuration', style: AppTypography.titleMediumLight),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.lg),
-
-          // Category Input
           Text(
-            'Lead Category',
-            style: AppTypography.labelMedium.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          CustomTextField(
-            controller: _categoryController,
-            hint: 'e.g., Restaurants, Hotels, Shops',
-            prefixIcon: Icons.search,
-          ),
-          const SizedBox(height: AppSpacing.md),
-
-          // Cities Input
-          Text(
-            'Target Cities',
-            style: AppTypography.labelMedium.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          CustomTextField(
-            controller: _citiesController,
-            hint: 'Select cities or enter manually',
-            prefixIcon: Icons.location_city,
-            maxLines: 3,
-          ),
-          const SizedBox(height: AppSpacing.md),
-
-          // Max Results Input
-          Text(
-            'Results per City',
-            style: AppTypography.labelMedium.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          CustomTextField(
-            controller: _maxResultsController,
-            hint: 'Number of results',
-            prefixIcon: Icons.format_list_numbered,
-            keyboardType: TextInputType.number,
+            city,
+            style: AppTypography.labelSmall.copyWith(
+              color: _ScrapeColors.primaryLight,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildActionButtons(ScraperProvider provider, bool isRunning) {
-    return Row(
+  Widget _buildSlider() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: GlassCard(
-            padding: EdgeInsets.zero,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => const StateSelectionScreen(),
-                    ),
-                  );
-                },
-                borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.secondaryStart.withValues(alpha: 0.2),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.map,
-                          color: AppColors.secondaryStart,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                      Text(
-                        'Select Cities',
-                        style: AppTypography.labelMedium.copyWith(
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Results per City',
+              style: AppTypography.bodySmall.copyWith(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ),
+            Text(
+              '$_maxResults Leads',
+              style: AppTypography.bodySmall.copyWith(
+                color: _ScrapeColors.primaryLight,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(
-          flex: 2,
-          child: GradientButton(
-            text: isRunning ? 'Searching...' : 'Start Search',
-            onPressed: isRunning ? null : () => _startScraping(provider),
-            gradient: isRunning ? null : AppColors.primaryGradient,
-            isLoading: isRunning,
-            icon: isRunning ? Icons.hourglass_empty : Icons.rocket_launch,
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: _ScrapeColors.input,
+            borderRadius: AppSpacing.borderRadiusLg,
+            border: Border.all(
+              color: _ScrapeColors.primary.withValues(alpha: 0.3),
+            ),
+          ),
+          child: Slider(
+            value: _maxResults.toDouble(),
+            min: 10,
+            max: 500,
+            divisions: 49,
+            activeColor: _ScrapeColors.primary,
+            inactiveColor: Colors.white24,
+            onChanged: (value) {
+              setState(() {
+                _maxResults = value.round();
+              });
+              _updateCostEstimate();
+            },
           ),
         ),
       ],
     );
   }
 
-  Widget _buildProgressCard(ScraperProvider provider) {
-    final job = provider.currentJob;
-    final progress = (job?.progress ?? 0) / 100;
-
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: progress),
-      duration: AppSpacing.durationMedium,
-      builder: (context, value, child) {
-        return GlassCard(
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.primaryStart.withValues(alpha: 0.2),
-                  AppColors.secondaryStart.withValues(alpha: 0.1),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-            ),
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        SizedBox(
-                          width: 60,
-                          height: 60,
-                          child: CircularProgressIndicator(
-                            value: value,
-                            strokeWidth: 6,
-                            backgroundColor: Colors.white24,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.secondaryStart,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '${(value * 100).toInt()}%',
-                          style: AppTypography.labelMedium.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: AppSpacing.lg),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Search in Progress',
-                            style: AppTypography.titleMediumLight,
-                          ),
-                          const SizedBox(height: AppSpacing.xs),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                            child: LinearProgressIndicator(
-                              value: value,
-                              minHeight: 8,
-                              backgroundColor: Colors.white24,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.secondaryStart,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: AppSpacing.xs),
-                          Text(
-                            'Collecting lead data...',
-                            style: AppTypography.bodySmallLight,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                if (job?.currentCity != null) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  Container(
-                    padding: const EdgeInsets.all(AppSpacing.sm),
-                    decoration: BoxDecoration(
-                      color: AppColors.info.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                      border: Border.all(
-                        color: AppColors.info.withValues(alpha: 0.3),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on,
-                          color: AppColors.info,
-                          size: 16,
-                        ),
-                        const SizedBox(width: AppSpacing.xs),
-                        Text(
-                          'Currently searching: ${job?.currentCity}',
-                          style: AppTypography.bodySmall.copyWith(
-                            color: AppColors.info,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: AppSpacing.md),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      provider.reset();
-                      _showSnackBar('Search stopped', AppColors.warning);
-                    },
-                    icon: const Icon(Icons.stop, size: 18),
-                    label: const Text('Stop Search'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.error,
-                      side: const BorderSide(color: AppColors.error),
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildCompletionCard(ScraperProvider provider) {
-    final resultsCount = provider.currentJob?.results.length ?? 0;
-
-    return GlassCard(
+  Widget _buildStartButton(ScraperProvider provider, bool isRunning) {
+    return GestureDetector(
+      onTap: isRunning ? null : () => _startScraping(provider),
       child: Container(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [
-              AppColors.success.withValues(alpha: 0.3),
-              AppColors.success.withValues(alpha: 0.1),
-            ],
+            colors: [_ScrapeColors.primary, _ScrapeColors.primaryLight],
           ),
-          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-        ),
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    gradient: AppColors.successGradient,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.success.withValues(alpha: 0.4),
-                        blurRadius: 12,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.check_circle,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.lg),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Search Completed!',
-                        style: AppTypography.titleMediumLight,
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.sm,
-                              vertical: AppSpacing.xxs,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                            ),
-                            child: Text(
-                              '$resultsCount results found',
-                              style: AppTypography.labelSmall.copyWith(
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          borderRadius: AppSpacing.borderRadiusLg,
+          boxShadow: [
+            BoxShadow(
+              color: _ScrapeColors.primary.withValues(alpha: 0.4),
+              blurRadius: 18,
+              spreadRadius: -8,
             ),
-            const SizedBox(height: AppSpacing.lg),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      provider.reset();
-                    },
-                    icon: const Icon(Icons.refresh, size: 18),
-                    label: const Text('New Search'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white54),
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _downloadResults(provider),
-                    icon: const Icon(Icons.download, size: 20),
-                    label: const Text('Download'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: AppColors.success,
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.rocket_launch_rounded, color: Colors.white),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              isRunning ? 'Running...' : 'Start Search',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+              ),
             ),
           ],
         ),
@@ -864,241 +663,154 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildLogsCard(ScraperProvider provider) {
-    final logs = provider.getCurrentLogs();
-
-    return GlassCard(
+  Widget _buildActivitySection(int progress, List<String> logs, bool isRunning) {
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: _ScrapeColors.card,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.info.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                ),
-                child: const Icon(
-                  Icons.terminal,
-                  color: AppColors.info,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text('Activity Logs', style: AppTypography.titleMediumLight),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.info.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
-                ),
-                child: Text(
-                  '${logs.length} entries',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.info,
+              Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _ScrapeColors.primary,
+                      shape: BoxShape.circle,
+                    ),
                   ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Activity Log',
+                    style: AppTypography.labelLarge.copyWith(
+                      color: Colors.white70,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                'v2.4.1',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white54,
                 ),
               ),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
-          Container(
-            height: 200,
-            decoration: BoxDecoration(
-              color: const Color(0xFF0D1117),
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.1),
+          Row(
+            children: [
+              _buildProgressCircle(progress, isRunning),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: _buildLogBox(logs),
               ),
-            ),
-            child: logs.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.hourglass_empty,
-                          color: Colors.white30,
-                          size: 32,
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          'No activity yet',
-                          style: AppTypography.bodySmall.copyWith(
-                            color: Colors.white30,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(AppSpacing.sm),
-                    itemCount: logs.length,
-                    itemBuilder: (context, index) {
-                      final log = logs[index];
-                      final isError = log.toLowerCase().contains('error');
-                      final isSuccess = log.toLowerCase().contains('success') ||
-                          log.toLowerCase().contains('completed');
-
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '> ',
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 12,
-                                color: isError
-                                    ? AppColors.error
-                                    : isSuccess
-                                        ? AppColors.success
-                                        : AppColors.info,
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                log,
-                                style: TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 12,
-                                  color: isError
-                                      ? AppColors.error.withValues(alpha: 0.9)
-                                      : isSuccess
-                                          ? AppColors.success.withValues(alpha: 0.9)
-                                          : Colors.white70,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Future<void> _startScraping(ScraperProvider provider) async {
-    if (_categoryController.text.isEmpty) {
-      _showSnackBar('Please enter a search category', AppColors.error);
-      return;
-    }
-
-    if (_citiesController.text.isEmpty) {
-      _showSnackBar('Please select cities', AppColors.error);
-      return;
-    }
-
-    // Check credit balance
-    if (_creditBalance < _estimatedCost) {
-      _showSnackBar('Insufficient credits. Need $_estimatedCost, have $_creditBalance', AppColors.error);
-      return;
-    }
-
-    // Check rate limits
-    if (!_canCreateJob) {
-      _showSnackBar('Rate limit reached. Try again later.', AppColors.warning);
-      return;
-    }
-
-    try {
-      final citiesText = _citiesController.text;
-      final citiesList = citiesText
-          .split(';')
-          .map((pair) => pair.trim())
-          .where((pair) => pair.isNotEmpty)
-          .toList();
-
-      if (citiesList.isEmpty) {
-        _showSnackBar('No valid cities found', AppColors.error);
-        return;
-      }
-
-      final maxResults = int.tryParse(_maxResultsController.text) ?? 10;
-      if (maxResults <= 0) {
-        _showSnackBar('Max results must be greater than 0', AppColors.error);
-        return;
-      }
-
-      await provider.startScraping(
-        category: _categoryController.text,
-        citiesData: citiesList,
-        maxResultsPerCity: maxResults,
-      );
-
-      _showSnackBar('Search started! $_estimatedCost credits charged.', AppColors.success);
-
-      // Refresh credit balance
-      _loadCreditBalance();
-    } catch (e) {
-      final errorMsg = e.toString();
-      if (errorMsg.contains('402') || errorMsg.contains('Insufficient credits')) {
-        _showSnackBar('Insufficient credits for this job', AppColors.error);
-      } else if (errorMsg.contains('429') || errorMsg.contains('Rate limit')) {
-        _showSnackBar('Rate limit reached. Try again later.', AppColors.warning);
-      } else {
-        _showSnackBar('Failed to start search: $e', AppColors.error);
-      }
-      // Refresh credit balance in case of error
-      _loadCreditBalance();
-    }
+  Widget _buildProgressCircle(int progress, bool isRunning) {
+    final value = (progress / 100).clamp(0.0, 1.0);
+    return Column(
+      children: [
+        SizedBox(
+          width: 72,
+          height: 72,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CircularProgressIndicator(
+                value: value,
+                strokeWidth: 6,
+                backgroundColor: Colors.white12,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  _ScrapeColors.primary,
+                ),
+              ),
+              Text(
+                '${progress.clamp(0, 100)}%',
+                style: AppTypography.labelLarge.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          isRunning ? 'Processing' : 'Idle',
+          style: AppTypography.labelSmall.copyWith(
+            color: _ScrapeColors.primaryLight,
+            letterSpacing: 1.1,
+          ),
+        ),
+      ],
+    );
   }
 
-  Future<void> _downloadResults(ScraperProvider provider) async {
-    try {
-      final csvData = await provider.downloadResults();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = 'scraping_results_$timestamp';
+  Widget _buildLogBox(List<String> logs) {
+    final displayLogs = logs.isEmpty
+        ? ['> Waiting for job to start...']
+        : logs.take(6).toList();
 
-      if (!mounted) return;
-
-      final success = await saveCsv(jsonEncode(csvData), fileName, context: context);
-
-      if (!success && mounted) {
-        _showSnackBar('Download failed', AppColors.error);
-      }
-    } catch (e) {
-      if (mounted) {
-        _showSnackBar('Failed to download results: $e', AppColors.error);
-      }
-    }
-  }
-
-  void _showSnackBar(String message, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(
-              color == AppColors.success
-                  ? Icons.check_circle
-                  : color == AppColors.error
-                      ? Icons.error
-                      : Icons.info,
-              color: Colors.white,
-              size: 20,
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(child: Text(message)),
-          ],
+    return Container(
+      padding: AppSpacing.paddingSm,
+      decoration: BoxDecoration(
+        color: _ScrapeColors.terminal,
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.08),
         ),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+      ),
+      child: SizedBox(
+        height: 96,
+        child: ListView.builder(
+          itemCount: displayLogs.length,
+          itemBuilder: (context, index) {
+            final line = displayLogs[index];
+            final color = line.contains('error')
+                ? _ScrapeColors.rose
+                : line.contains('Extracting')
+                    ? _ScrapeColors.primary
+                    : Colors.white70;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                line,
+                style: AppTypography.labelSmall.copyWith(
+                  color: color,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            );
+          },
         ),
-        margin: const EdgeInsets.all(AppSpacing.md),
       ),
     );
   }
+}
+
+class _ScrapeColors {
+  static const Color background = Color(0xFF0F111A);
+  static const Color card = Color(0xFF161826);
+  static const Color input = Color(0xFF1E2133);
+  static const Color primary = Color(0xFF311FF9);
+  static const Color primaryLight = Color(0xFF6366F1);
+  static const Color emerald = Color(0xFF10B981);
+  static const Color rose = Color(0xFFFB7185);
+  static const Color terminal = Color(0xFF0A0C14);
 }

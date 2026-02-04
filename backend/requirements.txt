@@ -17,3 +17,27 @@ openpyxl>=3.1.0
 # Optional: For production deployment
 gunicorn==21.2.0
 httpx==0.25.2
+
+# Testing Infrastructure (Phase 1)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+
+# Payment Processing (Phase 2+, install now for dependencies)
+stripe==7.8.0
+coinbase-commerce==1.0.1
+
+# PDF Generation (Phase 1/2)
+reportlab==4.0.7
+
+# Background Tasks (Phase 3+, install now for dependencies)
+celery==5.3.4
+redis==5.0.1
+flower==2.0.1
+
+# Email (Phase 2+)
+aiosmtplib==3.0.1
+
+# Currency & Tax (Phase 5+, optional)
+# forex-python==1.8
+# vat-moss==2024.1.1

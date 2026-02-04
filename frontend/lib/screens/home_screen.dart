@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
-import '../providers/scraper_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
+import '../core/theme/app_breakpoints.dart';
+import '../core/utils/responsive_utils.dart';
 import 'state_selection_screen.dart';
 import 'scraping_screen.dart';
 import 'results_screen.dart';
 import 'job_history_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'profile_screen.dart';
+import '../widgets/sidebar_navigation.dart';
+import '../widgets/top_bar.dart';
+import '../widgets/responsive_shell.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,15 +26,14 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _currentIndex = 1; // Start on Scrape tab
   late PageController _pageController;
-  late AnimationController _fabAnimationController;
   final ApiService _apiService = ApiService();
   int _creditBalance = 0;
   bool _loadingCredits = true;
 
   final List<_NavItem> _navItems = const [
     _NavItem(icon: Icons.location_city_rounded, label: 'Cities'),
-    _NavItem(icon: Icons.rocket_launch_rounded, label: 'Search'),
-    _NavItem(icon: Icons.analytics_rounded, label: 'Results'),
+    _NavItem(icon: Icons.search_rounded, label: 'Search'),
+    _NavItem(icon: Icons.list_alt_rounded, label: 'Results'),
     _NavItem(icon: Icons.history_rounded, label: 'History'),
   ];
 
@@ -37,11 +41,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentIndex);
-    _fabAnimationController = AnimationController(
-      duration: AppSpacing.durationMedium,
-      vsync: this,
-    );
-    _fabAnimationController.forward();
     _loadCreditBalance();
   }
 
@@ -64,7 +63,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     _pageController.dispose();
-    _fabAnimationController.dispose();
     super.dispose();
   }
 
@@ -77,154 +75,222 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildCreditBadge() {
-    return GestureDetector(
-      onTap: _loadCreditBalance,
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: AppSpacing.xs,
-        ),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              AppColors.success.withValues(alpha: 0.15),
-              AppColors.success.withValues(alpha: 0.05),
-            ],
-          ),
-          borderRadius: AppSpacing.borderRadiusRound,
-          border: Border.all(
-            color: AppColors.success.withValues(alpha: 0.3),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.account_balance_wallet,
-              size: 16,
-              color: AppColors.success,
-            ),
-            const SizedBox(width: 4),
-            _loadingCredits
-                ? SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.success),
-                    ),
-                  )
-                : Text(
-                    '$_creditBalance',
-                    style: AppTypography.labelSmall.copyWith(
-                      color: AppColors.success,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
+    final layoutType =
+        AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
     return Scaffold(
-      backgroundColor: AppColors.surfaceLight,
-      body: SafeArea(
-        child: Column(
+      backgroundColor: AppColors.backgroundDarkest,
+      body: ResponsiveShell(
+        child: Stack(
           children: [
-            // Custom App Bar
-            _buildAppBar(authProvider),
-
-            // Page Content
-            Expanded(
-              child: PageView(
-                controller: _pageController,
-                onPageChanged: (index) {
-                  setState(() => _currentIndex = index);
-                },
-                children: [
-                  StateSelectionScreen(),
-                  ScrapingScreen(),
-                  ResultsScreen(),
-                  JobHistoryScreen(),
-                ],
-              ),
-            ),
+            _buildBackground(),
+            layoutType == LayoutType.mobile
+                ? Column(
+                    children: [
+                      _buildHeader(authProvider),
+                      Expanded(
+                        child: PageView(
+                          controller: _pageController,
+                          onPageChanged: (index) {
+                            setState(() => _currentIndex = index);
+                          },
+                          children: const [
+                            StateSelectionScreen(),
+                            ScrapingScreen(),
+                            ResultsScreen(),
+                            JobHistoryScreen(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : Padding(
+                    padding: EdgeInsets.all(
+                      ResponsiveUtils.getScreenPadding(layoutType),
+                    ),
+                    child: _buildDesktopContent(),
+                  ),
           ],
         ),
+        bottomNavigation:
+            layoutType == LayoutType.mobile ? _buildBottomNav() : null,
+        topBarBuilder: (context, layoutType, isCollapsed, onToggleSidebar) {
+          final title = _navItems[_currentIndex].label;
+          return TopBar(
+            title: title,
+            showMenuToggle: layoutType == LayoutType.tablet,
+            onMenuToggle: onToggleSidebar,
+            creditBalance: _creditBalance,
+            loadingCredits: _loadingCredits,
+            onRefreshCredits: _loadCreditBalance,
+            userInitial:
+                (authProvider.currentUser?['username'] ?? 'U')[0].toUpperCase(),
+            isAdmin: authProvider.isAdmin,
+            onAdminTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const AdminDashboardScreen(),
+                ),
+              );
+            },
+            onProfileTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const ProfileScreen(),
+                ),
+              );
+            },
+            onLogoutTap: () async {
+              await authProvider.logout();
+              if (mounted) {
+                Navigator.of(context).pushReplacementNamed('/login');
+              }
+            },
+          );
+        },
+        sidebarBuilder: (context, layoutType, isCollapsed) {
+          return SidebarNavigation(
+            currentIndex: _currentIndex,
+            onTabSelected: (index) {
+              setState(() => _currentIndex = index);
+            },
+            collapsed: isCollapsed,
+            hidden: AppBreakpoints.isSidebarHidden(layoutType),
+            isAdmin: authProvider.isAdmin,
+            onAdminTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const AdminDashboardScreen(),
+                ),
+              );
+            },
+            onProfileTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const ProfileScreen(),
+                ),
+              );
+            },
+            username: authProvider.currentUser?['username'] ?? 'User',
+            email: authProvider.currentUser?['email'] ?? 'Pro Account',
+          );
+        },
       ),
-      bottomNavigationBar: _buildBottomNav(),
     );
   }
 
-  Widget _buildAppBar(AuthProvider authProvider) {
+  Widget _buildBackground() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppColors.backgroundDarkest, AppColors.backgroundDark],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -120,
+            right: -120,
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.indigo.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -140,
+            left: -120,
+            child: Container(
+              width: 320,
+              height: 320,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.indigoLight.withValues(alpha: 0.06),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader(AuthProvider authProvider) {
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.md,
         vertical: AppSpacing.sm,
       ),
       decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryStart.withValues(alpha: 0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+        color: AppColors.backgroundDarkest.withValues(alpha: 0.9),
+        border: Border(
+          bottom: BorderSide(
+            color: AppColors.indigo.withValues(alpha: 0.2),
           ),
-        ],
+        ),
       ),
       child: Row(
         children: [
-          // Logo
           Container(
-            width: 42,
-            height: 42,
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
-              gradient: AppColors.primaryGradient,
+              color: AppColors.surfaceMid,
               borderRadius: AppSpacing.borderRadiusMd,
+              border: Border.all(color: AppColors.indigo.withValues(alpha: 0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.indigo.withValues(alpha: 0.25),
+                  blurRadius: 18,
+                  spreadRadius: -6,
+                ),
+              ],
             ),
-            child: const Icon(
-              Icons.business_center_rounded,
-              color: Colors.white,
-              size: 22,
+            child: SvgPicture.asset(
+              'assets/logo_mark.svg',
+              width: 22,
+              height: 22,
+              colorFilter: const ColorFilter.mode(
+                Colors.white,
+                BlendMode.srcIn,
+              ),
             ),
           ),
-          const SizedBox(width: AppSpacing.md),
-
-          // Title
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Infinity Leads',
+                  'Infinity',
                   style: AppTypography.titleMedium.copyWith(
                     fontWeight: FontWeight.w700,
+                    color: Colors.white,
                   ),
                 ),
                 Text(
-                  'Lead Discovery',
+                  'Leads v2.0',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.primaryStart,
+                    color: AppColors.indigoLight.withValues(alpha: 0.7),
+                    letterSpacing: 1.2,
                   ),
                 ),
               ],
             ),
           ),
-
-          // Credit Balance
-          _buildCreditBadge(),
+          _buildCreditPill(),
           const SizedBox(width: AppSpacing.sm),
-
-          // Admin Button
           if (authProvider.isAdmin)
-            _buildIconButton(
-              icon: Icons.admin_panel_settings_rounded,
+            _iconButton(
+              icon: Icons.shield_rounded,
+              tooltip: 'Admin Dashboard',
               onTap: () {
                 Navigator.of(context).push(
                   PageRouteBuilder(
@@ -232,32 +298,91 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         AdminDashboardScreen(),
                     transitionsBuilder:
                         (context, animation, secondaryAnimation, child) {
-                      return FadeTransition(
-                        opacity: animation,
-                        child: child,
-                      );
+                      return FadeTransition(opacity: animation, child: child);
                     },
                     transitionDuration: AppSpacing.durationMedium,
                   ),
                 );
               },
-              tooltip: 'Admin Dashboard',
-              gradient: AppColors.accentGradient,
             ),
           const SizedBox(width: AppSpacing.xs),
-
-          // Profile Menu
           _buildProfileMenu(authProvider),
         ],
       ),
     );
   }
 
-  Widget _buildIconButton({
+  Widget _buildCreditPill() {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).pushNamed('/wallet'),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.emerald,
+          borderRadius: AppSpacing.borderRadiusRound,
+          border: Border.all(
+            color: AppColors.emerald.withValues(alpha: 0.5),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.emerald.withValues(alpha: 0.35),
+              blurRadius: 12,
+              spreadRadius: -6,
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.account_balance_wallet,
+              size: 16,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 6),
+            _loadingCredits
+                ? const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : Text(
+                    '$_creditBalance Cr',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+            if (!_loadingCredits) ...[
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: _loadCreditBalance,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  child: const Icon(
+                    Icons.refresh_rounded,
+                    size: 14,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _iconButton({
     required IconData icon,
     required VoidCallback onTap,
     String? tooltip,
-    LinearGradient? gradient,
   }) {
     return Tooltip(
       message: tooltip ?? '',
@@ -267,16 +392,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           onTap: onTap,
           borderRadius: AppSpacing.borderRadiusMd,
           child: Container(
-            width: 40,
-            height: 40,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
-              gradient: gradient ?? AppColors.primaryGradient,
+              color: AppColors.surfaceMid,
               borderRadius: AppSpacing.borderRadiusMd,
+              border: Border.all(
+                color: AppColors.indigo.withValues(alpha: 0.2),
+              ),
             ),
             child: Icon(
               icon,
               color: Colors.white,
-              size: 20,
+              size: 18,
             ),
           ),
         ),
@@ -290,17 +418,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       shape: RoundedRectangleBorder(
         borderRadius: AppSpacing.borderRadiusLg,
       ),
+      color: AppColors.surfaceMid,
       child: Container(
-        width: 40,
-        height: 40,
+        width: 36,
+        height: 36,
         decoration: BoxDecoration(
-          gradient: AppColors.secondaryGradient,
+          color: AppColors.surfaceMid,
           borderRadius: AppSpacing.borderRadiusMd,
+          border: Border.all(
+            color: AppColors.indigo.withValues(alpha: 0.3),
+          ),
         ),
         child: Center(
           child: Text(
             (authProvider.currentUser?['username'] ?? 'U')[0].toUpperCase(),
-            style: AppTypography.titleMedium.copyWith(
+            style: AppTypography.titleSmall.copyWith(
               color: Colors.white,
               fontWeight: FontWeight.w700,
             ),
@@ -323,20 +455,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           value: 'profile',
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.xs),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryStart.withValues(alpha: 0.1),
-                  borderRadius: AppSpacing.borderRadiusSm,
-                ),
-                child: const Icon(
-                  Icons.person_outline_rounded,
-                  size: 18,
-                  color: AppColors.primaryStart,
-                ),
-              ),
+              const Icon(Icons.person_outline_rounded, size: 18, color: Colors.white),
               const SizedBox(width: AppSpacing.sm),
-              Text('Profile', style: AppTypography.bodyMedium),
+              Text('Profile', style: AppTypography.bodyMedium.copyWith(color: Colors.white)),
             ],
           ),
         ),
@@ -345,24 +466,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           value: 'logout',
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.xs),
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.1),
-                  borderRadius: AppSpacing.borderRadiusSm,
-                ),
-                child: const Icon(
-                  Icons.logout_rounded,
-                  size: 18,
-                  color: AppColors.error,
-                ),
-              ),
+              const Icon(Icons.logout_rounded, size: 18, color: AppColors.error),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 'Logout',
-                style: AppTypography.bodyMedium.copyWith(
-                  color: AppColors.error,
-                ),
+                style: AppTypography.bodyMedium.copyWith(color: AppColors.error),
               ),
             ],
           ),
@@ -375,6 +483,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        backgroundColor: AppColors.backgroundDark,
         shape: RoundedRectangleBorder(
           borderRadius: AppSpacing.borderRadiusXl,
         ),
@@ -392,10 +501,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(width: AppSpacing.md),
-            const Text('Logout'),
+            const Text('Logout', style: TextStyle(color: Colors.white)),
           ],
         ),
-        content: const Text('Are you sure you want to logout?'),
+        content: const Text('Are you sure you want to logout?', style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -422,22 +531,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildBottomNav() {
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
       decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryStart.withValues(alpha: 0.1),
-            blurRadius: 20,
-            offset: const Offset(0, -5),
+        color: AppColors.backgroundDarkest.withValues(alpha: 0.9),
+        border: Border(
+          top: BorderSide(
+            color: AppColors.indigo.withValues(alpha: 0.2),
           ),
-        ],
+        ),
       ),
       child: Container(
         padding: const EdgeInsets.all(AppSpacing.xs),
         decoration: BoxDecoration(
-          color: AppColors.surfaceLight,
+          color: AppColors.backgroundDark,
           borderRadius: AppSpacing.borderRadiusLg,
+          border: Border.all(
+            color: AppColors.indigo.withValues(alpha: 0.2),
+          ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -454,29 +564,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     vertical: AppSpacing.sm,
                   ),
                   decoration: BoxDecoration(
-                    gradient: isSelected ? AppColors.primaryGradient : null,
+                    color: isSelected
+                        ? AppColors.indigo.withValues(alpha: 0.2)
+                        : Colors.transparent,
                     borderRadius: AppSpacing.borderRadiusMd,
+                    border: isSelected
+                        ? Border.all(
+                            color: AppColors.indigo.withValues(alpha: 0.35),
+                          )
+                        : null,
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         item.icon,
-                        color: isSelected
-                            ? Colors.white
-                            : AppColors.textMuted,
+                        color: isSelected ? AppColors.indigoLight : Colors.white54,
                         size: 24,
                       ),
                       const SizedBox(height: AppSpacing.xxs),
                       Text(
                         item.label,
                         style: AppTypography.labelSmall.copyWith(
-                          color: isSelected
-                              ? Colors.white
-                              : AppColors.textMuted,
-                          fontWeight: isSelected
-                              ? FontWeight.w600
-                              : FontWeight.w500,
+                          color: isSelected ? AppColors.indigoLight : Colors.white54,
+                          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                         ),
                       ),
                     ],
@@ -489,6 +600,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
     );
   }
+
+  Widget _buildDesktopContent() {
+    switch (_currentIndex) {
+      case 0:
+        return const StateSelectionScreen(showHeader: false);
+      case 1:
+        return const ScrapingScreen(showHeader: false);
+      case 2:
+        return const ResultsScreen(showHeader: false);
+      case 3:
+        return const JobHistoryScreen(showHeader: false);
+      default:
+        return const ScrapingScreen(showHeader: false);
+    }
+  }
 }
 
 class _NavItem {
@@ -497,3 +623,5 @@ class _NavItem {
 
   const _NavItem({required this.icon, required this.label});
 }
+
+// Colors now consolidated in AppColors

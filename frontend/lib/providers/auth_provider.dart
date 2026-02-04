@@ -1,17 +1,25 @@
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
+import '../core/error_handler.dart';
 
 class AuthProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
-  
+
   Map<String, dynamic>? _currentUser;
   bool _isAuthenticated = false;
   bool _isLoading = false;
+  String? _errorMessage;
 
   Map<String, dynamic>? get currentUser => _currentUser;
   bool get isAuthenticated => _isAuthenticated;
   bool get isLoading => _isLoading;
   bool get isAdmin => _currentUser?['is_admin'] == true;
+  String? get errorMessage => _errorMessage;
+
+  void clearError() {
+    _errorMessage = null;
+    notifyListeners();
+  }
 
   AuthProvider() {
     _checkAuthStatus();
@@ -39,8 +47,9 @@ class AuthProvider with ChangeNotifier {
 
   Future<bool> login(String username, String password) async {
     _isLoading = true;
+    _errorMessage = null;
     notifyListeners();
-    
+
     try {
       final response = await _apiService.login(
         username: username,
@@ -52,6 +61,7 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
+      _errorMessage = ErrorHandler.getUserFriendlyMessage(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -60,8 +70,9 @@ class AuthProvider with ChangeNotifier {
 
   Future<bool> register(String username, String email, String password) async {
     _isLoading = true;
+    _errorMessage = null;
     notifyListeners();
-    
+
     try {
       await _apiService.register(
         username: username,
@@ -72,6 +83,7 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
+      _errorMessage = ErrorHandler.getUserFriendlyMessage(e);
       _isLoading = false;
       notifyListeners();
       return false;

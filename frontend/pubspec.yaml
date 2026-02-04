@@ -1,5 +1,5 @@
 name: business_scraper_app
-description: Flutter frontend for Google Business Scraper API
+description: Infinity Leads Pro - Global business lead discovery platform
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -21,6 +21,7 @@ dependencies:
   universal_html: ^2.3.0
   open_filex: ^4.5.0
   url_launcher: ^6.2.5
+  flutter_svg: ^2.0.10
 
 dev_dependencies:
   flutter_test:
@@ -31,6 +32,14 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
+  web:
+    generate: true
+    image_path: "assets/app_icon.png"
+    background_color: "#0A1929"
+    theme_color: "#6366F1"
+  macos:
+    generate: true
+    image_path: "assets/app_icon.png"
   image_path: "assets/app_icon.png"
   adaptive_icon_background: "#0A1929"
   adaptive_icon_foreground: "assets/app_icon.png"

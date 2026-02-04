@@ -1,28 +1,39 @@
+
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
+import '../core/theme/app_breakpoints.dart';
+import '../core/utils/responsive_utils.dart';
 import '../widgets/widgets.dart';
+import '../widgets/progress_stepper.dart';
 import 'scraping_screen.dart';
 
 class StateSelectionScreen extends StatefulWidget {
-  const StateSelectionScreen({super.key});
+  final bool showHeader;
+
+  const StateSelectionScreen({super.key, this.showHeader = true});
 
   @override
   State<StateSelectionScreen> createState() => _StateSelectionScreenState();
 }
 
 class _StateSelectionScreenState extends State<StateSelectionScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+
+  @override
+  bool get wantKeepAlive => true;
   String? _selectedCountry = 'USA';
   String? _selectedState;
   List<String> _selectedCities = [];
   bool _selectAllCities = false;
   bool _isLoading = true;
   bool _isCitiesLoading = false;
+  bool _includeSuburbs = true;
   Map<String, List<String>> _statesAndCities = {};
   final Map<String, List<String>> _citiesCache = {};
   List<String> _filteredStates = [];
   List<String> _filteredCities = [];
+  List<String> _availableCountries = [];
   final TextEditingController _stateSearchController = TextEditingController();
   final TextEditingController _citySearchController = TextEditingController();
   final ApiService _apiService = ApiService();
@@ -43,7 +54,6 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
 
-    // Pulse animation for loading indicator
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
@@ -85,7 +95,6 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       }
     });
   }
-
   Future<void> _loadInitialData() async {
     try {
       final results = await Future.wait([
@@ -111,6 +120,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
 
       if (mounted) {
         setState(() {
+          _availableCountries = countries;
           _statesAndCities = {
             for (final state in states)
               state: _citiesCache[state] ?? <String>[],
@@ -120,13 +130,13 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         });
         _animationController.forward();
 
-        // Preload cities for first few states in background
         _preloadCities(states.take(5).toList());
       }
     } catch (e) {
       debugPrint('Error loading initial data: $e');
       if (mounted) {
         setState(() {
+          _availableCountries = ['USA', 'UK', 'UAE', 'KSA', 'Australia'];
           _statesAndCities = {
             'California': ['Los Angeles', 'San Diego', 'San Jose', 'San Francisco'],
             'New York': ['New York', 'Buffalo', 'Rochester'],
@@ -190,20 +200,43 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.surfaceLight,
-      body: _isLoading ? _buildLoadingState() : _buildContent(),
-    );
+  void _resetSelections() {
+    setState(() {
+      _selectedState = null;
+      _selectedCities = [];
+      _selectAllCities = false;
+      _citySearchController.clear();
+      _filteredCities = [];
+    });
   }
 
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    return Scaffold(
+      backgroundColor: _LocationColors.background,
+      body: _isLoading
+          ? _buildLoadingState()
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final layoutType =
+                    AppBreakpoints.getLayoutType(constraints.maxWidth);
+                if (layoutType == LayoutType.mobile) {
+                  return _buildMobileContent(layoutType);
+                }
+                if (layoutType == LayoutType.tablet) {
+                  return _buildTabletContent(layoutType);
+                }
+                return _buildDesktopContent(layoutType);
+              },
+            ),
+    );
+  }
   Widget _buildLoadingState() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Animated loading indicator
           AnimatedBuilder(
             animation: _pulseAnimation,
             builder: (context, child) {
@@ -213,11 +246,11 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                   width: 80,
                   height: 80,
                   decoration: BoxDecoration(
-                    gradient: AppColors.primaryGradient,
+                    gradient: _LocationColors.primaryGradient,
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: [
                       BoxShadow(
-                        color: AppColors.primaryStart.withValues(alpha: 0.4),
+                        color: _LocationColors.primary.withValues(alpha: 0.35),
                         blurRadius: 20,
                         spreadRadius: 2,
                       ),
@@ -235,15 +268,18 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
             },
           ),
           const SizedBox(height: AppSpacing.xl),
-          // Loading text with dots animation
-          _LoadingTextAnimation(text: 'Loading locations'),
+          _LoadingTextAnimation(
+            text: 'Loading locations',
+            style: AppTypography.bodyMedium.copyWith(
+              color: Colors.white70,
+            ),
+          ),
           const SizedBox(height: AppSpacing.lg),
-          // Progress indicator
           SizedBox(
             width: 200,
             child: LinearProgressIndicator(
-              backgroundColor: AppColors.primaryStart.withValues(alpha: 0.2),
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryStart),
+              backgroundColor: _LocationColors.primary.withValues(alpha: 0.2),
+              valueColor: AlwaysStoppedAnimation<Color>(_LocationColors.primary),
             ),
           ),
         ],
@@ -251,199 +287,202 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  Widget _buildContent() {
+  Widget _buildMobileContent(LayoutType layoutType) {
     return FadeTransition(
       opacity: _fadeAnimation,
-      child: SingleChildScrollView(
-        padding: AppSpacing.paddingMd,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Header
-            _buildHeader(),
-            const SizedBox(height: AppSpacing.lg),
+      child: Column(
+        children: [
+          if (widget.showHeader) _buildHeader(),
+          const WorkflowStepper(currentStep: 0),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.md,
+                AppSpacing.md,
+                AppSpacing.xl,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildCountrySelector(),
+                  const SizedBox(height: AppSpacing.lg),
+                  _buildStateSection(layoutType: layoutType),
+                  const SizedBox(height: AppSpacing.lg),
+                  if (_selectedState != null)
+                    _buildCitiesSection(layoutType: layoutType),
+                  if (_selectedState != null)
+                    const SizedBox(height: AppSpacing.lg),
+                  _buildIncludeSuburbsCard(),
+                  const SizedBox(height: AppSpacing.xl),
+                  _buildContinueButton(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-            // Country Selector
-            _buildCountrySelector(),
-            const SizedBox(height: AppSpacing.md),
+  Widget _buildTabletContent(LayoutType layoutType) {
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: Column(
+        children: [
+          if (widget.showHeader) _buildHeader(),
+          const WorkflowStepper(currentStep: 0),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                ResponsiveUtils.getScreenPadding(layoutType),
+                ResponsiveUtils.getScreenPadding(layoutType),
+                ResponsiveUtils.getScreenPadding(layoutType),
+                AppSpacing.xl,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildCountrySelector(),
+                  const SizedBox(height: AppSpacing.lg),
+                  _buildStateSection(layoutType: layoutType),
+                  const SizedBox(height: AppSpacing.lg),
+                  if (_selectedState != null)
+                    _buildCitiesSection(layoutType: layoutType),
+                  if (_selectedState != null)
+                    const SizedBox(height: AppSpacing.lg),
+                  _buildIncludeSuburbsCard(),
+                  const SizedBox(height: AppSpacing.xl),
+                  _buildContinueButton(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-            // State Selector
-            _buildStateSelector(),
-            const SizedBox(height: AppSpacing.md),
+  Widget _buildDesktopContent(LayoutType layoutType) {
+    final leftFlex = layoutType == LayoutType.desktopMedium ? 35 : 40;
+    final rightFlex = 100 - leftFlex;
+    final showCities = _selectedState != null;
 
-            // Cities Selector
-            if (_selectedState != null) ...[
-              _buildCitiesSelector(),
-              const SizedBox(height: AppSpacing.md),
-            ],
-
-            // Selected Summary
-            if (_selectedState != null && _selectedCities.isNotEmpty) ...[
-              _buildSummaryCard(),
-              const SizedBox(height: AppSpacing.md),
-            ],
-
-            // Continue Button
-            _buildContinueButton(),
-            const SizedBox(height: AppSpacing.lg),
-          ],
-        ),
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: Column(
+        children: [
+          if (widget.showHeader) _buildHeader(),
+          const WorkflowStepper(currentStep: 0),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                ResponsiveUtils.getScreenPadding(layoutType),
+                ResponsiveUtils.getScreenPadding(layoutType),
+                ResponsiveUtils.getScreenPadding(layoutType),
+                AppSpacing.xl,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildCountrySelector(),
+                  const SizedBox(height: AppSpacing.lg),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: leftFlex,
+                        child: _buildStateSection(
+                          layoutType: layoutType,
+                          inSplitPanel: true,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.lg),
+                      Expanded(
+                        flex: rightFlex,
+                        child: showCities
+                            ? _buildCitiesSection(layoutType: layoutType)
+                            : _buildEmptyCitiesPanel(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  _buildIncludeSuburbsCard(),
+                  const SizedBox(height: AppSpacing.xl),
+                  _buildContinueButton(),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildHeader() {
     return Container(
-      padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        gradient: AppColors.primaryGradient,
-        borderRadius: AppSpacing.borderRadiusLg,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryStart.withValues(alpha: 0.3),
-            blurRadius: 15,
-            offset: const Offset(0, 8),
+        color: _LocationColors.background.withValues(alpha: 0.9),
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.white.withValues(alpha: 0.05),
           ),
-        ],
+        ),
       ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.sm),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: AppSpacing.borderRadiusMd,
-            ),
-            child: const Icon(
-              Icons.location_on_rounded,
-              color: Colors.white,
-              size: 28,
-            ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.sm,
           ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Select Locations',
-                  style: AppTypography.titleLarge.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.xxs),
-                Text(
-                  'Choose regions and cities to search',
-                  style: AppTypography.bodySmall.copyWith(
-                    color: Colors.white.withValues(alpha: 0.8),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCountrySelector() {
-    return Container(
-      padding: AppSpacing.paddingMd,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppSpacing.borderRadiusLg,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryStart.withValues(alpha: 0.08),
-            blurRadius: 15,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+          child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(AppSpacing.xs),
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
-                  color: AppColors.primaryStart.withValues(alpha: 0.1),
-                  borderRadius: AppSpacing.borderRadiusSm,
+                  color: _LocationColors.surface,
+                  borderRadius: AppSpacing.borderRadiusRound,
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.06),
+                  ),
                 ),
                 child: const Icon(
-                  Icons.public_rounded,
-                  color: AppColors.primaryStart,
+                  Icons.location_city_rounded,
+                  color: Colors.white,
                   size: 20,
                 ),
               ),
               const SizedBox(width: AppSpacing.sm),
-              Text(
-                'Country',
-                style: AppTypography.titleSmall.copyWith(
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Column(
+                  children: [
+                    Text(
+                      'Select Locations',
+                      style: AppTypography.titleMedium.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      'Choose cities for lead search',
+                      style: AppTypography.labelSmall.copyWith(
+                        color: _LocationColors.textSecondary,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Row(
-            children: [
-              _buildCountryChip('USA', Icons.flag_rounded),
-              const SizedBox(width: AppSpacing.sm),
-              _buildCountryChip('UK', Icons.flag_rounded),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCountryChip(String country, IconData icon) {
-    final isSelected = _selectedCountry == country;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () async {
-          if (country != _selectedCountry) {
-            setState(() {
-              _selectedCountry = country;
-              _selectedState = null;
-              _statesAndCities = {};
-              _filteredCities = [];
-              _isLoading = true;
-            });
-            await _loadInitialData();
-          }
-        },
-        child: AnimatedContainer(
-          duration: AppSpacing.durationFast,
-          padding: AppSpacing.paddingSm,
-          decoration: BoxDecoration(
-            gradient: isSelected ? AppColors.primaryGradient : null,
-            color: isSelected ? null : AppColors.surfaceLight,
-            borderRadius: AppSpacing.borderRadiusMd,
-            border: Border.all(
-              color: isSelected
-                  ? Colors.transparent
-                  : AppColors.textMuted.withValues(alpha: 0.3),
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                color: isSelected ? Colors.white : AppColors.textSecondary,
-                size: 18,
-              ),
-              const SizedBox(width: AppSpacing.xs),
-              Text(
-                country,
-                style: AppTypography.labelLarge.copyWith(
-                  color: isSelected ? Colors.white : AppColors.textPrimary,
-                  fontWeight: FontWeight.w600,
+              TextButton(
+                onPressed: _resetSelections,
+                style: TextButton.styleFrom(
+                  foregroundColor: _LocationColors.textSecondary,
                 ),
+                child: const Text('Reset'),
               ),
             ],
           ),
@@ -452,386 +491,736 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  Widget _buildStateSelector() {
+  Widget _buildCountrySelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.public_rounded,
+              color: _LocationColors.primary,
+              size: 16,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              'Target Market',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        SizedBox(
+          height: 64,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _availableCountries.length,
+            separatorBuilder: (context, index) => const SizedBox(width: AppSpacing.xs),
+            itemBuilder: (context, index) {
+              final country = _availableCountries[index];
+              final isSelected = _selectedCountry == country;
+              return _buildCountryCard(country, isSelected);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+  Widget _buildCountryCard(String country, bool isSelected) {
+    return GestureDetector(
+      onTap: () async {
+        if (country != _selectedCountry) {
+          setState(() {
+            _selectedCountry = country;
+            _selectedState = null;
+            _statesAndCities = {};
+            _filteredCities = [];
+            _isLoading = true;
+          });
+          await _loadInitialData();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? _LocationColors.primary.withValues(alpha: 0.15)
+              : _LocationColors.surface,
+          borderRadius: AppSpacing.borderRadiusMd,
+          border: Border.all(
+            color: isSelected
+                ? _LocationColors.primary
+                : Colors.white.withValues(alpha: 0.08),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _countryIcon(country),
+              color: isSelected ? _LocationColors.primary : _LocationColors.textSecondary,
+              size: 18,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              country,
+              style: AppTypography.labelMedium.copyWith(
+                color: isSelected ? Colors.white : _LocationColors.textSecondary,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _countryIcon(String country) {
+    switch (country) {
+      case 'USA':
+        return Icons.flag_rounded;
+      case 'UK':
+        return Icons.flag_rounded;
+      case 'UAE':
+        return Icons.location_city_rounded;
+      case 'KSA':
+        return Icons.mosque_rounded;
+      case 'Australia':
+        return Icons.landscape_rounded;
+      default:
+        return Icons.public_rounded;
+    }
+  }
+
+  Widget _buildStateSection({
+    required LayoutType layoutType,
+    bool inSplitPanel = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.map_rounded,
+              color: _LocationColors.primary,
+              size: 16,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              'Select Region',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (_filteredStates.isNotEmpty) ...[
+              const SizedBox(width: AppSpacing.xs),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xs,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: _LocationColors.primary.withValues(alpha: 0.15),
+                  borderRadius: AppSpacing.borderRadiusRound,
+                ),
+                child: Text(
+                  '${_filteredStates.length}',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: _LocationColors.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        _buildStateSearch(),
+        const SizedBox(height: AppSpacing.sm),
+        _buildSelectedStateChips(),
+        if (_selectedState != null) const SizedBox(height: AppSpacing.sm),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: _stateGridColumns(layoutType, inSplitPanel),
+            crossAxisSpacing: AppSpacing.xs,
+            mainAxisSpacing: AppSpacing.xs,
+            childAspectRatio: 2.8,
+          ),
+          itemCount: _filteredStates.length,
+          itemBuilder: (context, index) {
+            final state = _filteredStates[index];
+            final isSelected = _selectedState == state;
+            return _buildStateCard(state, isSelected);
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStateSearch() {
+    return TextField(
+      controller: _stateSearchController,
+      style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+      decoration: InputDecoration(
+        hintText: 'Search regions...',
+        hintStyle: AppTypography.bodySmall.copyWith(
+          color: _LocationColors.textSecondary,
+        ),
+        prefixIcon: Icon(
+          Icons.search_rounded,
+          color: _LocationColors.textSecondary,
+          size: 20,
+        ),
+        suffixIcon: _stateSearchController.text.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.clear_rounded, color: Colors.white70, size: 20),
+                onPressed: () {
+                  _stateSearchController.clear();
+                  _filterStates();
+                },
+              )
+            : null,
+        filled: true,
+        fillColor: _LocationColors.surface,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: AppSpacing.borderRadiusMd,
+          borderSide: BorderSide(
+            color: Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: AppSpacing.borderRadiusMd,
+          borderSide: BorderSide(
+            color: _LocationColors.primary,
+            width: 1.5,
+          ),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.sm,
+        ),
+        isDense: true,
+      ),
+    );
+  }
+
+  Widget _buildSelectedStateChips() {
+    if (_selectedState == null) {
+      return const SizedBox.shrink();
+    }
+    return Wrap(
+      spacing: AppSpacing.xs,
+      runSpacing: AppSpacing.xs,
+      children: [
+        _buildChip(
+          label: _selectedState!,
+          onRemove: () => _resetSelections(),
+        ),
+        TextButton(
+          onPressed: _resetSelections,
+          style: TextButton.styleFrom(
+            foregroundColor: _LocationColors.textSecondary,
+          ),
+          child: const Text('Clear all'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChip({required String label, required VoidCallback onRemove}) {
     return Container(
-      padding: AppSpacing.paddingMd,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xxs,
+      ),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppSpacing.borderRadiusLg,
+        color: _LocationColors.primary.withValues(alpha: 0.12),
+        borderRadius: AppSpacing.borderRadiusRound,
+        border: Border.all(
+          color: _LocationColors.primary.withValues(alpha: 0.3),
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryStart.withValues(alpha: 0.08),
-            blurRadius: 15,
-            offset: const Offset(0, 4),
+            color: _LocationColors.primary.withValues(alpha: 0.2),
+            blurRadius: 8,
+            spreadRadius: -6,
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.xs),
-                decoration: BoxDecoration(
-                  color: AppColors.secondaryStart.withValues(alpha: 0.1),
-                  borderRadius: AppSpacing.borderRadiusSm,
-                ),
-                child: const Icon(
-                  Icons.map_rounded,
-                  color: AppColors.secondaryStart,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(
-                'State / Region',
-                style: AppTypography.titleSmall.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              if (_selectedState != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.xxs,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.success.withValues(alpha: 0.1),
-                    borderRadius: AppSpacing.borderRadiusSm,
-                  ),
-                  child: Text(
-                    _selectedState!,
-                    style: AppTypography.labelSmall.copyWith(
-                      color: AppColors.success,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          // Search Field
-          TextField(
-            controller: _stateSearchController,
-            style: AppTypography.bodyMedium,
-            decoration: InputDecoration(
-              hintText: 'Search states...',
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _stateSearchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear_rounded),
-                      onPressed: () {
-                        _stateSearchController.clear();
-                        _filterStates();
-                      },
-                    )
-                  : null,
+          Text(
+            label,
+            style: AppTypography.labelSmall.copyWith(
+              color: _LocationColors.primary,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: AppSpacing.md),
-          // States Grid
-          SizedBox(
-            height: 180,
-            child: _filteredStates.isEmpty
-                ? Center(
-                    child: Text(
-                      'No states found',
-                      style: AppTypography.bodyMedium.copyWith(
-                        color: AppColors.textMuted,
-                      ),
-                    ),
-                  )
-                : GridView.builder(
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      crossAxisSpacing: AppSpacing.sm,
-                      mainAxisSpacing: AppSpacing.sm,
-                      childAspectRatio: 3,
-                    ),
-                    itemCount: _filteredStates.length,
-                    itemBuilder: (context, index) {
-                      final state = _filteredStates[index];
-                      final isSelected = _selectedState == state;
-                      final hasCachedCities = _citiesCache.containsKey(state);
-                      return GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _selectedState = isSelected ? null : state;
-                            _selectedCities = [];
-                            _selectAllCities = false;
-                            _citySearchController.clear();
-                            if (_selectedState != null) {
-                              _filteredCities = _statesAndCities[_selectedState] ?? [];
-                            }
-                          });
-                          if (!isSelected) {
-                            _loadCitiesForState(state);
-                          } else {
-                            setState(() {
-                              _filteredCities = [];
-                            });
-                          }
-                        },
-                        child: AnimatedContainer(
-                          duration: AppSpacing.durationFast,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: AppSpacing.sm,
-                            vertical: AppSpacing.xs,
-                          ),
-                          decoration: BoxDecoration(
-                            gradient: isSelected ? AppColors.secondaryGradient : null,
-                            color: isSelected ? null : AppColors.surfaceLight,
-                            borderRadius: AppSpacing.borderRadiusMd,
-                            border: Border.all(
-                              color: isSelected
-                                  ? Colors.transparent
-                                  : AppColors.textMuted.withValues(alpha: 0.2),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                isSelected
-                                    ? Icons.check_circle_rounded
-                                    : Icons.radio_button_unchecked_rounded,
-                                color: isSelected
-                                    ? Colors.white
-                                    : AppColors.textMuted,
-                                size: 18,
-                              ),
-                              const SizedBox(width: AppSpacing.xs),
-                              Expanded(
-                                child: Text(
-                                  state,
-                                  style: AppTypography.labelMedium.copyWith(
-                                    color: isSelected
-                                        ? Colors.white
-                                        : AppColors.textPrimary,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              // Show indicator if cities are cached
-                              if (hasCachedCities && !isSelected)
-                                Icon(
-                                  Icons.bolt_rounded,
-                                  size: 14,
-                                  color: AppColors.success.withValues(alpha: 0.7),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: onRemove,
+            child: Icon(
+              Icons.close_rounded,
+              size: 16,
+              color: _LocationColors.primary,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCitiesSelector() {
-    return AnimatedContainer(
-      duration: AppSpacing.durationMedium,
-      padding: AppSpacing.paddingMd,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: AppSpacing.borderRadiusLg,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryStart.withValues(alpha: 0.08),
-            blurRadius: 15,
-            offset: const Offset(0, 4),
+  Widget _buildStateCard(String state, bool isSelected) {
+    final cityCount = (_statesAndCities[state] ?? []).length;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedState = isSelected ? null : state;
+          _selectedCities = [];
+          _selectAllCities = false;
+          _citySearchController.clear();
+          if (_selectedState != null) {
+            _filteredCities = _statesAndCities[_selectedState] ?? [];
+          }
+        });
+        if (!isSelected) {
+          _loadCitiesForState(state);
+        } else {
+          setState(() {
+            _filteredCities = [];
+          });
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? _LocationColors.primary.withValues(alpha: 0.12)
+              : _LocationColors.surface,
+          borderRadius: AppSpacing.borderRadiusMd,
+          border: Border.all(
+            color: isSelected
+                ? _LocationColors.primary
+                : Colors.white.withValues(alpha: 0.06),
+            width: isSelected ? 1.5 : 1,
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(AppSpacing.xs),
-                decoration: BoxDecoration(
-                  color: AppColors.accentStart.withValues(alpha: 0.1),
-                  borderRadius: AppSpacing.borderRadiusSm,
-                ),
-                child: const Icon(
-                  Icons.location_city_rounded,
-                  color: AppColors.accentStart,
-                  size: 20,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? _LocationColors.primary.withValues(alpha: 0.2)
+                    : _LocationColors.surfaceHighlight,
+                borderRadius: AppSpacing.borderRadiusSm,
+              ),
+              child: Center(
+                child: Text(
+                  state.length >= 2 ? state.substring(0, 2).toUpperCase() : state,
+                  style: AppTypography.labelSmall.copyWith(
+                    color: isSelected ? _LocationColors.primary : Colors.white60,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 10,
+                  ),
                 ),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(
-                'Cities',
-                style: AppTypography.titleSmall.copyWith(
-                  fontWeight: FontWeight.w600,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Text(
+                state,
+                style: AppTypography.labelMedium.copyWith(
+                  color: isSelected ? Colors.white : Colors.white70,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                 ),
+                overflow: TextOverflow.ellipsis,
               ),
-              const Spacer(),
+            ),
+            if (cityCount > 0)
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.xxs,
+                  horizontal: 6,
+                  vertical: 2,
                 ),
                 decoration: BoxDecoration(
-                  gradient: _selectedCities.isNotEmpty
-                      ? AppColors.successGradient
-                      : null,
-                  color: _selectedCities.isEmpty
-                      ? AppColors.textMuted.withValues(alpha: 0.1)
-                      : null,
-                  borderRadius: AppSpacing.borderRadiusSm,
+                  color: isSelected
+                      ? _LocationColors.primary.withValues(alpha: 0.2)
+                      : _LocationColors.surfaceHighlight,
+                  borderRadius: AppSpacing.borderRadiusRound,
+                ),
+                child: Text(
+                  '$cityCount',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: isSelected
+                        ? _LocationColors.primary
+                        : _LocationColors.textSecondary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 10,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+  Widget _buildCitiesSection({required LayoutType layoutType}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.location_city_rounded,
+              color: _LocationColors.primary,
+              size: 16,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              'Select Cities',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (_selectedCities.isNotEmpty) ...[
+              const SizedBox(width: AppSpacing.xs),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xs,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: _LocationColors.primary.withValues(alpha: 0.15),
+                  borderRadius: AppSpacing.borderRadiusRound,
                 ),
                 child: Text(
                   '${_selectedCities.length} selected',
                   style: AppTypography.labelSmall.copyWith(
-                    color: _selectedCities.isNotEmpty
-                        ? Colors.white
-                        : AppColors.textMuted,
-                    fontWeight: FontWeight.w600,
+                    color: _LocationColors.primary,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          // Search Field
-          TextField(
-            controller: _citySearchController,
-            style: AppTypography.bodyMedium,
-            decoration: InputDecoration(
-              hintText: 'Search cities...',
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _citySearchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear_rounded),
-                      onPressed: () {
-                        _citySearchController.clear();
-                        _filterCities();
-                      },
-                    )
-                  : null,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          // Loading or Select All Row
-          if (_isCitiesLoading)
-            _buildCitiesLoadingState()
-          else
-            GestureDetector(
-              onTap: () {
-                setState(() {
-                  _selectAllCities = !_selectAllCities;
-                  if (_selectAllCities) {
-                    _selectedCities = List.from(_filteredCities);
-                  } else {
-                    _selectedCities = [];
-                  }
-                });
-              },
-              child: Container(
-                padding: AppSpacing.paddingSm,
-                decoration: BoxDecoration(
-                  color: _selectAllCities
-                      ? AppColors.primaryStart.withValues(alpha: 0.1)
-                      : AppColors.surfaceLight,
-                  borderRadius: AppSpacing.borderRadiusMd,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      _selectAllCities
-                          ? Icons.check_box_rounded
-                          : Icons.check_box_outline_blank_rounded,
-                      color: _selectAllCities
-                          ? AppColors.primaryStart
-                          : AppColors.textMuted,
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Text(
-                      'Select All',
-                      style: AppTypography.labelLarge.copyWith(
-                        color: _selectAllCities
-                            ? AppColors.primaryStart
-                            : AppColors.textPrimary,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '${_filteredCities.length} cities',
-                      style: AppTypography.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          const SizedBox(height: AppSpacing.sm),
-          if (!_isCitiesLoading)
-            // Cities List
-            SizedBox(
-              height: 200,
-              child: ListView.builder(
-                itemCount: _filteredCities.length,
-                itemBuilder: (context, index) {
-                  final city = _filteredCities[index];
-                  final isSelected = _selectedCities.contains(city);
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        if (isSelected) {
-                          _selectedCities.remove(city);
-                        } else {
-                          _selectedCities.add(city);
-                        }
-                        _selectAllCities =
-                            _selectedCities.length == _filteredCities.length;
-                      });
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: AppSpacing.xs),
-                      padding: AppSpacing.paddingSm,
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? AppColors.primaryStart.withValues(alpha: 0.08)
-                            : Colors.transparent,
-                        borderRadius: AppSpacing.borderRadiusSm,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isSelected
-                                ? Icons.check_circle_rounded
-                                : Icons.circle_outlined,
-                            color: isSelected
-                                ? AppColors.primaryStart
-                                : AppColors.textMuted,
-                            size: 20,
-                          ),
-                          const SizedBox(width: AppSpacing.sm),
-                          Text(
-                            city,
-                            style: AppTypography.bodyMedium.copyWith(
-                              color: isSelected
-                                  ? AppColors.primaryStart
-                                  : AppColors.textPrimary,
-                              fontWeight: isSelected
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        _buildCitiesSearch(),
+        const SizedBox(height: AppSpacing.sm),
+        if (_isCitiesLoading)
+          _buildCitiesLoadingState()
+        else
+          _buildCitiesList(layoutType),
+      ],
+    );
+  }
+
+  Widget _buildCitiesSearch() {
+    return TextField(
+      controller: _citySearchController,
+      style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+      decoration: InputDecoration(
+        hintText: 'Search cities...',
+        hintStyle: AppTypography.bodySmall.copyWith(
+          color: _LocationColors.textSecondary,
+        ),
+        prefixIcon: Icon(
+          Icons.search_rounded,
+          color: _LocationColors.textSecondary,
+          size: 20,
+        ),
+        suffixIcon: _citySearchController.text.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.clear_rounded, color: Colors.white70, size: 20),
+                onPressed: () {
+                  _citySearchController.clear();
+                  _filterCities();
                 },
+              )
+            : null,
+        filled: true,
+        fillColor: _LocationColors.surface,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: AppSpacing.borderRadiusMd,
+          borderSide: BorderSide(
+            color: Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: AppSpacing.borderRadiusMd,
+          borderSide: BorderSide(
+            color: _LocationColors.primary,
+            width: 1.5,
+          ),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.sm,
+        ),
+        isDense: true,
+      ),
+    );
+  }
+
+  Widget _buildCitiesList(LayoutType layoutType) {
+    if (layoutType != LayoutType.mobile && layoutType != LayoutType.tablet) {
+      return Column(
+        children: [
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _selectAllCities = !_selectAllCities;
+                if (_selectAllCities) {
+                  _selectedCities = List.from(_filteredCities);
+                } else {
+                  _selectedCities = [];
+                }
+              });
+            },
+            child: Container(
+              padding: AppSpacing.paddingSm,
+              decoration: BoxDecoration(
+                color: _selectAllCities
+                    ? _LocationColors.primary.withValues(alpha: 0.1)
+                    : _LocationColors.surface,
+                borderRadius: AppSpacing.borderRadiusMd,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _selectAllCities
+                        ? Icons.check_box_rounded
+                        : Icons.check_box_outline_blank_rounded,
+                    color: _selectAllCities
+                        ? _LocationColors.primary
+                        : _LocationColors.textSecondary,
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(
+                    'Select All',
+                    style: AppTypography.labelLarge.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${_filteredCities.length} cities',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: _LocationColors.textSecondary,
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: _cityGridColumns(layoutType),
+              crossAxisSpacing: AppSpacing.xs,
+              mainAxisSpacing: AppSpacing.xs,
+              childAspectRatio: 3.6,
+            ),
+            itemCount: _filteredCities.length,
+            itemBuilder: (context, index) {
+              final city = _filteredCities[index];
+              final isSelected = _selectedCities.contains(city);
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    if (isSelected) {
+                      _selectedCities.remove(city);
+                    } else {
+                      _selectedCities.add(city);
+                    }
+                    _selectAllCities =
+                        _selectedCities.length == _filteredCities.length;
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? _LocationColors.primary.withValues(alpha: 0.1)
+                        : _LocationColors.surface,
+                    borderRadius: AppSpacing.borderRadiusSm,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.06),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isSelected
+                            ? Icons.check_circle_rounded
+                            : Icons.circle_outlined,
+                        color: isSelected
+                            ? _LocationColors.primary
+                            : _LocationColors.textSecondary,
+                        size: 18,
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      Expanded(
+                        child: Text(
+                          city,
+                          style: AppTypography.labelMedium.copyWith(
+                            color: isSelected ? Colors.white : Colors.white70,
+                            fontWeight:
+                                isSelected ? FontWeight.w600 : FontWeight.w400,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ],
-      ),
+      );
+    }
+
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _selectAllCities = !_selectAllCities;
+              if (_selectAllCities) {
+                _selectedCities = List.from(_filteredCities);
+              } else {
+                _selectedCities = [];
+              }
+            });
+          },
+          child: Container(
+            padding: AppSpacing.paddingSm,
+            decoration: BoxDecoration(
+              color: _selectAllCities
+                  ? _LocationColors.primary.withValues(alpha: 0.1)
+                  : _LocationColors.surface,
+              borderRadius: AppSpacing.borderRadiusMd,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _selectAllCities
+                      ? Icons.check_box_rounded
+                      : Icons.check_box_outline_blank_rounded,
+                  color: _selectAllCities
+                      ? _LocationColors.primary
+                      : _LocationColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  'Select All',
+                  style: AppTypography.labelLarge.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '${_filteredCities.length} cities',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: _LocationColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        SizedBox(
+          height: 220,
+          child: ListView.builder(
+            itemCount: _filteredCities.length,
+            itemBuilder: (context, index) {
+              final city = _filteredCities[index];
+              final isSelected = _selectedCities.contains(city);
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    if (isSelected) {
+                      _selectedCities.remove(city);
+                    } else {
+                      _selectedCities.add(city);
+                    }
+                    _selectAllCities =
+                        _selectedCities.length == _filteredCities.length;
+                  });
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+                  padding: AppSpacing.paddingSm,
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? _LocationColors.primary.withValues(alpha: 0.1)
+                        : _LocationColors.surface,
+                    borderRadius: AppSpacing.borderRadiusSm,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.06),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isSelected
+                            ? Icons.check_circle_rounded
+                            : Icons.circle_outlined,
+                        color: isSelected
+                            ? _LocationColors.primary
+                            : _LocationColors.textSecondary,
+                        size: 20,
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Text(
+                        city,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: isSelected ? Colors.white : Colors.white70,
+                          fontWeight:
+                              isSelected ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -840,7 +1229,6 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
       child: Column(
         children: [
-          // Animated loading spinner
           Stack(
             alignment: Alignment.center,
             children: [
@@ -850,13 +1238,13 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                 child: CircularProgressIndicator(
                   strokeWidth: 3,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    AppColors.accentStart,
+                    _LocationColors.primary,
                   ),
                 ),
               ),
               Icon(
                 Icons.location_city_rounded,
-                color: AppColors.accentStart,
+                color: _LocationColors.primary,
                 size: 24,
               ),
             ],
@@ -865,11 +1253,10 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           _LoadingTextAnimation(
             text: 'Loading cities',
             style: AppTypography.bodySmall.copyWith(
-              color: AppColors.textSecondary,
+              color: _LocationColors.textSecondary,
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
-          // Shimmer placeholder for cities
           ...List.generate(
             3,
             (index) => Padding(
@@ -886,32 +1273,38 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  Widget _buildSummaryCard() {
+  Widget _buildIncludeSuburbsCard() {
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        gradient: AppColors.infoGradient,
+        color: _LocationColors.surface,
         borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(
+          color: _LocationColors.primary.withValues(alpha: 0.15),
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.info.withValues(alpha: 0.3),
-            blurRadius: 15,
-            offset: const Offset(0, 8),
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 18,
+            spreadRadius: -12,
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(AppSpacing.sm),
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
+              color: _LocationColors.primary.withValues(alpha: 0.1),
               borderRadius: AppSpacing.borderRadiusMd,
+              border: Border.all(
+                color: _LocationColors.primary.withValues(alpha: 0.2),
+              ),
             ),
-            child: const Icon(
-              Icons.summarize_rounded,
-              color: Colors.white,
-              size: 24,
+            child: Icon(
+              Icons.radar_rounded,
+              color: _LocationColors.primary,
             ),
           ),
           const SizedBox(width: AppSpacing.md),
@@ -920,23 +1313,29 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Ready to search',
+                  'Include Suburbs',
                   style: AppTypography.labelLarge.copyWith(
                     color: Colors.white,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 Text(
-                  '${_selectedCities.length} cities in $_selectedState',
+                  'Expand search radius by 25 miles',
                   style: AppTypography.bodySmall.copyWith(
-                    color: Colors.white.withValues(alpha: 0.8),
+                    color: _LocationColors.textSecondary,
                   ),
                 ),
               ],
             ),
           ),
-          const Icon(
-            Icons.arrow_forward_rounded,
-            color: Colors.white,
+          Switch(
+            value: _includeSuburbs,
+            onChanged: (value) {
+              setState(() {
+                _includeSuburbs = value;
+              });
+            },
+            activeColor: _LocationColors.primary,
           ),
         ],
       ),
@@ -946,8 +1345,10 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   Widget _buildContinueButton() {
     final canContinue = _selectedState != null && _selectedCities.isNotEmpty;
     return GradientButton(
-      text: 'Continue to Search',
-      icon: Icons.rocket_launch_rounded,
+      text: _selectedCities.isEmpty
+          ? 'Select locations'
+          : 'Analyze ${_selectedCities.length} Regions',
+      icon: Icons.arrow_forward_rounded,
       onPressed: canContinue
           ? () {
               final citiesText = _selectedCities
@@ -985,9 +1386,74 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           : null,
     );
   }
+
+  Widget _buildEmptyCitiesPanel() {
+    return Container(
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: _LocationColors.surface,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.06),
+        ),
+      ),
+      child: Center(
+        child: Text(
+          'Select a state to view cities',
+          style: AppTypography.bodyMedium.copyWith(
+            color: _LocationColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  int _stateGridColumns(LayoutType layoutType, bool inSplitPanel) {
+    switch (layoutType) {
+      case LayoutType.mobile:
+        return 2;
+      case LayoutType.tablet:
+        return 3;
+      case LayoutType.desktopSmall:
+        return inSplitPanel ? 2 : 3;
+      case LayoutType.desktopMedium:
+        return 3;
+      case LayoutType.desktopLarge:
+        return 4;
+    }
+  }
+
+  int _cityGridColumns(LayoutType layoutType) {
+    switch (layoutType) {
+      case LayoutType.mobile:
+        return 1;
+      case LayoutType.tablet:
+        return 1;
+      case LayoutType.desktopSmall:
+        return 1;
+      case LayoutType.desktopMedium:
+        return 2;
+      case LayoutType.desktopLarge:
+        return 3;
+    }
+  }
 }
 
-/// Animated loading text with dots
+class _LocationColors {
+  static const Color background = Color(0xFF020617);
+  static const Color surface = Color(0xFF0F172A);
+  static const Color surfaceHighlight = Color(0xFF1E293B);
+  static const Color primary = Color(0xFF4F46E5);
+  static const Color primaryLight = Color(0xFF818CF8);
+  static const Color textSecondary = Color(0xFF94A3B8);
+
+  static const LinearGradient primaryGradient = LinearGradient(
+    colors: [Color(0xFF4F46E5), Color(0xFF9333EA)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+}
+
 class _LoadingTextAnimation extends StatefulWidget {
   final String text;
   final TextStyle? style;
@@ -1038,13 +1504,12 @@ class _LoadingTextAnimationState extends State<_LoadingTextAnimation>
       '${widget.text}$dots$spaces',
       style: widget.style ??
           AppTypography.bodyMedium.copyWith(
-            color: AppColors.textSecondary,
+            color: Colors.white70,
           ),
     );
   }
 }
 
-/// Shimmer effect placeholder
 class _ShimmerPlaceholder extends StatefulWidget {
   final double width;
   final double height;
@@ -1103,9 +1568,9 @@ class _ShimmerPlaceholderState extends State<_ShimmerPlaceholder>
               begin: Alignment(_animation.value - 1, 0),
               end: Alignment(_animation.value, 0),
               colors: [
-                AppColors.surfaceLight,
-                AppColors.textMuted.withValues(alpha: 0.1),
-                AppColors.surfaceLight,
+                _LocationColors.surface,
+                _LocationColors.surfaceHighlight,
+                _LocationColors.surface,
               ],
             ),
           ),

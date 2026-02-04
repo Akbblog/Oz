@@ -1,26 +1,29 @@
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/scraper_provider.dart';
 import '../services/api_service.dart';
 import '../core/download_helper.dart';
-import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
-import '../widgets/gradient_background.dart';
-import '../widgets/glass_card.dart';
-import '../widgets/gradient_button.dart';
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_breakpoints.dart';
+import '../core/utils/responsive_utils.dart';
+import '../widgets/infinity_data_table.dart';
 
 class ResultsScreen extends StatefulWidget {
   final String? jobId;
   final List<Map<String, dynamic>>? overrideResults;
   final String? title;
+  final bool showHeader;
 
   const ResultsScreen({
     super.key,
     this.jobId,
     this.overrideResults,
     this.title,
+    this.showHeader = true,
   });
 
   @override
@@ -28,12 +31,22 @@ class ResultsScreen extends StatefulWidget {
 }
 
 class _ResultsScreenState extends State<ResultsScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+
+  @override
+  bool get wantKeepAlive => true;
   final ApiService _apiService = ApiService();
   bool _isLoading = false;
   bool _isDownloading = false;
   String? _error;
   List<Map<String, dynamic>> _loadedResults = [];
+
+  // Search and filter state
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _activeFilter = 'All'; // All, Has Phone, Has Website
+  String _sortOption = 'Newest'; // Newest, Name A-Z, Category
+  String _viewMode = 'Cards'; // Cards, Table
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -56,6 +69,7 @@ class _ResultsScreenState extends State<ResultsScreen>
   @override
   void dispose() {
     _animationController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -88,6 +102,31 @@ class _ResultsScreenState extends State<ResultsScreen>
     }
   }
 
+  Future<void> _refreshResults() async {
+    if (widget.jobId == null || widget.overrideResults != null) {
+      return;
+    }
+
+    try {
+      final data = await _apiService.getJobResults(widget.jobId!);
+      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      if (mounted) {
+        setState(() {
+          _loadedResults = results;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to refresh results: $e'),
+            backgroundColor: AppColors.rose,
+          ),
+        );
+      }
+    }
+  }
+
   List<Map<String, dynamic>> _resolveResults(ScraperProvider scraperProvider) {
     if (widget.overrideResults != null) {
       return widget.overrideResults!;
@@ -98,10 +137,56 @@ class _ResultsScreenState extends State<ResultsScreen>
     return scraperProvider.currentJob?.results ?? [];
   }
 
+  List<Map<String, dynamic>> _filterAndSortResults(List<Map<String, dynamic>> results) {
+    var filtered = results.where((business) {
+      // Apply search filter
+      if (_searchQuery.isNotEmpty) {
+        final name = (business['name'] ?? '').toString().toLowerCase();
+        final category = (business['category'] ?? '').toString().toLowerCase();
+        final city = (business['city'] ?? '').toString().toLowerCase();
+        final query = _searchQuery.toLowerCase();
+
+        if (!name.contains(query) &&
+            !category.contains(query) &&
+            !city.contains(query)) {
+          return false;
+        }
+      }
+
+      // Apply data quality filters
+      if (_activeFilter == 'Has Phone') {
+        final phone = business['phone'] ?? '';
+        if (phone.isEmpty || phone == 'N/A') return false;
+      } else if (_activeFilter == 'Has Website') {
+        final website = business['website'] ?? '';
+        if (website.isEmpty || website == 'N/A') return false;
+      }
+
+      return true;
+    }).toList();
+
+    // Apply sorting
+    if (_sortOption == 'Name A-Z') {
+      filtered.sort((a, b) {
+        final nameA = (a['name'] ?? '').toString().toLowerCase();
+        final nameB = (b['name'] ?? '').toString().toLowerCase();
+        return nameA.compareTo(nameB);
+      });
+    } else if (_sortOption == 'Category') {
+      filtered.sort((a, b) {
+        final catA = (a['category'] ?? '').toString().toLowerCase();
+        final catB = (b['category'] ?? '').toString().toLowerCase();
+        return catA.compareTo(catB);
+      });
+    }
+    // 'Newest' keeps the original order
+
+    return filtered;
+  }
+
   Future<void> _launchUrl(String url) async {
     if (url.isEmpty || url == 'N/A') return;
 
-    // Ensure URL has a scheme
     String finalUrl = url;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       finalUrl = 'https://$url';
@@ -111,22 +196,20 @@ class _ResultsScreenState extends State<ResultsScreen>
       final uri = Uri.parse(finalUrl);
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Could not open: $url'),
-              backgroundColor: AppColors.error,
-            ),
-          );
-        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not open: $url'),
+            backgroundColor: AppColors.rose,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error opening URL: $e'),
-            backgroundColor: AppColors.error,
+            backgroundColor: AppColors.rose,
           ),
         );
       }
@@ -135,8 +218,6 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   Future<void> _launchPhone(String phone) async {
     if (phone.isEmpty || phone == 'N/A') return;
-
-    // Clean phone number
     final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
     final uri = Uri.parse('tel:$cleanPhone');
 
@@ -153,7 +234,9 @@ class _ResultsScreenState extends State<ResultsScreen>
     if (address.isEmpty || address == 'N/A') return;
 
     final encodedAddress = Uri.encodeComponent(address);
-    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$encodedAddress');
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$encodedAddress',
+    );
 
     try {
       if (await canLaunchUrl(uri)) {
@@ -166,146 +249,474 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
     final scraperProvider = Provider.of<ScraperProvider>(context);
-    final results = _resolveResults(scraperProvider);
+    final allResults = _resolveResults(scraperProvider);
+    final filteredResults = _filterAndSortResults(allResults);
+    final layoutType =
+        AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: _buildAppBar(results.length),
-      body: GradientBackground(
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: Column(
-              children: [
-                // Stats Header
-                Padding(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  child: _buildStatsHeader(results),
-                ),
-                // Content
-                Expanded(
-                  child: _buildContent(results),
-                ),
-              ],
-            ),
+      backgroundColor: AppColors.backgroundDeep,
+      body: SafeArea(
+        top: widget.showHeader,
+        bottom: false,
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: Stack(
+            children: [
+              _buildBackgroundEffects(),
+              Column(
+                children: [
+                  if (widget.showHeader) _buildHeader(allResults.length),
+                  _buildSearchAndFilter(layoutType),
+                  _buildStats(filteredResults),
+                  Expanded(child: _buildContent(filteredResults, layoutType)),
+                ],
+              ),
+            ],
           ),
         ),
       ),
     );
   }
-
-  PreferredSizeWidget _buildAppBar(int count) {
-    return AppBar(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      leading: IconButton(
-        icon: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: AppColors.glassWhite,
-            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+  Widget _buildBackgroundEffects() {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: CustomPaint(
+            painter: _GridPainter(),
           ),
-          child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
         ),
-        onPressed: () => Navigator.pop(context),
-      ),
-      title: Text(
-        widget.title ?? 'Results',
-        style: AppTypography.headlineSmallLight,
-      ),
-      centerTitle: true,
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: AppSpacing.md),
-          child: IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.glassWhite,
-                borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-              ),
-              child: _isDownloading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Icon(Icons.download, color: Colors.white, size: 20),
+        Container(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              colors: [
+                AppColors.primaryViolet.withValues(alpha: 0.25),
+                Colors.transparent,
+              ],
+              radius: 1.2,
+              center: const Alignment(0, -0.8),
             ),
-            onPressed: count > 0 && !_isDownloading ? () => _downloadResults(context) : null,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildStatsHeader(List<Map<String, dynamic>> results) {
-    // Count unique cities and categories
+  Widget _buildHeader(int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.md,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundDeep.withValues(alpha: 0.9),
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.white.withValues(alpha: 0.06),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Infinity Leads',
+                  style: AppTypography.titleLarge.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  widget.title ?? 'Live Results',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: AppColors.primaryViolet,
+                    letterSpacing: 2.0,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _downloadButton(count),
+        ],
+      ),
+    );
+  }
+
+  Widget _downloadButton(int count) {
+    return GestureDetector(
+      onTap: count > 0 && !_isDownloading
+          ? () => _downloadResults(context)
+          : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundCard,
+          borderRadius: AppSpacing.borderRadiusSm,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.1),
+          ),
+        ),
+        child: Row(
+          children: [
+            if (_isDownloading)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppColors.emerald,
+                  ),
+                ),
+              )
+            else
+              const Icon(Icons.download_rounded,
+                  color: AppColors.emerald, size: 18),
+            const SizedBox(width: 6),
+            Text(
+              'Excel',
+              style: AppTypography.labelSmall.copyWith(
+                color: AppColors.emerald,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchAndFilter(LayoutType layoutType) {
+    final canTable = ResponsiveUtils.shouldUseTableView(layoutType);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.white.withValues(alpha: 0.06),
+          ),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Search bar
+          Container(
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppColors.backgroundCard,
+              borderRadius: AppSpacing.borderRadiusSm,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.1),
+              ),
+            ),
+            child: TextField(
+              controller: _searchController,
+              style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Search by name, category, or city...',
+                hintStyle: AppTypography.bodyMedium.copyWith(
+                  color: Colors.white38,
+                ),
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: Colors.white54,
+                  size: 20,
+                ),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(
+                          Icons.clear_rounded,
+                          color: Colors.white54,
+                          size: 20,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _searchController.clear();
+                            _searchQuery = '';
+                          });
+                        },
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: AppSpacing.sm,
+                ),
+              ),
+              onChanged: (value) {
+                setState(() {
+                  _searchQuery = value;
+                });
+              },
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // Filter and Sort chips
+          Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _filterChip('All', Icons.list_rounded),
+                      const SizedBox(width: AppSpacing.xs),
+                      _filterChip('Has Phone', Icons.phone_rounded),
+                      const SizedBox(width: AppSpacing.xs),
+                      _filterChip('Has Website', Icons.language_rounded),
+                    ],
+                  ),
+                ),
+              ),
+              if (canTable) ...[
+                const SizedBox(width: AppSpacing.sm),
+                _viewToggle(),
+              ],
+              const SizedBox(width: AppSpacing.sm),
+              PopupMenuButton<String>(
+                initialValue: _sortOption,
+                color: AppColors.backgroundCard,
+                icon: Container(
+                  padding: const EdgeInsets.all(AppSpacing.xs),
+                  decoration: BoxDecoration(
+                    color: AppColors.backgroundCard,
+                    borderRadius: AppSpacing.borderRadiusSm,
+                    border: Border.all(
+                      color: AppColors.primaryViolet.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.sort_rounded,
+                        color: AppColors.primaryViolet,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _sortOption,
+                        style: AppTypography.labelSmall.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                onSelected: (value) {
+                  setState(() {
+                    _sortOption = value;
+                  });
+                },
+                itemBuilder: (context) => [
+                  _buildSortMenuItem('Newest', Icons.access_time_rounded),
+                  _buildSortMenuItem('Name A-Z', Icons.sort_by_alpha_rounded),
+                  _buildSortMenuItem('Category', Icons.category_rounded),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _viewToggle() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundCard,
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(
+          color: AppColors.primaryViolet.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          _toggleChip('Cards', Icons.view_module_rounded),
+          _toggleChip('Table', Icons.table_chart_rounded),
+        ],
+      ),
+    );
+  }
+
+  Widget _toggleChip(String label, IconData icon) {
+    final isActive = _viewMode == label;
+    return GestureDetector(
+      onTap: () => setState(() => _viewMode = label),
+      child: AnimatedContainer(
+        duration: AppSpacing.durationFast,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.xs,
+          vertical: AppSpacing.xxs,
+        ),
+        decoration: BoxDecoration(
+          color: isActive
+              ? AppColors.primaryViolet.withValues(alpha: 0.2)
+              : Colors.transparent,
+          borderRadius: AppSpacing.borderRadiusSm,
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 14,
+              color: isActive ? AppColors.primaryViolet : Colors.white54,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: AppTypography.labelSmall.copyWith(
+                color: isActive ? Colors.white : Colors.white54,
+                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _filterChip(String label, IconData icon) {
+    final isActive = _activeFilter == label;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _activeFilter = label;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: isActive
+              ? AppColors.primaryViolet.withValues(alpha: 0.2)
+              : AppColors.backgroundCard,
+          borderRadius: AppSpacing.borderRadiusSm,
+          border: Border.all(
+            color: isActive
+                ? AppColors.primaryViolet
+                : Colors.white.withValues(alpha: 0.1),
+            width: isActive ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isActive ? AppColors.primaryViolet : Colors.white70,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: AppTypography.labelSmall.copyWith(
+                color: isActive ? Colors.white : Colors.white70,
+                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _buildSortMenuItem(String value, IconData icon) {
+    return PopupMenuItem<String>(
+      value: value,
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: Colors.white70),
+          const SizedBox(width: AppSpacing.xs),
+          Text(
+            value,
+            style: AppTypography.bodyMedium.copyWith(
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStats(List<Map<String, dynamic>> results) {
     final cities = results.map((r) => r['city']).toSet();
     final categories = results.map((r) => r['category']).toSet();
 
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.md,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
       child: Row(
         children: [
-          _buildStatItem(
-            icon: Icons.business,
-            value: results.length.toString(),
-            label: 'Leads',
-            color: AppColors.primaryStart,
+          Expanded(
+            child: _statTile('Leads', results.length.toString()),
           ),
-          _buildDivider(),
-          _buildStatItem(
-            icon: Icons.location_city,
-            value: cities.length.toString(),
-            label: 'Cities',
-            color: AppColors.secondaryStart,
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: _statTile('Cities', cities.length.toString()),
           ),
-          _buildDivider(),
-          _buildStatItem(
-            icon: Icons.category,
-            value: categories.length.toString(),
-            label: 'Categories',
-            color: AppColors.accentStart,
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: _statTile('Cats', categories.length.toString()),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatItem({
-    required IconData icon,
-    required String value,
-    required String label,
-    required Color color,
-  }) {
-    return Expanded(
+  Widget _statTile(String label, String value) {
+    return Container(
+      padding: AppSpacing.paddingSm,
+      decoration: BoxDecoration(
+        color: AppColors.backgroundStatCard,
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(
+          color: AppColors.primaryViolet.withValues(alpha: 0.4),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryViolet.withValues(alpha: 0.2),
+            blurRadius: 14,
+            spreadRadius: -10,
+          ),
+        ],
+      ),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.2),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(height: AppSpacing.xs),
           Text(
-            value,
-            style: AppTypography.headlineSmall.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          Text(
-            label,
+            label.toUpperCase(),
             style: AppTypography.labelSmall.copyWith(
               color: Colors.white60,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -313,15 +724,7 @@ class _ResultsScreenState extends State<ResultsScreen>
     );
   }
 
-  Widget _buildDivider() {
-    return Container(
-      height: 50,
-      width: 1,
-      color: Colors.white24,
-    );
-  }
-
-  Widget _buildContent(List<Map<String, dynamic>> results) {
+  Widget _buildContent(List<Map<String, dynamic>> results, LayoutType layoutType) {
     if (_isLoading) {
       return _buildLoadingState();
     }
@@ -334,28 +737,175 @@ class _ResultsScreenState extends State<ResultsScreen>
       return _buildEmptyState();
     }
 
-    return _buildResultsList(results);
-  }
+    final canTable = ResponsiveUtils.shouldUseTableView(layoutType);
+    if (canTable && _viewMode == 'Table') {
+      final tableRows = results
+          .map((r) => {
+                'business_name': r['business_name'] ?? r['name'] ?? 'Unknown',
+                'category': r['category'] ?? 'N/A',
+                'city': r['city'] ?? 'N/A',
+                'phone': r['phone'] ?? 'N/A',
+                'website': r['website'] ?? 'N/A',
+                'address': r['address'] ?? 'N/A',
+              })
+          .toList();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          AppSpacing.sm,
+          AppSpacing.md,
+          AppSpacing.xl,
+        ),
+        child: InfinityDataTable(
+          layoutType: layoutType,
+          columns: [
+            const InfinityDataColumn(label: 'Business Name', keyName: 'business_name'),
+            const InfinityDataColumn(label: 'Category', keyName: 'category'),
+            const InfinityDataColumn(label: 'City', keyName: 'city'),
+            const InfinityDataColumn(label: 'Phone', keyName: 'phone'),
+            const InfinityDataColumn(label: 'Website', keyName: 'website'),
+            InfinityDataColumn(
+              label: 'Actions',
+              keyName: 'actions',
+              cellBuilder: (row) => Row(
+                children: [
+                  _tableActionButton(
+                    icon: Icons.call,
+                    tooltip: 'Call',
+                    onTap: () => _launchPhone(row['phone'] ?? ''),
+                  ),
+                  _tableActionButton(
+                    icon: Icons.language,
+                    tooltip: 'Website',
+                    onTap: () => _launchUrl(row['website'] ?? ''),
+                  ),
+                  _tableActionButton(
+                    icon: Icons.location_on,
+                    tooltip: 'Map',
+                    onTap: () => _launchMaps(row['address'] ?? ''),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          rows: tableRows,
+          sortable: true,
+        ),
+      );
+    }
 
+    return RefreshIndicator(
+      onRefresh: _refreshResults,
+      color: AppColors.primaryViolet,
+      backgroundColor: AppColors.backgroundCard,
+      child: layoutType == LayoutType.mobile
+          ? ListView.builder(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.xl,
+              ),
+              itemCount: results.length,
+              itemBuilder: (context, index) {
+                final business = results[index];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                  child: _LeadCard(
+                    business: business,
+                    onPhoneTap: () => _launchPhone(business['phone'] ?? ''),
+                    onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
+                    onAddressTap: () => _launchMaps(business['address'] ?? ''),
+                  ),
+                );
+              },
+            )
+          : GridView.builder(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.xl,
+              ),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: layoutType == LayoutType.desktopLarge
+                    ? 4
+                    : layoutType == LayoutType.desktopMedium
+                        ? 3
+                        : 2,
+                crossAxisSpacing: AppSpacing.md,
+                mainAxisSpacing: AppSpacing.md,
+                childAspectRatio: 1.8,
+              ),
+              itemCount: results.length,
+              itemBuilder: (context, index) {
+                final business = results[index];
+                return _LeadCard(
+                  business: business,
+                  onPhoneTap: () => _launchPhone(business['phone'] ?? ''),
+                  onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
+                  onAddressTap: () => _launchMaps(business['address'] ?? ''),
+                );
+              },
+            ),
+    );
+  }
   Widget _buildLoadingState() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 60,
-            height: 60,
+          const SizedBox(
+            width: 48,
+            height: 48,
             child: CircularProgressIndicator(
-              strokeWidth: 4,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.secondaryStart),
+              strokeWidth: 3,
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryViolet),
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
           Text(
             'Loading results...',
-            style: AppTypography.titleMediumLight,
+            style: AppTypography.bodyMedium.copyWith(
+              color: Colors.white70,
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _tableActionButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: AppSpacing.xs),
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: AppSpacing.borderRadiusSm,
+          child: Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [AppColors.primaryViolet, AppColors.indigo],
+              ),
+              borderRadius: AppSpacing.borderRadiusSm,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primaryViolet.withValues(alpha: 0.3),
+                  blurRadius: 8,
+                  spreadRadius: -6,
+                ),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: 14),
+          ),
+        ),
       ),
     );
   }
@@ -363,39 +913,38 @@ class _ResultsScreenState extends State<ResultsScreen>
   Widget _buildErrorState() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: GlassCard(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Container(
+          padding: AppSpacing.paddingMd,
+          decoration: BoxDecoration(
+            color: AppColors.backgroundCard,
+            borderRadius: AppSpacing.borderRadiusLg,
+            border: Border.all(color: Colors.white12),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.error_outline,
-                  color: AppColors.error,
-                  size: 48,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
+              Icon(Icons.error_outline, color: AppColors.rose, size: 40),
+              const SizedBox(height: AppSpacing.md),
               Text(
                 'Failed to Load',
-                style: AppTypography.titleLarge.copyWith(color: Colors.white),
+                style: AppTypography.titleMedium.copyWith(
+                  color: Colors.white,
+                ),
               ),
-              const SizedBox(height: AppSpacing.sm),
+              const SizedBox(height: AppSpacing.xs),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
+                style: AppTypography.bodySmall.copyWith(
+                  color: Colors.white60,
+                ),
               ),
-              const SizedBox(height: AppSpacing.lg),
-              GradientButton(
-                text: 'Try Again',
+              const SizedBox(height: AppSpacing.md),
+              ElevatedButton.icon(
                 onPressed: _loadIfNeeded,
-                icon: Icons.refresh,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Try Again'),
               ),
             ],
           ),
@@ -407,72 +956,80 @@ class _ResultsScreenState extends State<ResultsScreen>
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: GlassCard(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Container(
+          padding: AppSpacing.paddingLg,
+          decoration: BoxDecoration(
+            color: AppColors.backgroundCard,
+            borderRadius: AppSpacing.borderRadiusLg,
+            border: Border.all(
+              color: AppColors.primaryViolet.withValues(alpha: 0.3),
+            ),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(16),
+                width: 80,
+                height: 80,
                 decoration: BoxDecoration(
-                  color: AppColors.info.withValues(alpha: 0.2),
+                  color: AppColors.primaryViolet.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.search_off,
-                  color: AppColors.info,
+                child: Icon(
+                  Icons.search_off_rounded,
+                  color: AppColors.primaryViolet,
                   size: 48,
                 ),
               ),
               const SizedBox(height: AppSpacing.lg),
               Text(
                 'No Results Yet',
-                style: AppTypography.titleLarge.copyWith(color: Colors.white),
+                style: AppTypography.titleLarge.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: AppSpacing.sm),
               Text(
-                'Start a lead search to see results here',
+                'Start your first lead search to discover\nbusiness opportunities in your area',
                 textAlign: TextAlign.center,
-                style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
+                style: AppTypography.bodyMedium.copyWith(
+                  color: Colors.white60,
+                  height: 1.5,
+                ),
               ),
+              if (_searchQuery.isNotEmpty || _activeFilter != 'All') ...[
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  'No results match your current filters.\nTry adjusting your search criteria.',
+                  textAlign: TextAlign.center,
+                  style: AppTypography.bodySmall.copyWith(
+                    color: Colors.white38,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _searchController.clear();
+                      _searchQuery = '';
+                      _activeFilter = 'All';
+                    });
+                  },
+                  icon: const Icon(Icons.clear_all_rounded, size: 18),
+                  label: const Text('Clear Filters'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primaryViolet,
+                    side: BorderSide(color: AppColors.primaryViolet),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildResultsList(List<Map<String, dynamic>> results) {
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      itemCount: results.length,
-      itemBuilder: (context, index) {
-        final business = results[index];
-        return TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0.0, end: 1.0),
-          duration: Duration(milliseconds: 200 + (index * 50).clamp(0, 300)),
-          curve: Curves.easeOut,
-          builder: (context, value, child) {
-            return Transform.translate(
-              offset: Offset(0, 20 * (1 - value)),
-              child: Opacity(
-                opacity: value,
-                child: child,
-              ),
-            );
-          },
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.md),
-            child: ModernBusinessCard(
-              business: business,
-              onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
-              onPhoneTap: () => _launchPhone(business['phone'] ?? ''),
-              onAddressTap: () => _launchMaps(business['address'] ?? ''),
-              onMapsTap: () => _launchUrl(business['google_maps_url'] ?? ''),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -496,18 +1053,8 @@ class _ResultsScreenState extends State<ResultsScreen>
       if (!mounted) return;
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.error_outline, color: Colors.white),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(child: Text('Failed to download: $e')),
-            ],
-          ),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-          ),
+          content: Text('Failed to download: $e'),
+          backgroundColor: AppColors.rose,
         ),
       );
     } finally {
@@ -518,53 +1065,51 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 }
 
-class ModernBusinessCard extends StatelessWidget {
+class _LeadCard extends StatelessWidget {
   final Map<String, dynamic> business;
-  final VoidCallback? onWebsiteTap;
   final VoidCallback? onPhoneTap;
+  final VoidCallback? onWebsiteTap;
   final VoidCallback? onAddressTap;
-  final VoidCallback? onMapsTap;
 
-  const ModernBusinessCard({
-    super.key,
+  const _LeadCard({
     required this.business,
-    this.onWebsiteTap,
     this.onPhoneTap,
+    this.onWebsiteTap,
     this.onAddressTap,
-    this.onMapsTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final hasPhone = business['phone'] != null && business['phone'] != 'N/A' && business['phone'].toString().isNotEmpty;
-    final hasWebsite = business['website'] != null && business['website'] != 'N/A' && business['website'].toString().isNotEmpty;
-    final hasAddress = business['address'] != null && business['address'] != 'N/A' && business['address'].toString().isNotEmpty;
-    final hasMapsUrl = business['google_maps_url'] != null && business['google_maps_url'] != 'N/A' && business['google_maps_url'].toString().isNotEmpty;
+    final hasPhone = business['phone'] != null &&
+        business['phone'] != 'N/A' &&
+        business['phone'].toString().isNotEmpty;
+    final hasWebsite = business['website'] != null &&
+        business['website'] != 'N/A' &&
+        business['website'].toString().isNotEmpty;
+    final hasAddress = business['address'] != null &&
+        business['address'] != 'N/A' &&
+        business['address'].toString().isNotEmpty;
 
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: AppColors.backgroundCard,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.primaryViolet.withValues(alpha: 0.5)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryViolet.withValues(alpha: 0.2),
+            blurRadius: 18,
+            spreadRadius: -10,
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header Row
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Business Icon
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                ),
-                child: const Icon(
-                  Icons.storefront,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              // Business Info
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -573,181 +1118,139 @@ class ModernBusinessCard extends StatelessWidget {
                       business['business_name'] ?? 'Unknown Business',
                       style: AppTypography.titleMedium.copyWith(
                         color: Colors.white,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.location_on,
-                          size: 14,
+                    if (hasAddress)
+                      Text(
+                        business['address'],
+                        style: AppTypography.bodySmall.copyWith(
                           color: Colors.white60,
                         ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            '${business['city'] ?? 'Unknown'}, ${business['state'] ?? ''}',
-                            style: AppTypography.bodySmall.copyWith(
-                              color: Colors.white60,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
                   ],
                 ),
               ),
-              // Category Chip
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.sm,
                   vertical: AppSpacing.xxs,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.secondaryStart.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusRound),
+                  color: AppColors.emerald.withValues(alpha: 0.12),
+                  borderRadius: AppSpacing.borderRadiusRound,
                   border: Border.all(
-                    color: AppColors.secondaryStart.withValues(alpha: 0.5),
+                    color: AppColors.emerald.withValues(alpha: 0.25),
                   ),
                 ),
                 child: Text(
-                  business['category'] ?? 'Unknown',
+                  business['category'] ?? 'Category',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.secondaryStart,
+                    color: AppColors.emerald,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
             ],
           ),
-
-          // Address - Clickable to open Google Maps
-          if (hasAddress) ...[
-            const SizedBox(height: AppSpacing.md),
-            InkWell(
-              onTap: onAddressTap,
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-              child: Container(
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                  border: Border.all(
-                    color: AppColors.info.withValues(alpha: 0.3),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: AppColors.emerald,
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.map_outlined,
-                      size: 16,
-                      color: AppColors.info,
+                  const SizedBox(width: 6),
+                  Text(
+                    'Verified Lead',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white60,
                     ),
-                    const SizedBox(width: AppSpacing.xs),
-                    Expanded(
-                      child: Text(
-                        business['address'],
-                        style: AppTypography.bodySmall.copyWith(
-                          color: AppColors.info,
-                          decoration: TextDecoration.underline,
-                        ),
-                      ),
-                    ),
-                    Icon(
-                      Icons.open_in_new,
-                      size: 14,
-                      color: AppColors.info.withValues(alpha: 0.7),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ),
-          ],
-
-          // Contact Row - Clickable buttons
-          if (hasPhone || hasWebsite || hasMapsUrl) ...[
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
-                if (hasPhone) ...[
-                  Expanded(
-                    child: _buildContactButton(
-                      icon: Icons.phone,
-                      label: business['phone'],
-                      color: AppColors.success,
-                      onTap: onPhoneTap,
-                    ),
-                  ),
-                  if (hasWebsite || hasMapsUrl) const SizedBox(width: AppSpacing.sm),
+              Row(
+                children: [
+                  if (hasPhone) _actionButton(Icons.call, onPhoneTap, 'Call'),
+                  if (hasWebsite) _actionButton(Icons.language, onWebsiteTap, 'Visit Website'),
+                  if (hasAddress) _actionButton(Icons.location_on, onAddressTap, 'View on Map'),
                 ],
-                if (hasWebsite) ...[
-                  Expanded(
-                    child: _buildContactButton(
-                      icon: Icons.language,
-                      label: 'Website',
-                      color: AppColors.info,
-                      onTap: onWebsiteTap,
-                    ),
-                  ),
-                  if (hasMapsUrl) const SizedBox(width: AppSpacing.sm),
-                ],
-                if (hasMapsUrl)
-                  Expanded(
-                    child: _buildContactButton(
-                      icon: Icons.place,
-                      label: 'Maps',
-                      color: AppColors.accentStart,
-                      onTap: onMapsTap,
-                    ),
-                  ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildContactButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    VoidCallback? onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.xs,
+  Widget _actionButton(IconData icon, VoidCallback? onTap, String tooltip) {
+    return Padding(
+      padding: const EdgeInsets.only(left: AppSpacing.xs),
+      child: Tooltip(
+        message: tooltip,
+        decoration: BoxDecoration(
+          color: AppColors.backgroundCard,
+          borderRadius: AppSpacing.borderRadiusSm,
+          border: Border.all(
+            color: AppColors.primaryViolet.withValues(alpha: 0.5),
           ),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-            border: Border.all(
-              color: color.withValues(alpha: 0.3),
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 14, color: color),
-              const SizedBox(width: AppSpacing.xxs),
-              Flexible(
-                child: Text(
-                  label,
-                  style: AppTypography.labelSmall.copyWith(color: color),
-                  overflow: TextOverflow.ellipsis,
-                ),
+        ),
+        textStyle: AppTypography.labelSmall.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w500,
+        ),
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [AppColors.primaryViolet, AppColors.indigo],
               ),
-            ],
+              borderRadius: AppSpacing.borderRadiusSm,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primaryViolet.withValues(alpha: 0.4),
+                  blurRadius: 10,
+                  spreadRadius: -6,
+                ),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: 18),
           ),
         ),
       ),
     );
   }
+}
+
+// Colors now consolidated in AppColors
+
+class _GridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.05)
+      ..strokeWidth = 1;
+
+    const spacing = 40.0;
+    for (double x = 0; x <= size.width; x += spacing) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y <= size.height; y += spacing) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
