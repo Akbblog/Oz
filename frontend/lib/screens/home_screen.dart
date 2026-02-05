@@ -10,6 +10,7 @@ import 'state_selection_screen.dart';
 import 'scraping_screen.dart';
 import 'results_screen.dart';
 import 'job_history_screen.dart';
+import 'dashboard_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'profile_screen.dart';
 import '../widgets/sidebar_navigation.dart';
@@ -24,13 +25,17 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  int _currentIndex = 1; // Start on Scrape tab
+  int _currentIndex = 0; // Start on Dashboard
   late PageController _pageController;
   final ApiService _apiService = ApiService();
   int _creditBalance = 0;
   bool _loadingCredits = true;
+  String _scrapeInitialCategory = '';
+  String _scrapeInitialCities = '';
+  String _scrapeInitialMaxResults = '50';
 
   final List<_NavItem> _navItems = const [
+    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
     _NavItem(icon: Icons.location_city_rounded, label: 'Cities'),
     _NavItem(icon: Icons.search_rounded, label: 'Search'),
     _NavItem(icon: Icons.list_alt_rounded, label: 'Results'),
@@ -68,11 +73,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _onNavTap(int index) {
     setState(() => _currentIndex = index);
-    _pageController.animateToPage(
-      index,
-      duration: AppSpacing.durationMedium,
-      curve: Curves.easeInOutCubic,
-    );
+    if (_pageController.hasClients) {
+      _pageController.animateToPage(
+        index,
+        duration: AppSpacing.durationMedium,
+        curve: Curves.easeInOutCubic,
+      );
+    }
+  }
+
+  void _startSearchFromCities(String citiesText, String maxResults) {
+    setState(() {
+      _scrapeInitialCategory = '';
+      _scrapeInitialCities = citiesText;
+      _scrapeInitialMaxResults = maxResults;
+    });
+    _onNavTap(2);
   }
 
   @override
@@ -82,7 +98,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
     return Scaffold(
-      backgroundColor: AppColors.backgroundDarkest,
+      backgroundColor: AppColors.backgroundDark,
       body: ResponsiveShell(
         child: Stack(
           children: [
@@ -97,11 +113,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           onPageChanged: (index) {
                             setState(() => _currentIndex = index);
                           },
-                          children: const [
-                            StateSelectionScreen(),
-                            ScrapingScreen(),
-                            ResultsScreen(),
-                            JobHistoryScreen(),
+                          children: [
+                            DashboardScreen(
+                              showHeader: false,
+                              onNavigateToTab: _onNavTap,
+                            ),
+                            StateSelectionScreen(
+                              showHeader: false,
+                              onContinueToSearch: _startSearchFromCities,
+                            ),
+                            ScrapingScreen(
+                              showHeader: false,
+                              initialCategory: _scrapeInitialCategory,
+                              initialCities: _scrapeInitialCities,
+                              initialMaxResults: _scrapeInitialMaxResults,
+                              onBackToCities: () => _onNavTap(1),
+                            ),
+                            const ResultsScreen(showHeader: false),
+                            const JobHistoryScreen(showHeader: false),
                           ],
                         ),
                       ),
@@ -155,7 +184,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           return SidebarNavigation(
             currentIndex: _currentIndex,
             onTabSelected: (index) {
-              setState(() => _currentIndex = index);
+              _onNavTap(index);
             },
             collapsed: isCollapsed,
             hidden: AppBreakpoints.isSidebarHidden(layoutType),
@@ -186,7 +215,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppColors.backgroundDarkest, AppColors.backgroundDark],
+          colors: [AppColors.backgroundDark, AppColors.backgroundDark],
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
         ),
@@ -201,7 +230,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               height: 260,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.indigo.withValues(alpha: 0.08),
+                color: AppColors.primaryBlue.withValues(alpha: 0.08),
               ),
             ),
           ),
@@ -213,7 +242,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               height: 320,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.indigoLight.withValues(alpha: 0.06),
+                color: AppColors.primaryBlueLight.withValues(alpha: 0.06),
               ),
             ),
           ),
@@ -229,10 +258,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         vertical: AppSpacing.sm,
       ),
       decoration: BoxDecoration(
-        color: AppColors.backgroundDarkest.withValues(alpha: 0.9),
+        color: AppColors.backgroundDark.withValues(alpha: 0.9),
         border: Border(
           bottom: BorderSide(
-            color: AppColors.indigo.withValues(alpha: 0.2),
+            color: AppColors.primaryBlue.withValues(alpha: 0.2),
           ),
         ),
       ),
@@ -242,12 +271,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: AppColors.surfaceMid,
+              color: AppColors.surfaceDark,
               borderRadius: AppSpacing.borderRadiusMd,
-              border: Border.all(color: AppColors.indigo.withValues(alpha: 0.3)),
+              border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.3)),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.indigo.withValues(alpha: 0.25),
+                  color: AppColors.primaryBlue.withValues(alpha: 0.25),
                   blurRadius: 18,
                   spreadRadius: -6,
                 ),
@@ -278,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 Text(
                   'Leads v2.0',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.indigoLight.withValues(alpha: 0.7),
+                    color: AppColors.primaryBlueLight.withValues(alpha: 0.7),
                     letterSpacing: 1.2,
                   ),
                 ),
@@ -321,14 +350,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           vertical: AppSpacing.xs,
         ),
         decoration: BoxDecoration(
-          color: AppColors.emerald,
+          color: AppColors.successGreen,
           borderRadius: AppSpacing.borderRadiusRound,
           border: Border.all(
-            color: AppColors.emerald.withValues(alpha: 0.5),
+            color: AppColors.successGreen.withValues(alpha: 0.5),
           ),
           boxShadow: [
             BoxShadow(
-              color: AppColors.emerald.withValues(alpha: 0.35),
+              color: AppColors.successGreen.withValues(alpha: 0.35),
               blurRadius: 12,
               spreadRadius: -6,
             ),
@@ -395,10 +424,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: AppColors.surfaceMid,
+              color: AppColors.surfaceDark,
               borderRadius: AppSpacing.borderRadiusMd,
               border: Border.all(
-                color: AppColors.indigo.withValues(alpha: 0.2),
+                color: AppColors.primaryBlue.withValues(alpha: 0.2),
               ),
             ),
             child: Icon(
@@ -418,15 +447,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       shape: RoundedRectangleBorder(
         borderRadius: AppSpacing.borderRadiusLg,
       ),
-      color: AppColors.surfaceMid,
+      color: AppColors.surfaceDark,
       child: Container(
         width: 36,
         height: 36,
         decoration: BoxDecoration(
-          color: AppColors.surfaceMid,
+          color: AppColors.surfaceDark,
           borderRadius: AppSpacing.borderRadiusMd,
           border: Border.all(
-            color: AppColors.indigo.withValues(alpha: 0.3),
+            color: AppColors.primaryBlue.withValues(alpha: 0.3),
           ),
         ),
         child: Center(
@@ -466,11 +495,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           value: 'logout',
           child: Row(
             children: [
-              const Icon(Icons.logout_rounded, size: 18, color: AppColors.error),
+              const Icon(Icons.logout_rounded, size: 18, color: AppColors.dangerRed),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 'Logout',
-                style: AppTypography.bodyMedium.copyWith(color: AppColors.error),
+                style: AppTypography.bodyMedium.copyWith(color: AppColors.dangerRed),
               ),
             ],
           ),
@@ -492,12 +521,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Container(
               padding: const EdgeInsets.all(AppSpacing.sm),
               decoration: BoxDecoration(
-                color: AppColors.error.withValues(alpha: 0.1),
+                color: AppColors.dangerRed.withValues(alpha: 0.1),
                 borderRadius: AppSpacing.borderRadiusMd,
               ),
               child: const Icon(
                 Icons.logout_rounded,
-                color: AppColors.error,
+                color: AppColors.dangerRed,
               ),
             ),
             const SizedBox(width: AppSpacing.md),
@@ -512,7 +541,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.error,
+              backgroundColor: AppColors.dangerRed,
               foregroundColor: Colors.white,
             ),
             onPressed: () async {
@@ -533,10 +562,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Container(
       padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
       decoration: BoxDecoration(
-        color: AppColors.backgroundDarkest.withValues(alpha: 0.9),
+        color: AppColors.backgroundDark.withValues(alpha: 0.9),
         border: Border(
           top: BorderSide(
-            color: AppColors.indigo.withValues(alpha: 0.2),
+            color: AppColors.primaryBlue.withValues(alpha: 0.2),
           ),
         ),
       ),
@@ -546,7 +575,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           color: AppColors.backgroundDark,
           borderRadius: AppSpacing.borderRadiusLg,
           border: Border.all(
-            color: AppColors.indigo.withValues(alpha: 0.2),
+            color: AppColors.primaryBlue.withValues(alpha: 0.2),
           ),
         ),
         child: Row(
@@ -565,12 +594,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                   decoration: BoxDecoration(
                     color: isSelected
-                        ? AppColors.indigo.withValues(alpha: 0.2)
+                        ? AppColors.primaryBlue.withValues(alpha: 0.2)
                         : Colors.transparent,
                     borderRadius: AppSpacing.borderRadiusMd,
                     border: isSelected
                         ? Border.all(
-                            color: AppColors.indigo.withValues(alpha: 0.35),
+                            color: AppColors.primaryBlue.withValues(alpha: 0.35),
                           )
                         : null,
                   ),
@@ -579,14 +608,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     children: [
                       Icon(
                         item.icon,
-                        color: isSelected ? AppColors.indigoLight : Colors.white54,
+                        color: isSelected ? AppColors.primaryBlueLight : Colors.white54,
                         size: 24,
                       ),
                       const SizedBox(height: AppSpacing.xxs),
                       Text(
                         item.label,
                         style: AppTypography.labelSmall.copyWith(
-                          color: isSelected ? AppColors.indigoLight : Colors.white54,
+                          color: isSelected ? AppColors.primaryBlueLight : Colors.white54,
                           fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                         ),
                       ),
@@ -604,15 +633,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildDesktopContent() {
     switch (_currentIndex) {
       case 0:
-        return const StateSelectionScreen(showHeader: false);
+        return DashboardScreen(showHeader: false, onNavigateToTab: _onNavTap);
       case 1:
-        return const ScrapingScreen(showHeader: false);
+        return StateSelectionScreen(
+          showHeader: false,
+          onContinueToSearch: _startSearchFromCities,
+        );
       case 2:
-        return const ResultsScreen(showHeader: false);
+        return ScrapingScreen(
+          showHeader: false,
+          initialCategory: _scrapeInitialCategory,
+          initialCities: _scrapeInitialCities,
+          initialMaxResults: _scrapeInitialMaxResults,
+          onBackToCities: () => _onNavTap(1),
+        );
       case 3:
+        return const ResultsScreen(showHeader: false);
+      case 4:
         return const JobHistoryScreen(showHeader: false);
       default:
-        return const ScrapingScreen(showHeader: false);
+        return ScrapingScreen(
+          showHeader: false,
+          initialCategory: _scrapeInitialCategory,
+          initialCities: _scrapeInitialCities,
+          initialMaxResults: _scrapeInitialMaxResults,
+          onBackToCities: () => _onNavTap(1),
+        );
     }
   }
 }

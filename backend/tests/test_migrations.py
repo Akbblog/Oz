@@ -105,7 +105,14 @@ def test_users_table_has_credit_columns(db_connection):
         "credit_updated_at",
         "referral_code",
         "lifetime_credits_purchased",
-        "lifetime_spent_cents"
+        "lifetime_spent_cents",
+
+        # Approval metadata added by migration 007
+        "approved_at",
+        "approved_by",
+        "denied_at",
+        "denied_by",
+        "denied_reason",
     }
 
     for column in required_columns:

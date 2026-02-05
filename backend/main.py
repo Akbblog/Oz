@@ -3,11 +3,11 @@ FastAPI Backend for Google Business Scraper
 Provides REST API for scraping functionality with authentication
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import os
 import uuid
@@ -47,6 +47,91 @@ from auth import (
     verify_password, get_password_hash,
     create_access_token, decode_access_token
 )
+
+# ==================== ADMIN SETTINGS UTILITIES ====================
+
+APPROVAL_DENIED = -1
+APPROVAL_PENDING = 0
+APPROVAL_APPROVED = 1
+
+
+def _approval_state(value: object) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except Exception:
+        return APPROVAL_PENDING
+
+
+def _approval_state_label(value: object) -> str:
+    state = _approval_state(value)
+    if state == APPROVAL_APPROVED:
+        return "approved"
+    if state == APPROVAL_DENIED:
+        return "denied"
+    return "pending"
+
+
+def get_admin_setting(key: str, default: str = "") -> str:
+    """Get admin setting value from database."""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM admin_settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else default
+    except Exception:
+        return default
+
+
+def set_admin_setting(key: str, value: str, admin_id: int) -> None:
+    """Update admin setting in database."""
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+    cursor.execute("SELECT 1 FROM admin_settings WHERE key = ? LIMIT 1", (key,))
+    exists = cursor.fetchone() is not None
+    if exists:
+        cursor.execute(
+            """
+            UPDATE admin_settings
+            SET value = ?, updated_at = ?, updated_by = ?
+            WHERE key = ?
+            """,
+            (value, now, admin_id, key),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO admin_settings (key, value, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
+            """,
+            (key, value, now, admin_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_all_admin_settings() -> dict:
+    """Get all admin settings as a dictionary."""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM admin_settings")
+        rows = cursor.fetchall()
+        conn.close()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        return {}
+
+
+def _get_starting_credits() -> int:
+    raw = get_admin_setting("starting_credits", str(CREDITS_STARTING))
+    try:
+        credits = int(str(raw).strip())
+        return max(0, credits)
+    except Exception:
+        return int(CREDITS_STARTING)
 
 # ==================== CREDIT SYSTEM UTILITIES ====================
 
@@ -266,6 +351,7 @@ class ScrapingStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 class UserRegister(BaseModel):
     username: str
@@ -283,6 +369,10 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class BulkUserIdsRequest(BaseModel):
+    user_ids: List[int]
 
 class ScrapingRequest(BaseModel):
     category: str
@@ -441,6 +531,224 @@ class SubscriptionPlanUpdateRequest(BaseModel):
 
 # ==================== AUTHENTICATION ====================
 
+LOGIN_RATE_WINDOW_MINUTES = int(os.getenv("LOGIN_RATE_WINDOW_MINUTES", "10"))
+LOGIN_RATE_MAX_ATTEMPTS = int(os.getenv("LOGIN_RATE_MAX_ATTEMPTS", "8"))
+LOGIN_RATE_LOCKOUT_MINUTES = int(os.getenv("LOGIN_RATE_LOCKOUT_MINUTES", "10"))
+
+
+def _get_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _get_login_rate_limit_record(cursor, scope: str, identifier: str):
+    cursor.execute(
+        "SELECT id, window_start, attempts_in_window, locked_until FROM login_rate_limits WHERE scope = ? AND identifier = ?",
+        (scope, identifier),
+    )
+    return cursor.fetchone()
+
+
+def _upsert_login_rate_limit_record(
+    cursor,
+    record_id,
+    scope: str,
+    identifier: str,
+    window_start: str,
+    attempts_in_window: int,
+    locked_until: Optional[str],
+    last_attempt_at: Optional[str] = None,
+    last_success_at: Optional[str] = None,
+):
+    if record_id is None:
+        cursor.execute(
+            """
+            INSERT INTO login_rate_limits (
+                scope, identifier, window_start, attempts_in_window, locked_until, last_attempt_at, last_success_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scope,
+                identifier,
+                window_start,
+                attempts_in_window,
+                locked_until,
+                last_attempt_at,
+                last_success_at,
+            ),
+        )
+        return
+
+    cursor.execute(
+        """
+        UPDATE login_rate_limits
+        SET window_start = ?,
+            attempts_in_window = ?,
+            locked_until = ?,
+            last_attempt_at = COALESCE(?, last_attempt_at),
+            last_success_at = COALESCE(?, last_success_at)
+        WHERE id = ?
+        """,
+        (
+            window_start,
+            attempts_in_window,
+            locked_until,
+            last_attempt_at,
+            last_success_at,
+            record_id,
+        ),
+    )
+
+
+def _enforce_login_rate_limit(conn, scope: str, identifier: str):
+    """Raise HTTP 429 when the given identifier is currently locked out."""
+    cursor = conn.cursor()
+    now = datetime.now()
+    window_delta = timedelta(minutes=LOGIN_RATE_WINDOW_MINUTES)
+
+    row = _get_login_rate_limit_record(cursor, scope, identifier)
+    if not row:
+        _upsert_login_rate_limit_record(
+            cursor,
+            None,
+            scope,
+            identifier,
+            now.isoformat(),
+            0,
+            None,
+        )
+        conn.commit()
+        return
+
+    record_id, window_start_raw, attempts, locked_until_raw = row
+    try:
+        window_start = datetime.fromisoformat(window_start_raw) if window_start_raw else now
+    except Exception:
+        window_start = now
+
+    locked_until = None
+    if locked_until_raw:
+        try:
+            locked_until = datetime.fromisoformat(locked_until_raw)
+        except Exception:
+            locked_until = None
+
+    if locked_until and locked_until > now:
+        retry_after = max(1, int((locked_until - now).total_seconds()))
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    if window_start < now - window_delta:
+        _upsert_login_rate_limit_record(
+            cursor,
+            record_id,
+            scope,
+            identifier,
+            now.isoformat(),
+            0,
+            None,
+        )
+        conn.commit()
+
+
+def _record_login_failure(conn, scope: str, identifier: str) -> bool:
+    """
+    Record a failed attempt.
+
+    Returns True when the attempt caused a lockout.
+    """
+    cursor = conn.cursor()
+    now = datetime.now()
+    window_delta = timedelta(minutes=LOGIN_RATE_WINDOW_MINUTES)
+    lock_delta = timedelta(minutes=LOGIN_RATE_LOCKOUT_MINUTES)
+
+    row = _get_login_rate_limit_record(cursor, scope, identifier)
+    if row:
+        record_id, window_start_raw, attempts, _locked_until_raw = row
+        try:
+            window_start = datetime.fromisoformat(window_start_raw) if window_start_raw else now
+        except Exception:
+            window_start = now
+
+        if window_start < now - window_delta:
+            attempts = 0
+            window_start = now
+
+        attempts = int(attempts or 0) + 1
+        locked_until = None
+        locked = attempts >= LOGIN_RATE_MAX_ATTEMPTS
+        if locked:
+            locked_until = (now + lock_delta).isoformat()
+
+        _upsert_login_rate_limit_record(
+            cursor,
+            record_id,
+            scope,
+            identifier,
+            window_start.isoformat(),
+            attempts,
+            locked_until,
+            last_attempt_at=now.isoformat(),
+        )
+        conn.commit()
+        return locked
+
+    attempts = 1
+    locked = attempts >= LOGIN_RATE_MAX_ATTEMPTS
+    locked_until = (now + lock_delta).isoformat() if locked else None
+    _upsert_login_rate_limit_record(
+        cursor,
+        None,
+        scope,
+        identifier,
+        now.isoformat(),
+        attempts,
+        locked_until,
+        last_attempt_at=now.isoformat(),
+    )
+    conn.commit()
+    return locked
+
+
+def _record_login_success(conn, scope: str, identifier: str):
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+    row = _get_login_rate_limit_record(cursor, scope, identifier)
+    if not row:
+        _upsert_login_rate_limit_record(
+            cursor,
+            None,
+            scope,
+            identifier,
+            now,
+            0,
+            None,
+            last_success_at=now,
+        )
+        conn.commit()
+        return
+
+    record_id = row[0]
+    _upsert_login_rate_limit_record(
+        cursor,
+        record_id,
+        scope,
+        identifier,
+        now,
+        0,
+        None,
+        last_success_at=now,
+    )
+    conn.commit()
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get current authenticated user"""
     token = credentials.credentials
@@ -471,11 +779,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             detail="User not found"
         )
     
-    if not user[3]:  # is_approved
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account pending approval"
-        )
+    approval_state = _approval_state(user[3])
+    if approval_state != APPROVAL_APPROVED:
+        detail = "Account pending approval"
+        if approval_state == APPROVAL_DENIED:
+            detail = "Account denied"
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
     
     return {
         "id": user[0],
@@ -496,8 +805,8 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)):
 # ==================== AUTH ENDPOINTS ====================
 
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserRegister):
-    """Register a new user (requires approval)"""
+async def register(user_data: UserRegister, background_tasks: BackgroundTasks):
+    """Register a new user (can be auto-approved if setting enabled)"""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -513,21 +822,28 @@ async def register(user_data: UserRegister):
         conn.close()
         raise HTTPException(status_code=400, detail="Email already exists")
     
-    # Create user (not approved by default)
+    # Check if auto-approve is enabled
+    auto_approve = get_admin_setting("auto_approve_users", "false") == "true"
+    starting_credits = _get_starting_credits()
+    
+    # Create user with proper approval status and credits
     password_hash = get_password_hash(user_data.password)
+    created_at = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO users (username, email, password_hash, is_approved, created_at)
-        VALUES (?, ?, ?, ?, ?)
-    """, (user_data.username, user_data.email, password_hash, 0, datetime.now().isoformat()))
+        INSERT INTO users (username, email, password_hash, is_approved, credit_balance, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_data.username, user_data.email, password_hash, 
+          1 if auto_approve else 0,
+          starting_credits if auto_approve else 0,
+          created_at))
     
     conn.commit()
     user_id = cursor.lastrowid
     conn.close()
 
-    # Optional referral capture (doesn't require approval, just records link)
+    # Optional referral capture
     try:
         from promotions.referral_service import ReferralService
-
         if user_data.referral_code:
             ReferralService().record_referral_signup(
                 referred_user_id=int(user_id),
@@ -535,41 +851,147 @@ async def register(user_data: UserRegister):
             )
     except Exception:
         pass
+
+    if auto_approve:
+        # Mark approval metadata + record starting credits in ledger (best effort).
+        try:
+            conn2 = get_db()
+            cursor2 = conn2.cursor()
+            cursor2.execute(
+                "UPDATE users SET approved_at = ?, approved_by = NULL WHERE id = ?",
+                (created_at, user_id),
+            )
+            conn2.commit()
+            conn2.close()
+        except Exception:
+            pass
+
+        try:
+            from promotions.referral_service import ReferralService
+            ReferralService().ensure_user_referral_code(int(user_id))
+        except Exception:
+            pass
+
+        try:
+            record_credit_transaction(
+                user_id=int(user_id),
+                amount=starting_credits,
+                balance_after=starting_credits,
+                transaction_type="credit",
+                reason="Starting credits on auto-approval",
+                created_by=None,
+            )
+        except Exception:
+            pass
+    else:
+        # Notify admins of new pending signup (best effort).
+        try:
+            if get_admin_setting("admin_notification_on_signup", "true") == "true":
+                from notifications.email_service import send_admin_new_signup_email
+
+                recipients: List[str] = []
+                try:
+                    configured = getattr(config, "ADMIN_NOTIFICATION_EMAILS", None) or []
+                    recipients = [e for e in configured if isinstance(e, str) and e.strip()]
+                except Exception:
+                    recipients = []
+
+                if not recipients:
+                    conn3 = get_db()
+                    cursor3 = conn3.cursor()
+                    cursor3.execute(
+                        "SELECT email FROM users WHERE is_admin = 1 AND is_approved = 1 AND email IS NOT NULL AND TRIM(email) != ''"
+                    )
+                    recipients = [r[0] for r in (cursor3.fetchall() or []) if r and r[0]]
+                    conn3.close()
+
+                for to_email in recipients:
+                    background_tasks.add_task(
+                        send_admin_new_signup_email,
+                        to_email=to_email,
+                        username=user_data.username,
+                        user_email=user_data.email,
+                        created_at_iso=created_at,
+                    )
+        except Exception:
+            pass
     
-    return {"message": "Registration successful. Please wait for admin approval."}
+    # Send appropriate email
+    try:
+        if auto_approve:
+            # Send welcome email to auto-approved user
+            if get_admin_setting("send_welcome_email", "true") == "true":
+                from notifications.email_service import send_welcome_email
+                background_tasks.add_task(
+                    send_welcome_email,
+                    to_email=user_data.email,
+                    username=user_data.username,
+                    email=user_data.email,
+                    starting_credits=starting_credits,
+                )
+            return {"message": "Registration successful! You can now log in."}
+        else:
+            return {"message": "Registration successful. Please wait for admin approval."}
+    except Exception as e:
+        logging.error(f"Error sending welcome email: {e}")
+        if auto_approve:
+            return {"message": "Registration successful! You can now log in."}
+        else:
+            return {"message": "Registration successful. Please wait for admin approval."}
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
+async def login(credentials: UserLogin, request: Request):
     """Login and get access token"""
+    ip = _get_client_ip(request)
+    identifier_username = (credentials.username or "").strip().lower()
+
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Allow users to sign in with either their username or their email
-    cursor.execute(
-        "SELECT id, username, email, password_hash, is_approved, is_admin FROM users WHERE username = ? OR email = ?",
-        (credentials.username, credentials.username),
-    )
-    user = cursor.fetchone()
-    conn.close()
-    
-    if not user or not verify_password(credentials.password, user[3]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
+
+    try:
+        _enforce_login_rate_limit(conn, "ip", ip)
+        if identifier_username:
+            _enforce_login_rate_limit(conn, "username", identifier_username)
+
+        # Allow users to sign in with either their username or their email
+        cursor.execute(
+            "SELECT id, username, email, password_hash, is_approved, is_admin FROM users WHERE username = ? OR email = ?",
+            (credentials.username, credentials.username),
         )
-    
-    if not user[4]:  # is_approved
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account pending approval"
-        )
-    
-    # Update last login
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET last_login = ? WHERE id = ?", (datetime.now().isoformat(), user[0]))
-    conn.commit()
-    conn.close()
+        user = cursor.fetchone()
+
+        if not user or not verify_password(credentials.password, user[3]):
+            locked_ip = _record_login_failure(conn, "ip", ip)
+            locked_user = False
+            if identifier_username:
+                locked_user = _record_login_failure(conn, "username", identifier_username)
+
+            if locked_ip or locked_user:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many login attempts. Please try again later.",
+                )
+
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+
+        approval_state = _approval_state(user[4])
+        if approval_state != APPROVAL_APPROVED:
+            detail = "Account pending approval"
+            if approval_state == APPROVAL_DENIED:
+                detail = "Account denied"
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+        _record_login_success(conn, "ip", ip)
+        if identifier_username:
+            _record_login_success(conn, "username", identifier_username)
+
+        cursor.execute("UPDATE users SET last_login = ? WHERE id = ?", (datetime.now().isoformat(), user[0]))
+        conn.commit()
+    finally:
+        conn.close()
     
     # Create token
     access_token = create_access_token(data={"sub": user[1]})
@@ -714,7 +1136,9 @@ async def reset_password(request: ResetPasswordRequest):
 async def _debug_list_users():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, is_approved, is_admin, created_at, last_login FROM users ORDER BY id DESC")
+    cursor.execute(
+        "SELECT id, username, email, is_approved, is_admin, created_at, last_login, approved_at, denied_at, denied_reason FROM users ORDER BY id DESC"
+    )
     users = cursor.fetchall()
     conn.close()
     return {
@@ -723,10 +1147,15 @@ async def _debug_list_users():
                 "id": u[0],
                 "username": u[1],
                 "email": u[2],
-                "is_approved": bool(u[3]),
+                "approval_status": _approval_state(u[3]),
+                "approval_state": _approval_state_label(u[3]),
+                "is_approved": _approval_state(u[3]) == APPROVAL_APPROVED,
                 "is_admin": bool(u[4]),
                 "created_at": u[5],
                 "last_login": u[6],
+                "approved_at": u[7],
+                "denied_at": u[8],
+                "denied_reason": u[9],
             }
             for u in users
         ]
@@ -740,7 +1169,8 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, username, email, is_approved, is_admin, credit_balance, created_at, last_login
+        SELECT id, username, email, is_approved, is_admin, credit_balance, created_at, last_login,
+               approved_at, approved_by, denied_at, denied_by, denied_reason
         FROM users ORDER BY created_at DESC
     """)
     users = cursor.fetchall()
@@ -752,38 +1182,69 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "id": u[0],
                 "username": u[1],
                 "email": u[2],
-                "is_approved": bool(u[3]),
+                "approval_status": _approval_state(u[3]),
+                "approval_state": _approval_state_label(u[3]),
+                "is_approved": _approval_state(u[3]) == APPROVAL_APPROVED,
+                "is_denied": _approval_state(u[3]) == APPROVAL_DENIED,
                 "is_admin": bool(u[4]),
                 "credit_balance": u[5] or 0,
                 "created_at": u[6],
-                "last_login": u[7]
+                "last_login": u[7],
+                "approved_at": u[8],
+                "approved_by": u[9],
+                "denied_at": u[10],
+                "denied_by": u[11],
+                "denied_reason": u[12],
             }
             for u in users
         ]
     }
 
 @app.post("/api/admin/users/{user_id}/approve")
-async def approve_user(user_id: int, admin: dict = Depends(get_admin_user)):
+async def approve_user(
+    user_id: int,
+    background_tasks: BackgroundTasks,
+    admin: dict = Depends(get_admin_user),
+):
     """Approve a user and grant starting credits (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
 
     # Check if user exists and is not already approved
-    cursor.execute("SELECT is_approved, credit_balance FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT is_approved, credit_balance, email, username FROM users WHERE id = ?", (user_id,))
     user = cursor.fetchone()
     if not user:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
 
-    if user[0]:  # already approved
+    approval_state = _approval_state(user[0])
+    if approval_state == APPROVAL_APPROVED:
         conn.close()
         return {"message": "User already approved"}
+    if approval_state == APPROVAL_DENIED:
+        conn.close()
+        raise HTTPException(status_code=400, detail="User is denied. Restore the user before approving.")
+
+    user_email = user[2]
+    username = user[3]
+    current_balance = int(user[1] or 0)
+    starting_credits = _get_starting_credits()
+    new_balance = current_balance + starting_credits
+    now = datetime.now().isoformat()
 
     # Approve user and grant starting credits
     cursor.execute("""
-        UPDATE users SET is_approved = 1, credit_balance = ?, credit_updated_at = ?
+        UPDATE users
+        SET is_approved = 1,
+            credit_balance = ?,
+            credit_updated_at = ?,
+            approved_at = ?,
+            approved_by = ?,
+            denied_at = NULL,
+            denied_by = NULL,
+            denied_reason = NULL
         WHERE id = ?
-    """, (CREDITS_STARTING, datetime.now().isoformat(), user_id))
+    """, (new_balance, now, now, admin["id"], user_id))
     conn.commit()
     conn.close()
 
@@ -797,14 +1258,217 @@ async def approve_user(user_id: int, admin: dict = Depends(get_admin_user)):
     # Record the credit grant in ledger
     record_credit_transaction(
         user_id=user_id,
-        amount=CREDITS_STARTING,
-        balance_after=CREDITS_STARTING,
+        amount=starting_credits,
+        balance_after=new_balance,
         transaction_type="credit",
         reason="Starting credits on account approval",
         created_by=admin["id"]
     )
 
-    return {"message": f"User approved successfully with {CREDITS_STARTING} starting credits"}
+    # Send approval email if enabled
+    try:
+        if get_admin_setting("send_approval_email", "true") == "true" and user_email:
+            from notifications.email_service import send_approval_email
+            background_tasks.add_task(
+                send_approval_email,
+                to_email=user_email,
+                username=username,
+                starting_credits=starting_credits,
+            )
+    except Exception as e:
+        logging.error(f"Error sending approval email: {e}")
+
+    return {"message": f"User approved successfully with {starting_credits} starting credits"}
+
+
+@app.post("/api/admin/users/bulk-approve")
+async def bulk_approve_users(
+    payload: BulkUserIdsRequest,
+    background_tasks: BackgroundTasks,
+    admin: dict = Depends(get_admin_user),
+):
+    """Bulk-approve users (admin only)."""
+    user_ids = sorted({int(u) for u in (payload.user_ids or []) if int(u) > 0})
+    if not user_ids:
+        return {"approved": 0, "skipped": 0, "not_found": 0, "user_ids": []}
+
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+    starting_credits = _get_starting_credits()
+
+    approved_ids: List[int] = []
+    skipped_ids: List[int] = []
+    not_found_ids: List[int] = []
+    approved_infos: List[Tuple[int, Optional[str], Optional[str], int]] = []
+
+    try:
+        for user_id in user_ids:
+            cursor.execute("SELECT is_approved, credit_balance, email, username FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                not_found_ids.append(user_id)
+                continue
+
+            state = _approval_state(row[0])
+            if state != APPROVAL_PENDING:
+                skipped_ids.append(user_id)
+                continue
+
+            current_balance = int(row[1] or 0)
+            new_balance = current_balance + starting_credits
+
+            cursor.execute(
+                """
+                UPDATE users
+                SET is_approved = 1,
+                    credit_balance = ?,
+                    credit_updated_at = ?,
+                    approved_at = ?,
+                    approved_by = ?,
+                    denied_at = NULL,
+                    denied_by = NULL,
+                    denied_reason = NULL
+                WHERE id = ?
+                """,
+                (new_balance, now, now, admin["id"], user_id),
+            )
+            approved_ids.append(user_id)
+            approved_infos.append((user_id, row[2], row[3], new_balance))
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Best-effort post-approval steps (ledger + referral code)
+    for user_id, user_email, username, new_balance in approved_infos:
+        try:
+            from promotions.referral_service import ReferralService
+            ReferralService().ensure_user_referral_code(user_id)
+        except Exception:
+            pass
+
+        try:
+            record_credit_transaction(
+                user_id=user_id,
+                amount=starting_credits,
+                balance_after=new_balance,
+                transaction_type="credit",
+                reason="Starting credits on account approval (bulk)",
+                created_by=admin["id"],
+            )
+        except Exception:
+            pass
+
+        try:
+            if get_admin_setting("send_approval_email", "true") == "true" and user_email and username:
+                from notifications.email_service import send_approval_email
+                background_tasks.add_task(
+                    send_approval_email,
+                    to_email=user_email,
+                    username=username,
+                    starting_credits=starting_credits,
+                )
+        except Exception:
+            pass
+
+    return {
+        "approved": len(approved_ids),
+        "skipped": len(skipped_ids),
+        "not_found": len(not_found_ids),
+        "user_ids": approved_ids,
+    }
+
+@app.post("/api/admin/users/{user_id}/deny")
+async def deny_user(
+    user_id: int,
+    background_tasks: BackgroundTasks,
+    admin_note: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Deny/reject a user registration (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Check if user exists and is not approved
+    cursor.execute("SELECT is_approved, email, username FROM users WHERE id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    approval_state = _approval_state(user[0])
+    if approval_state == APPROVAL_APPROVED:
+        conn.close()
+        raise HTTPException(status_code=400, detail="User is already approved")
+    if approval_state == APPROVAL_DENIED:
+        conn.close()
+        return {"message": "User is already denied"}
+
+    user_email = user[1]
+    username = user[2]
+
+    # Delete or mark as denied (we'll mark them with is_denied flag, or delete)
+    # For now, let's soft delete by setting is_approved to -1 (denied state)
+    cursor.execute("""
+        UPDATE users
+        SET is_approved = -1,
+            denied_at = ?,
+            denied_by = ?,
+            denied_reason = ?,
+            approved_at = NULL,
+            approved_by = NULL
+        WHERE id = ?
+    """, (datetime.now().isoformat(), admin["id"], (admin_note or None), user_id))
+    conn.commit()
+    conn.close()
+
+    # Send rejection email if enabled
+    try:
+        if get_admin_setting("send_rejection_email", "true") == "true" and user_email:
+            from notifications.email_service import send_rejection_email
+            background_tasks.add_task(
+                send_rejection_email,
+                to_email=user_email,
+                username=username,
+                admin_note=admin_note,
+            )
+    except Exception as e:
+        logging.error(f"Error sending rejection email: {e}")
+
+    return {"message": "User registration denied"}
+
+
+@app.post("/api/admin/users/{user_id}/restore")
+async def restore_user(user_id: int, admin: dict = Depends(get_admin_user)):
+    """Restore a denied user back to pending status (admin only)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_approved FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    state = _approval_state(row[0])
+    if state != APPROVAL_DENIED:
+        conn.close()
+        raise HTTPException(status_code=400, detail="User is not denied")
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET is_approved = 0,
+            denied_at = NULL,
+            denied_by = NULL,
+            denied_reason = NULL
+        WHERE id = ?
+        """,
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
+    return {"message": "User restored to pending approval"}
 
 @app.delete("/api/admin/users/{user_id}")
 async def delete_user(user_id: int, admin: dict = Depends(get_admin_user)):
@@ -888,6 +1552,50 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
     }
 
 
+# ==================== ADMIN SETTINGS ENDPOINTS ====================
+
+@app.get("/api/admin/settings")
+async def get_all_settings(admin: dict = Depends(get_admin_user)):
+    """Get all admin settings (admin only)"""
+    return get_all_admin_settings()
+
+
+@app.get("/api/admin/settings/{key}")
+async def get_setting(key: str, admin: dict = Depends(get_admin_user)):
+    """Get a specific admin setting (admin only)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM admin_settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
+    return {"key": key, "value": row[0]}
+
+
+class AdminSettingUpdate(BaseModel):
+    value: str
+
+
+@app.put("/api/admin/settings/{key}")
+async def update_setting(
+    key: str,
+    payload: Optional[AdminSettingUpdate] = Body(default=None),
+    value: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Update an admin setting (admin only)"""
+    new_value = payload.value if payload is not None else value
+    if new_value is None:
+        raise HTTPException(status_code=400, detail="Missing setting value")
+    set_admin_setting(key, str(new_value), admin["id"])
+    return {
+        "message": f"Setting '{key}' updated successfully",
+        "key": key,
+        "value": str(new_value),
+    }
+
+
 # ==================== CREDIT ENDPOINTS ====================
 
 class CreditEstimateRequest(BaseModel):
@@ -903,6 +1611,11 @@ class CreditRequestModel(BaseModel):
 class AdminCreditGrant(BaseModel):
     amount: int
     reason: Optional[str] = None
+
+
+class BulkCreditRequestIdsRequest(BaseModel):
+    request_ids: List[int]
+    admin_note: Optional[str] = None
 
 
 @app.get("/api/credits/config")
@@ -1088,6 +1801,64 @@ async def approve_credit_request(request_id: int, admin: dict = Depends(get_admi
     return {"message": "Credit request approved", "new_balance": new_balance}
 
 
+@app.post("/api/admin/credits/requests/bulk-approve")
+async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, admin: dict = Depends(get_admin_user)):
+    """Bulk-approve credit requests (admin only)."""
+    request_ids = sorted({int(r) for r in (payload.request_ids or []) if int(r) > 0})
+    if not request_ids:
+        return {"approved": 0, "skipped": 0, "not_found": 0, "request_ids": []}
+
+    approved_ids: List[int] = []
+    skipped_ids: List[int] = []
+    not_found_ids: List[int] = []
+
+    for request_id in request_ids:
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT user_id, amount_requested FROM credit_requests WHERE id = ? AND status = 'pending'",
+                (request_id,),
+            )
+            req = cursor.fetchone()
+            if not req:
+                cursor.execute("SELECT 1 FROM credit_requests WHERE id = ?", (request_id,))
+                exists = cursor.fetchone()
+                if exists:
+                    skipped_ids.append(request_id)
+                else:
+                    not_found_ids.append(request_id)
+                continue
+
+            user_id, amount = req
+            cursor.execute(
+                """
+                UPDATE credit_requests
+                SET status = 'approved', reviewed_by = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (admin["id"], datetime.now().isoformat(), request_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        try:
+            add_credits(int(user_id), int(amount), "Credit request approved (bulk)", admin["id"])
+        except Exception:
+            # Request is already approved; keep going (matches single-endpoint semantics).
+            pass
+
+        approved_ids.append(request_id)
+
+    return {
+        "approved": len(approved_ids),
+        "skipped": len(skipped_ids),
+        "not_found": len(not_found_ids),
+        "request_ids": approved_ids,
+    }
+
+
 @app.post("/api/admin/credits/requests/{request_id}/deny")
 async def deny_credit_request(request_id: int, admin_note: Optional[str] = None, admin: dict = Depends(get_admin_user)):
     """Deny a credit request (admin only)"""
@@ -1106,6 +1877,49 @@ async def deny_credit_request(request_id: int, admin_note: Optional[str] = None,
     conn.close()
 
     return {"message": "Credit request denied"}
+
+
+@app.post("/api/admin/credits/requests/bulk-deny")
+async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, admin: dict = Depends(get_admin_user)):
+    """Bulk-deny credit requests (admin only)."""
+    request_ids = sorted({int(r) for r in (payload.request_ids or []) if int(r) > 0})
+    if not request_ids:
+        return {"denied": 0, "skipped": 0, "not_found": 0, "request_ids": []}
+
+    conn = get_db()
+    cursor = conn.cursor()
+    denied_ids: List[int] = []
+    skipped_ids: List[int] = []
+    not_found_ids: List[int] = []
+    now = datetime.now().isoformat()
+
+    try:
+        for request_id in request_ids:
+            cursor.execute(
+                "UPDATE credit_requests SET status = 'denied', admin_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'",
+                (payload.admin_note, admin["id"], now, request_id),
+            )
+            if cursor.rowcount > 0:
+                denied_ids.append(request_id)
+                continue
+
+            cursor.execute("SELECT 1 FROM credit_requests WHERE id = ?", (request_id,))
+            exists = cursor.fetchone()
+            if exists:
+                skipped_ids.append(request_id)
+            else:
+                not_found_ids.append(request_id)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "denied": len(denied_ids),
+        "skipped": len(skipped_ids),
+        "not_found": len(not_found_ids),
+        "request_ids": denied_ids,
+    }
 
 
 @app.post("/api/admin/users/{user_id}/credits")
@@ -1407,7 +2221,7 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
             # Check if job was cancelled
             cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
             job_status = cursor.fetchone()
-            if job_status and job_status[0] == "failed":
+            if job_status and job_status[0] in ("failed", "cancelled"):
                 break
             
             # Parse city and state
@@ -1467,6 +2281,18 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                 
                 await asyncio.sleep(1)
         
+        # If job was cancelled/failed, do not mark it as completed.
+        cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+        final_status_row = cursor.fetchone()
+        if final_status_row and final_status_row[0] in ("failed", "cancelled"):
+            if final_status_row[0] == "cancelled":
+                cursor.execute(
+                    "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                    (job_id, "Job cancelled by user", datetime.now().isoformat()),
+                )
+                conn.commit()
+            return
+
         # Save results to CSV file
         if all_results:
             filename = f"{RESULTS_DIR}/results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -1576,6 +2402,83 @@ async def create_scraping_job(
         created_at=datetime.now().isoformat(),
         logs=[f"Job created for category: {request.category}", f"Credits charged: {credit_cost}"]
     )
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_scraping_job(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Cancel a pending/running scraping job (best-effort)."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT user_id, status FROM jobs WHERE job_id = ?", (job_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_user_id, status_value = row[0], row[1]
+    if job_user_id != current_user["id"] and current_user.get("is_admin") is not True:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Not authorized to cancel this job")
+
+    if status_value in ("completed", "failed", "cancelled"):
+        conn.close()
+        return {"message": f"Job already {status_value}"}
+
+    now = datetime.now().isoformat()
+    cursor.execute(
+        """
+        UPDATE jobs
+        SET status = ?, error = ?, completed_at = ?
+        WHERE job_id = ?
+        """,
+        ("cancelled", "Cancelled by user", now, job_id),
+    )
+    cursor.execute(
+        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+        (job_id, "Cancellation requested by user", now),
+    )
+
+    conn.commit()
+    conn.close()
+    return {"message": "Cancellation requested"}
+
+
+@app.delete("/api/jobs/{job_id}")
+async def delete_scraping_job(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a completed/failed/cancelled job and its results/logs (owner or admin)."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT user_id, status FROM jobs WHERE job_id = ?", (job_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_user_id, status_value = row[0], row[1]
+    if job_user_id != current_user["id"] and current_user.get("is_admin") is not True:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if status_value in ("pending", "running"):
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail="Job is running. Cancel it first, then delete.",
+        )
+
+    cursor.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+
+    return {"message": "Job deleted"}
 
 @app.get("/api/jobs/{job_id}", response_model=ScrapingJob)
 async def get_job_status(job_id: str, current_user: dict = Depends(get_current_user)):
@@ -2047,6 +2950,81 @@ async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class SimplePurchaseRequest(BaseModel):
+    credits: int  # Must be >= 100
+    promo_code: Optional[str] = None
+
+
+@app.post("/api/payments/simple-purchase")
+async def simple_purchase(
+    request: SimplePurchaseRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Simple credit purchase: $0.10 per credit (flat rate)"""
+    if request.credits < 100:
+        raise HTTPException(status_code=400, detail="Minimum purchase is 100 credits")
+
+    # Calculate price in cents
+    base_cents = request.credits * 10  # $0.10 = 10 cents per credit
+    discount_cents = 0
+    promo_name = ""
+
+    # Apply promo code if provided
+    if request.promo_code:
+        try:
+            promo = PromoService().validate_promo_code(
+                code=request.promo_code,
+                user_id=current_user["id"]
+            )
+            if promo:
+                if promo.get("type") == "percentage":
+                    discount_cents = int(base_cents * (promo.get("value", 0) / 100))
+                elif promo.get("type") == "fixed":
+                    discount_cents = int(promo.get("value", 0) * 100)  # Convert $ to cents
+                promo_name = promo.get("name", request.promo_code)
+        except Exception as e:
+            logging.warning(f"Promo code validation failed: {e}")
+
+    total_cents = max(0, base_cents - discount_cents)
+
+    # Create Stripe checkout session
+    try:
+        import stripe
+        stripe.api_key = config.STRIPE_SECRET_KEY
+
+        session = stripe.checkout.Session.create(
+            line_items=[{
+                'price_data': {
+                    'currency': 'usd',
+                    'unit_amount': total_cents,
+                    'product_data': {'name': f'{request.credits} Credits'},
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url=f'{config.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}',
+            cancel_url=f'{config.FRONTEND_URL}/wallet',
+            metadata={
+                'user_id': str(current_user['id']),
+                'credits': str(request.credits),
+                'promo_code': request.promo_code or '',
+            }
+        )
+
+        return {
+            "checkout_url": session.url,
+            "session_id": session.id,
+            "credits": request.credits,
+            "subtotal_cents": base_cents,
+            "discount_cents": discount_cents,
+            "total_cents": total_cents,
+            "promo_applied": promo_name if discount_cents > 0 else None,
+        }
+    except Exception as e:
+        logging.error(f"Stripe session creation failed: {e}")
+        raise HTTPException(status_code=400, detail="Failed to create checkout session")
+
+
 @app.post("/api/payments/crypto/create-charge")
 async def create_crypto_charge(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
     """
@@ -2206,7 +3184,7 @@ async def list_my_transactions(current_user: dict = Depends(get_current_user)):
             "created_at": r[14],
             "updated_at": r[15],
         })
-    return txns
+    return {"transactions": txns}
 
 
 @app.get("/api/payments/transactions/{transaction_id}")

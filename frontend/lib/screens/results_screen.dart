@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,6 +10,7 @@ import '../core/theme/app_typography.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
+import '../widgets/progress_stepper.dart';
 import '../widgets/infinity_data_table.dart';
 
 class ResultsScreen extends StatefulWidget {
@@ -42,14 +44,21 @@ class _ResultsScreenState extends State<ResultsScreen>
   // Search and filter state
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
-  String _activeFilter = 'All'; // All, Has Phone, Has Website
   String _sortOption = 'Newest'; // Newest, Name A-Z, Category
   String _viewMode = 'Cards'; // Cards, Table
+  String _cityFilter = 'All Cities';
+  bool _contactMatchAll = false; // Any vs All selected contact filters
+  bool _requireWebsite = false;
   Set<String> _contactFilters = {
     'Phone',
     'Website',
     'Maps'
   }; // Contact type filters
+
+  // Table view state (bulk actions)
+  Set<int> _selectedTableRows = {};
+  int? _tableSortColumnIndex;
+  bool _tableSortAscending = true;
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -70,6 +79,30 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   @override
+  void didUpdateWidget(covariant ResultsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final jobIdChanged = widget.jobId != oldWidget.jobId;
+    final overrideResultsChanged =
+        widget.overrideResults != oldWidget.overrideResults;
+
+    if (jobIdChanged || overrideResultsChanged) {
+      _error = null;
+      _loadedResults = [];
+      _selectedTableRows = {};
+      _tableSortColumnIndex = null;
+      _tableSortAscending = true;
+
+      if (jobIdChanged) {
+        _searchController.text = '';
+        _searchQuery = '';
+        _cityFilter = 'All Cities';
+      }
+
+      _loadIfNeeded();
+    }
+  }
+
+  @override
   void dispose() {
     _animationController.dispose();
     _searchController.dispose();
@@ -84,6 +117,7 @@ class _ResultsScreenState extends State<ResultsScreen>
     setState(() {
       _isLoading = true;
       _error = null;
+      _loadedResults = [];
     });
 
     try {
@@ -123,7 +157,7 @@ class _ResultsScreenState extends State<ResultsScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to refresh results: $e'),
-            backgroundColor: AppColors.rose,
+            backgroundColor: AppColors.dangerRed,
           ),
         );
       }
@@ -134,7 +168,7 @@ class _ResultsScreenState extends State<ResultsScreen>
     if (widget.overrideResults != null) {
       return widget.overrideResults!;
     }
-    if (_loadedResults.isNotEmpty) {
+    if (widget.jobId != null) {
       return _loadedResults;
     }
     return scraperProvider.currentJob?.results ?? [];
@@ -145,14 +179,29 @@ class _ResultsScreenState extends State<ResultsScreen>
     var filtered = results.where((business) {
       // Apply search filter
       if (_searchQuery.isNotEmpty) {
-        final name = (business['name'] ?? '').toString().toLowerCase();
+        final name =
+            (business['business_name'] ?? business['name'] ?? '')
+                .toString()
+                .toLowerCase();
         final category = (business['category'] ?? '').toString().toLowerCase();
         final city = (business['city'] ?? '').toString().toLowerCase();
+        final address = (business['address'] ?? '').toString().toLowerCase();
         final query = _searchQuery.toLowerCase();
 
         if (!name.contains(query) &&
             !category.contains(query) &&
-            !city.contains(query)) {
+            !city.contains(query) &&
+            !address.contains(query)) {
+          return false;
+        }
+      }
+
+      // City filter
+      if (_cityFilter != 'All Cities') {
+        final city = (business['city'] ?? '').toString().trim();
+        final state = (business['state'] ?? '').toString().trim();
+        final cityState = state.isEmpty ? city : '$city, $state';
+        if (cityState != _cityFilter) {
           return false;
         }
       }
@@ -164,26 +213,38 @@ class _ResultsScreenState extends State<ResultsScreen>
       final hasWebsite = business['website'] != null &&
           (business['website'] ?? '').toString().isNotEmpty &&
           business['website'] != 'N/A';
+      final hasAddress = business['address'] != null &&
+          (business['address'] ?? '').toString().isNotEmpty &&
+          business['address'] != 'N/A';
+
+      if (_requireWebsite && !hasWebsite) return false;
 
       // If no filters selected, show all
       if (_contactFilters.isEmpty) return true;
 
-      // Check if business matches selected filters
+      if (_contactMatchAll) {
+        if (_contactFilters.contains('Phone') && !hasPhone) return false;
+        if (_contactFilters.contains('Website') && !hasWebsite) return false;
+        if (_contactFilters.contains('Maps') && !hasAddress) return false;
+        return true;
+      }
+
+      // Match ANY selected filter (OR logic)
       if (_contactFilters.contains('Phone') && hasPhone) return true;
       if (_contactFilters.contains('Website') && hasWebsite) return true;
-      if (_contactFilters.contains('Maps'))
-        return true; // Maps is always available
-
+      if (_contactFilters.contains('Maps') && hasAddress) return true;
       return false;
-
-      return true;
     }).toList();
 
     // Apply sorting
     if (_sortOption == 'Name A-Z') {
       filtered.sort((a, b) {
-        final nameA = (a['name'] ?? '').toString().toLowerCase();
-        final nameB = (b['name'] ?? '').toString().toLowerCase();
+        final nameA = (a['business_name'] ?? a['name'] ?? '')
+            .toString()
+            .toLowerCase();
+        final nameB = (b['business_name'] ?? b['name'] ?? '')
+            .toString()
+            .toLowerCase();
         return nameA.compareTo(nameB);
       });
     } else if (_sortOption == 'Category') {
@@ -191,6 +252,19 @@ class _ResultsScreenState extends State<ResultsScreen>
         final catA = (a['category'] ?? '').toString().toLowerCase();
         final catB = (b['category'] ?? '').toString().toLowerCase();
         return catA.compareTo(catB);
+      });
+    } else if (_sortOption == 'City') {
+      filtered.sort((a, b) {
+        final cityA = (a['city'] ?? '').toString().toLowerCase();
+        final cityB = (b['city'] ?? '').toString().toLowerCase();
+        if (cityA != cityB) return cityA.compareTo(cityB);
+        final nameA = (a['business_name'] ?? a['name'] ?? '')
+            .toString()
+            .toLowerCase();
+        final nameB = (b['business_name'] ?? b['name'] ?? '')
+            .toString()
+            .toLowerCase();
+        return nameA.compareTo(nameB);
       });
     }
     // 'Newest' keeps the original order
@@ -214,7 +288,7 @@ class _ResultsScreenState extends State<ResultsScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Could not open: $url'),
-            backgroundColor: AppColors.rose,
+            backgroundColor: AppColors.dangerRed,
           ),
         );
       }
@@ -223,7 +297,7 @@ class _ResultsScreenState extends State<ResultsScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error opening URL: $e'),
-            backgroundColor: AppColors.rose,
+            backgroundColor: AppColors.dangerRed,
           ),
         );
       }
@@ -275,6 +349,7 @@ class _ResultsScreenState extends State<ResultsScreen>
               } else {
                 _contactFilters.add(filter);
               }
+              _selectedTableRows = {};
             });
           },
           child: AnimatedContainer(
@@ -285,13 +360,13 @@ class _ResultsScreenState extends State<ResultsScreen>
             ),
             decoration: BoxDecoration(
               color: isActive
-                  ? AppColors.primaryViolet.withValues(alpha: 0.2)
-                  : AppColors.backgroundCard,
+                  ? AppColors.primaryBlue.withValues(alpha: 0.18)
+                  : AppColors.elevatedCardDark,
               borderRadius: AppSpacing.borderRadiusSm,
               border: Border.all(
                 color: isActive
-                    ? AppColors.primaryViolet
-                    : Colors.white.withValues(alpha: 0.1),
+                    ? AppColors.primaryBlueLight.withValues(alpha: 0.85)
+                    : Colors.white.withValues(alpha: 0.08),
                 width: isActive ? 1.5 : 1,
               ),
             ),
@@ -305,7 +380,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                           ? Icons.language_rounded
                           : Icons.location_on_rounded,
                   size: 14,
-                  color: isActive ? AppColors.primaryViolet : Colors.white70,
+                  color: isActive ? Colors.white : Colors.white70,
                 ),
                 const SizedBox(width: 4),
                 Text(
@@ -323,6 +398,68 @@ class _ResultsScreenState extends State<ResultsScreen>
     }).toList();
   }
 
+  List<Widget> _buildContactMatchModeChips() {
+    return [
+      _matchModeChip(
+        label: 'ANY',
+        isActive: !_contactMatchAll,
+        onTap: () {
+          setState(() {
+            _contactMatchAll = false;
+            _selectedTableRows = {};
+          });
+        },
+      ),
+      const SizedBox(width: AppSpacing.xs),
+      _matchModeChip(
+        label: 'ALL',
+        isActive: _contactMatchAll,
+        onTap: () {
+          setState(() {
+            _contactMatchAll = true;
+            _selectedTableRows = {};
+          });
+        },
+      ),
+    ];
+  }
+
+  Widget _matchModeChip({
+    required String label,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: AppSpacing.durationFast,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: isActive
+              ? AppColors.primaryBlue.withValues(alpha: 0.18)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: AppSpacing.borderRadiusSm,
+          border: Border.all(
+            color: isActive
+                ? AppColors.primaryBlueLight.withValues(alpha: 0.85)
+                : Colors.white.withValues(alpha: 0.1),
+          ),
+        ),
+        child: Text(
+          label,
+          style: AppTypography.labelSmall.copyWith(
+            color: isActive ? Colors.white : Colors.white60,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.0,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
@@ -332,9 +469,9 @@ class _ResultsScreenState extends State<ResultsScreen>
     final layoutType =
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
-    return Scaffold(
-      backgroundColor: AppColors.backgroundDeep,
-      body: SafeArea(
+      return Scaffold(
+        backgroundColor: AppColors.backgroundDark,
+        body: SafeArea(
         top: widget.showHeader,
         bottom: false,
         child: FadeTransition(
@@ -345,7 +482,8 @@ class _ResultsScreenState extends State<ResultsScreen>
               Column(
                 children: [
                   if (widget.showHeader) _buildHeader(allResults.length),
-                  _buildSearchAndFilter(layoutType),
+                  if (widget.showHeader) const WorkflowStepper(currentStep: 3),
+                  _buildSearchAndFilter(layoutType, allResults),
                   _buildStats(filteredResults),
                   Expanded(child: _buildContent(filteredResults, layoutType)),
                 ],
@@ -369,7 +507,7 @@ class _ResultsScreenState extends State<ResultsScreen>
           decoration: BoxDecoration(
             gradient: RadialGradient(
               colors: [
-                AppColors.primaryViolet.withValues(alpha: 0.25),
+                AppColors.primaryBlue.withValues(alpha: 0.18),
                 Colors.transparent,
               ],
               radius: 1.2,
@@ -388,7 +526,7 @@ class _ResultsScreenState extends State<ResultsScreen>
         vertical: AppSpacing.md,
       ),
       decoration: BoxDecoration(
-        color: AppColors.backgroundDeep.withValues(alpha: 0.9),
+        color: AppColors.backgroundDark.withValues(alpha: 0.9),
         border: Border(
           bottom: BorderSide(
             color: Colors.white.withValues(alpha: 0.06),
@@ -411,7 +549,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                 Text(
                   widget.title ?? 'Live Results',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.primaryViolet,
+                    color: AppColors.primaryBlueLight,
                     letterSpacing: 2.0,
                     fontWeight: FontWeight.w600,
                   ),
@@ -435,7 +573,7 @@ class _ResultsScreenState extends State<ResultsScreen>
           vertical: AppSpacing.xs,
         ),
         decoration: BoxDecoration(
-          color: AppColors.backgroundCard,
+          color: AppColors.elevatedCardDark,
           borderRadius: AppSpacing.borderRadiusSm,
           border: Border.all(
             color: Colors.white.withValues(alpha: 0.1),
@@ -450,18 +588,18 @@ class _ResultsScreenState extends State<ResultsScreen>
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    AppColors.emerald,
+                    AppColors.successGreen,
                   ),
                 ),
               )
             else
               const Icon(Icons.download_rounded,
-                  color: AppColors.emerald, size: 18),
+                  color: AppColors.successGreen, size: 18),
             const SizedBox(width: 6),
             Text(
               'Excel',
               style: AppTypography.labelSmall.copyWith(
-                color: AppColors.emerald,
+                color: AppColors.successGreen,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -471,8 +609,14 @@ class _ResultsScreenState extends State<ResultsScreen>
     );
   }
 
-  Widget _buildSearchAndFilter(LayoutType layoutType) {
+  Widget _buildSearchAndFilter(
+    LayoutType layoutType,
+    List<Map<String, dynamic>> allResults,
+  ) {
     final canTable = ResponsiveUtils.shouldUseTableView(layoutType);
+    final cityOptions = _resolveCityOptions(allResults);
+    final hasCityValue = cityOptions.contains(_cityFilter);
+    final safeCityFilter = hasCityValue ? _cityFilter : 'All Cities';
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.md,
@@ -491,7 +635,7 @@ class _ResultsScreenState extends State<ResultsScreen>
           Container(
             height: 44,
             decoration: BoxDecoration(
-              color: AppColors.backgroundCard,
+              color: AppColors.elevatedCardDark,
               borderRadius: AppSpacing.borderRadiusSm,
               border: Border.all(
                 color: Colors.white.withValues(alpha: 0.1),
@@ -517,12 +661,13 @@ class _ResultsScreenState extends State<ResultsScreen>
                           color: Colors.white54,
                           size: 20,
                         ),
-                        onPressed: () {
-                          setState(() {
-                            _searchController.clear();
-                            _searchQuery = '';
-                          });
-                        },
+                         onPressed: () {
+                           setState(() {
+                             _searchController.clear();
+                             _searchQuery = '';
+                             _selectedTableRows = {};
+                           });
+                         },
                       )
                     : null,
                 border: InputBorder.none,
@@ -531,11 +676,12 @@ class _ResultsScreenState extends State<ResultsScreen>
                   vertical: AppSpacing.sm,
                 ),
               ),
-              onChanged: (value) {
-                setState(() {
-                  _searchQuery = value;
-                });
-              },
+               onChanged: (value) {
+                 setState(() {
+                   _searchQuery = value;
+                   _selectedTableRows = {};
+                 });
+               },
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -553,8 +699,143 @@ class _ResultsScreenState extends State<ResultsScreen>
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 ..._buildContactFilterChips(),
+                const SizedBox(width: AppSpacing.sm),
+                ..._buildContactMatchModeChips(),
               ],
             ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // City + quick clear
+          Row(
+            children: [
+              PopupMenuButton<String>(
+                initialValue: hasCityValue ? _cityFilter : null,
+                color: AppColors.surfaceDark,
+                onSelected: (value) {
+                  setState(() {
+                    _cityFilter = value;
+                    _selectedTableRows = {};
+                  });
+                },
+                itemBuilder: (context) => cityOptions
+                    .map((c) => PopupMenuItem<String>(
+                          value: c,
+                          child: Text(
+                            c,
+                            style: AppTypography.bodySmall.copyWith(
+                              color: Colors.white,
+                            ),
+                          ),
+                        ))
+                    .toList(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.elevatedCardDark,
+                    borderRadius: AppSpacing.borderRadiusSm,
+                    border: Border.all(
+                      color: AppColors.primaryBlue.withValues(alpha: 0.25),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.location_city_rounded,
+                        color: AppColors.primaryBlueLight,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 180),
+                        child: Text(
+                          safeCityFilter,
+                          style: AppTypography.labelSmall.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.expand_more_rounded,
+                        color: Colors.white54,
+                        size: 18,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: Checkbox(
+                      value: _requireWebsite,
+                      onChanged: (value) {
+                    setState(() {
+                      _requireWebsite = value ?? false;
+                      _selectedTableRows = {};
+                    });
+                  },
+                      activeColor: AppColors.primaryBlue,
+                      checkColor: Colors.white,
+                      side: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.4),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _requireWebsite = !_requireWebsite;
+                        _selectedTableRows = {};
+                      });
+                    },
+                    child: Text(
+                      'Has website',
+                      style: AppTypography.labelSmall.copyWith(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (_searchQuery.isNotEmpty ||
+                  _cityFilter != 'All Cities' ||
+                  _requireWebsite ||
+                  _contactFilters.length < 3)
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _searchController.clear();
+                      _searchQuery = '';
+                      _cityFilter = 'All Cities';
+                      _contactFilters = {'Phone', 'Website', 'Maps'};
+                      _contactMatchAll = false;
+                      _requireWebsite = false;
+                      _sortOption = 'Newest';
+                      _selectedTableRows = {};
+                    });
+                  },
+                  child: Text(
+                    'Clear',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: AppSpacing.sm),
           // Sort and View toggles
@@ -568,14 +849,14 @@ class _ResultsScreenState extends State<ResultsScreen>
               const SizedBox(width: AppSpacing.sm),
               PopupMenuButton<String>(
                 initialValue: _sortOption,
-                color: AppColors.backgroundCard,
+                color: AppColors.surfaceDark,
                 icon: Container(
                   padding: const EdgeInsets.all(AppSpacing.xs),
                   decoration: BoxDecoration(
-                    color: AppColors.backgroundCard,
+                    color: AppColors.elevatedCardDark,
                     borderRadius: AppSpacing.borderRadiusSm,
                     border: Border.all(
-                      color: AppColors.primaryViolet.withValues(alpha: 0.3),
+                      color: AppColors.primaryBlue.withValues(alpha: 0.25),
                     ),
                   ),
                   child: Row(
@@ -583,7 +864,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                     children: [
                       Icon(
                         Icons.sort_rounded,
-                        color: AppColors.primaryViolet,
+                        color: AppColors.primaryBlueLight,
                         size: 18,
                       ),
                       const SizedBox(width: 4),
@@ -597,15 +878,17 @@ class _ResultsScreenState extends State<ResultsScreen>
                     ],
                   ),
                 ),
-                onSelected: (value) {
-                  setState(() {
-                    _sortOption = value;
-                  });
-                },
+                 onSelected: (value) {
+                   setState(() {
+                     _sortOption = value;
+                     _selectedTableRows = {};
+                   });
+                 },
                 itemBuilder: (context) => [
                   _buildSortMenuItem('Newest', Icons.access_time_rounded),
                   _buildSortMenuItem('Name A-Z', Icons.sort_by_alpha_rounded),
                   _buildSortMenuItem('Category', Icons.category_rounded),
+                  _buildSortMenuItem('City', Icons.location_city_rounded),
                 ],
               ),
             ],
@@ -615,14 +898,29 @@ class _ResultsScreenState extends State<ResultsScreen>
     );
   }
 
+  List<String> _resolveCityOptions(List<Map<String, dynamic>> results) {
+    final set = <String>{'All Cities'};
+    for (final r in results) {
+      final city = (r['city'] ?? '').toString().trim();
+      if (city.isEmpty || city == 'N/A') continue;
+      final state = (r['state'] ?? '').toString().trim();
+      final key = state.isEmpty ? city : '$city, $state';
+      set.add(key);
+    }
+    final list = set.toList();
+    if (list.length <= 1) return const ['All Cities'];
+    final rest = list.where((e) => e != 'All Cities').toList()..sort();
+    return ['All Cities', ...rest];
+  }
+
   Widget _viewToggle() {
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: AppColors.backgroundCard,
+        color: AppColors.elevatedCardDark,
         borderRadius: AppSpacing.borderRadiusSm,
         border: Border.all(
-          color: AppColors.primaryViolet.withValues(alpha: 0.3),
+          color: AppColors.primaryBlue.withValues(alpha: 0.25),
         ),
       ),
       child: Row(
@@ -637,7 +935,12 @@ class _ResultsScreenState extends State<ResultsScreen>
   Widget _toggleChip(String label, IconData icon) {
     final isActive = _viewMode == label;
     return GestureDetector(
-      onTap: () => setState(() => _viewMode = label),
+      onTap: () => setState(() {
+        _viewMode = label;
+        _selectedTableRows = {};
+        _tableSortColumnIndex = null;
+        _tableSortAscending = true;
+      }),
       child: AnimatedContainer(
         duration: AppSpacing.durationFast,
         padding: const EdgeInsets.symmetric(
@@ -646,7 +949,7 @@ class _ResultsScreenState extends State<ResultsScreen>
         ),
         decoration: BoxDecoration(
           color: isActive
-              ? AppColors.primaryViolet.withValues(alpha: 0.2)
+              ? AppColors.primaryBlue.withValues(alpha: 0.18)
               : Colors.transparent,
           borderRadius: AppSpacing.borderRadiusSm,
         ),
@@ -655,60 +958,13 @@ class _ResultsScreenState extends State<ResultsScreen>
             Icon(
               icon,
               size: 14,
-              color: isActive ? AppColors.primaryViolet : Colors.white54,
+              color: isActive ? Colors.white : Colors.white54,
             ),
             const SizedBox(width: 4),
             Text(
               label,
               style: AppTypography.labelSmall.copyWith(
                 color: isActive ? Colors.white : Colors.white54,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _filterChip(String label, IconData icon) {
-    final isActive = _activeFilter == label;
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _activeFilter = label;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: AppSpacing.xs,
-        ),
-        decoration: BoxDecoration(
-          color: isActive
-              ? AppColors.primaryViolet.withValues(alpha: 0.2)
-              : AppColors.backgroundCard,
-          borderRadius: AppSpacing.borderRadiusSm,
-          border: Border.all(
-            color: isActive
-                ? AppColors.primaryViolet
-                : Colors.white.withValues(alpha: 0.1),
-            width: isActive ? 1.5 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 16,
-              color: isActive ? AppColors.primaryViolet : Colors.white70,
-            ),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: AppTypography.labelSmall.copyWith(
-                color: isActive ? Colors.white : Colors.white70,
                 fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -737,8 +993,14 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   Widget _buildStats(List<Map<String, dynamic>> results) {
-    final cities = results.map((r) => r['city']).toSet();
-    final categories = results.map((r) => r['category']).toSet();
+    final cities = results
+        .map((r) => (r['city'] ?? '').toString().trim())
+        .where((c) => c.isNotEmpty && c != 'N/A')
+        .toSet();
+    final categories = results
+        .map((r) => (r['category'] ?? '').toString().trim())
+        .where((c) => c.isNotEmpty && c != 'N/A')
+        .toSet();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -769,14 +1031,14 @@ class _ResultsScreenState extends State<ResultsScreen>
     return Container(
       padding: AppSpacing.paddingSm,
       decoration: BoxDecoration(
-        color: AppColors.backgroundStatCard,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusSm,
         border: Border.all(
-          color: AppColors.primaryViolet.withValues(alpha: 0.4),
+          color: AppColors.primaryBlue.withValues(alpha: 0.25),
         ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryViolet.withValues(alpha: 0.2),
+            color: AppColors.primaryBlue.withValues(alpha: 0.18),
             blurRadius: 14,
             spreadRadius: -10,
           ),
@@ -805,6 +1067,183 @@ class _ResultsScreenState extends State<ResultsScreen>
     );
   }
 
+  String? _tableSortKeyForColumn(int columnIndex) {
+    switch (columnIndex) {
+      case 0:
+        return 'business_name';
+      case 1:
+        return 'category';
+      case 2:
+        return 'city';
+      case 3:
+        return 'phone';
+      case 4:
+        return 'website';
+      default:
+        return null;
+    }
+  }
+
+  Widget _buildBulkActionsBar(List<Map<String, dynamic>> tableRows) {
+    final count = _selectedTableRows.length;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.elevatedCardDark,
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xxs,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.primaryBlue.withValues(alpha: 0.18),
+              borderRadius: AppSpacing.borderRadiusRound,
+              border: Border.all(
+                color: AppColors.primaryBlue.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Text(
+              '$count selected',
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const Spacer(),
+          OutlinedButton.icon(
+            onPressed:
+                count > 0 ? () => _exportSelectedCsv(tableRows) : null,
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(
+                color: AppColors.successGreen.withValues(alpha: 0.5),
+              ),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xs,
+              ),
+            ),
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: Text(
+              'Export CSV',
+              style: AppTypography.labelSmall.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          OutlinedButton.icon(
+            onPressed:
+                count > 0 ? () => _exportSelectedJson(tableRows) : null,
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(
+                color: AppColors.infoBlue.withValues(alpha: 0.5),
+              ),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xs,
+              ),
+            ),
+            icon: const Icon(Icons.data_object_rounded, size: 18),
+            label: Text(
+              'JSON',
+              style: AppTypography.labelSmall.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          TextButton(
+            onPressed: () => setState(() => _selectedTableRows = {}),
+            child: Text(
+              'Clear',
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white70,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportSelectedCsv(List<Map<String, dynamic>> tableRows) async {
+    if (_selectedTableRows.isEmpty) return;
+
+    final selected = _selectedTableRows
+        .where((i) => i >= 0 && i < tableRows.length)
+        .map((i) => tableRows[i])
+        .toList();
+
+    final csv = _toCsv(selected);
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    await saveCsv(csv, 'infinity_leads_selected_$stamp', context: context);
+  }
+
+  Future<void> _exportSelectedJson(List<Map<String, dynamic>> tableRows) async {
+    if (_selectedTableRows.isEmpty) return;
+
+    final selected = _selectedTableRows
+        .where((i) => i >= 0 && i < tableRows.length)
+        .map((i) => tableRows[i])
+        .toList();
+
+    final payload = jsonEncode(selected);
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    await saveJson(payload, 'infinity_leads_selected_$stamp', context: context);
+  }
+
+  String _toCsv(List<Map<String, dynamic>> rows) {
+    const headers = [
+      'business_name',
+      'category',
+      'city',
+      'state',
+      'phone',
+      'website',
+      'address',
+      'google_maps_url',
+    ];
+
+    final buffer = StringBuffer();
+    buffer.writeln(headers.join(','));
+    for (final row in rows) {
+      final values = headers.map((h) => _csvEscape(row[h])).toList();
+      buffer.writeln(values.join(','));
+    }
+    return buffer.toString();
+  }
+
+  String _csvEscape(dynamic value) {
+    final s = (value ?? '').toString();
+    final escaped = s.replaceAll('"', '""');
+    if (escaped.contains(',') ||
+        escaped.contains('\n') ||
+        escaped.contains('\r')) {
+      return '"$escaped"';
+    }
+    return escaped;
+  }
+
   Widget _buildContent(
       List<Map<String, dynamic>> results, LayoutType layoutType) {
     if (_isLoading) {
@@ -821,16 +1260,36 @@ class _ResultsScreenState extends State<ResultsScreen>
 
     final canTable = ResponsiveUtils.shouldUseTableView(layoutType);
     if (canTable && _viewMode == 'Table') {
-      final tableRows = results
+      final baseRows = results
           .map((r) => {
                 'business_name': r['business_name'] ?? r['name'] ?? 'Unknown',
                 'category': r['category'] ?? 'N/A',
                 'city': r['city'] ?? 'N/A',
+                'state': r['state'] ?? '',
                 'phone': r['phone'] ?? 'N/A',
                 'website': r['website'] ?? 'N/A',
                 'address': r['address'] ?? 'N/A',
+                'google_maps_url': r['google_maps_url'] ?? '',
               })
           .toList();
+
+      final rows = List<Map<String, dynamic>>.from(baseRows);
+      if (_tableSortColumnIndex != null) {
+        final key = _tableSortKeyForColumn(_tableSortColumnIndex!);
+        if (key != null) {
+          rows.sort((a, b) {
+            final av = (a[key] ?? '').toString().toLowerCase();
+            final bv = (b[key] ?? '').toString().toLowerCase();
+            return av.compareTo(bv);
+          });
+          if (!_tableSortAscending) {
+            final reversed = rows.reversed.toList();
+            rows
+              ..clear()
+              ..addAll(reversed);
+          }
+        }
+      }
       return Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.md,
@@ -838,49 +1297,70 @@ class _ResultsScreenState extends State<ResultsScreen>
           AppSpacing.md,
           AppSpacing.xl,
         ),
-        child: InfinityDataTable(
-          layoutType: layoutType,
-          columns: [
-            const InfinityDataColumn(
-                label: 'Business Name', keyName: 'business_name'),
-            const InfinityDataColumn(label: 'Category', keyName: 'category'),
-            const InfinityDataColumn(label: 'City', keyName: 'city'),
-            const InfinityDataColumn(label: 'Phone', keyName: 'phone'),
-            const InfinityDataColumn(label: 'Website', keyName: 'website'),
-            InfinityDataColumn(
-              label: 'Actions',
-              keyName: 'actions',
-              cellBuilder: (row) => Row(
-                children: [
-                  _tableActionButton(
-                    icon: Icons.call,
-                    tooltip: 'Call',
-                    onTap: () => _launchPhone(row['phone'] ?? ''),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_selectedTableRows.isNotEmpty)
+              _buildBulkActionsBar(rows),
+            InfinityDataTable(
+              layoutType: layoutType,
+              columns: [
+                const InfinityDataColumn(
+                    label: 'Business Name', keyName: 'business_name'),
+                const InfinityDataColumn(label: 'Category', keyName: 'category'),
+                const InfinityDataColumn(label: 'City', keyName: 'city'),
+                const InfinityDataColumn(label: 'Phone', keyName: 'phone'),
+                const InfinityDataColumn(label: 'Website', keyName: 'website'),
+                InfinityDataColumn(
+                  label: 'Actions',
+                  keyName: 'actions',
+                  cellBuilder: (row) => Row(
+                    children: [
+                      _tableActionButton(
+                        icon: Icons.call,
+                        tooltip: 'Call',
+                        onTap: () => _launchPhone(row['phone'] ?? ''),
+                      ),
+                      _tableActionButton(
+                        icon: Icons.language,
+                        tooltip: 'Website',
+                        onTap: () => _launchUrl(row['website'] ?? ''),
+                      ),
+                      _tableActionButton(
+                        icon: Icons.location_on,
+                        tooltip: 'Map',
+                        onTap: () => _launchMaps(row['address'] ?? ''),
+                      ),
+                    ],
                   ),
-                  _tableActionButton(
-                    icon: Icons.language,
-                    tooltip: 'Website',
-                    onTap: () => _launchUrl(row['website'] ?? ''),
-                  ),
-                  _tableActionButton(
-                    icon: Icons.location_on,
-                    tooltip: 'Map',
-                    onTap: () => _launchMaps(row['address'] ?? ''),
-                  ),
-                ],
-              ),
+                ),
+              ],
+              rows: rows,
+              sortable: true,
+              showCheckboxes: true,
+              selectedRows: _selectedTableRows,
+              onSelectionChanged: (selection) {
+                setState(() => _selectedTableRows = selection);
+              },
+              sortColumnIndex: _tableSortColumnIndex,
+              sortAscending: _tableSortAscending,
+              onSort: (columnIndex, ascending) {
+                setState(() {
+                  _tableSortColumnIndex = columnIndex;
+                  _tableSortAscending = ascending;
+                  _selectedTableRows = {};
+                });
+              },
             ),
           ],
-          rows: tableRows,
-          sortable: true,
         ),
       );
     }
 
     return RefreshIndicator(
       onRefresh: _refreshResults,
-      color: AppColors.primaryViolet,
-      backgroundColor: AppColors.backgroundCard,
+      color: AppColors.primaryBlue,
+      backgroundColor: AppColors.surfaceDark,
       child: layoutType == LayoutType.mobile
           ? ListView.builder(
               padding: const EdgeInsets.fromLTRB(
@@ -945,7 +1425,7 @@ class _ResultsScreenState extends State<ResultsScreen>
             child: CircularProgressIndicator(
               strokeWidth: 3,
               valueColor:
-                  AlwaysStoppedAnimation<Color>(AppColors.primaryViolet),
+                  AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -977,12 +1457,12 @@ class _ResultsScreenState extends State<ResultsScreen>
             height: 28,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [AppColors.primaryViolet, AppColors.indigo],
+                colors: [AppColors.primaryBlue, AppColors.primaryBlueDark],
               ),
               borderRadius: AppSpacing.borderRadiusSm,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.primaryViolet.withValues(alpha: 0.3),
+                  color: AppColors.primaryBlue.withValues(alpha: 0.25),
                   blurRadius: 8,
                   spreadRadius: -6,
                 ),
@@ -1002,14 +1482,14 @@ class _ResultsScreenState extends State<ResultsScreen>
         child: Container(
           padding: AppSpacing.paddingMd,
           decoration: BoxDecoration(
-            color: AppColors.backgroundCard,
+            color: AppColors.surfaceDark,
             borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(color: Colors.white12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.error_outline, color: AppColors.rose, size: 40),
+              Icon(Icons.error_outline, color: AppColors.dangerRed, size: 40),
               const SizedBox(height: AppSpacing.md),
               Text(
                 'Failed to Load',
@@ -1045,10 +1525,10 @@ class _ResultsScreenState extends State<ResultsScreen>
         child: Container(
           padding: AppSpacing.paddingLg,
           decoration: BoxDecoration(
-            color: AppColors.backgroundCard,
+            color: AppColors.surfaceDark,
             borderRadius: AppSpacing.borderRadiusLg,
             border: Border.all(
-              color: AppColors.primaryViolet.withValues(alpha: 0.3),
+              color: AppColors.primaryBlue.withValues(alpha: 0.22),
             ),
           ),
           child: Column(
@@ -1058,12 +1538,12 @@ class _ResultsScreenState extends State<ResultsScreen>
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color: AppColors.primaryViolet.withValues(alpha: 0.1),
+                  color: AppColors.primaryBlue.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.search_off_rounded,
-                  color: AppColors.primaryViolet,
+                  color: AppColors.primaryBlueLight,
                   size: 48,
                 ),
               ),
@@ -1084,7 +1564,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                   height: 1.5,
                 ),
               ),
-              if (_searchQuery.isNotEmpty || _activeFilter != 'All') ...[
+              if (_searchQuery.isNotEmpty || _contactFilters.length < 3) ...[
                 const SizedBox(height: AppSpacing.md),
                 Text(
                   'No results match your current filters.\nTry adjusting your search criteria.',
@@ -1100,14 +1580,14 @@ class _ResultsScreenState extends State<ResultsScreen>
                     setState(() {
                       _searchController.clear();
                       _searchQuery = '';
-                      _activeFilter = 'All';
+                      _contactFilters = {'Phone', 'Website', 'Maps'};
                     });
                   },
                   icon: const Icon(Icons.clear_all_rounded, size: 18),
                   label: const Text('Clear Filters'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primaryViolet,
-                    side: BorderSide(color: AppColors.primaryViolet),
+                    foregroundColor: AppColors.primaryBlueLight,
+                    side: BorderSide(color: AppColors.primaryBlue.withValues(alpha: 0.35)),
                   ),
                 ),
               ],
@@ -1118,10 +1598,10 @@ class _ResultsScreenState extends State<ResultsScreen>
     );
   }
 
-  Future<void> _downloadResults(BuildContext context) async {
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
+  Future<void> _downloadResults(BuildContext ctx) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(ctx);
     final scraperProvider =
-        Provider.of<ScraperProvider>(context, listen: false);
+        Provider.of<ScraperProvider>(ctx, listen: false);
 
     setState(() => _isDownloading = true);
 
@@ -1140,7 +1620,7 @@ class _ResultsScreenState extends State<ResultsScreen>
       scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text('Failed to download: $e'),
-          backgroundColor: AppColors.rose,
+          backgroundColor: AppColors.dangerRed,
         ),
       );
     } finally {
@@ -1213,13 +1693,13 @@ class _LeadCardState extends State<_LeadCard>
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: AppColors.backgroundCard,
+        color: AppColors.elevatedCardDark,
         borderRadius: AppSpacing.borderRadiusLg,
         border:
-            Border.all(color: AppColors.primaryViolet.withValues(alpha: 0.5)),
+            Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.35)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryViolet.withValues(alpha: 0.2),
+            color: AppColors.primaryBlue.withValues(alpha: 0.14),
             blurRadius: 18,
             spreadRadius: -10,
           ),
@@ -1264,16 +1744,16 @@ class _LeadCardState extends State<_LeadCard>
                   vertical: AppSpacing.xxs,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.emerald.withValues(alpha: 0.12),
+                  color: AppColors.successGreen.withValues(alpha: 0.12),
                   borderRadius: AppSpacing.borderRadiusRound,
                   border: Border.all(
-                    color: AppColors.emerald.withValues(alpha: 0.25),
+                    color: AppColors.successGreen.withValues(alpha: 0.25),
                   ),
                 ),
                 child: Text(
                   widget.business['category'] ?? 'Category',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.emerald,
+                    color: AppColors.successGreen,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -1288,7 +1768,7 @@ class _LeadCardState extends State<_LeadCard>
                 width: 8,
                 height: 8,
                 decoration: BoxDecoration(
-                  color: AppColors.emerald,
+                  color: AppColors.successGreen,
                   shape: BoxShape.circle,
                 ),
               ),
@@ -1366,15 +1846,18 @@ class _LeadCardState extends State<_LeadCard>
         decoration: BoxDecoration(
           gradient: isExpanded
               ? LinearGradient(
-                  colors: [AppColors.primaryViolet, AppColors.indigo],
+                  colors: [AppColors.primaryBlue, AppColors.primaryBlueDark],
                 )
               : LinearGradient(
-                  colors: [AppColors.primaryViolet, AppColors.indigo],
+                  colors: [
+                    AppColors.primaryBlue.withValues(alpha: 0.7),
+                    AppColors.primaryBlueDark.withValues(alpha: 0.7),
+                  ],
                 ),
           borderRadius: AppSpacing.borderRadiusSm,
           boxShadow: [
             BoxShadow(
-              color: AppColors.primaryViolet.withValues(
+              color: AppColors.primaryBlueDark.withValues(
                 alpha: isExpanded ? 0.5 : 0.3,
               ),
               blurRadius: isExpanded ? 12 : 8,

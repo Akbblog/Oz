@@ -21,8 +21,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _creditRequests = [];
+  Map<String, dynamic> _adminSettings = {};
+  final TextEditingController _startingCreditsController =
+      TextEditingController();
   bool _isLoading = true;
   int _selectedTab = 0;
+  bool _bulkActionInProgress = false;
+  final Set<int> _selectedPendingUserIds = {};
+  final Set<int> _selectedCreditRequestIds = {};
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -45,6 +51,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void dispose() {
     _animationController.dispose();
+    _startingCreditsController.dispose();
     super.dispose();
   }
 
@@ -53,6 +60,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       final stats = await _apiService.getAdminStats();
       final users = await _apiService.getAllUsers();
+      Map<String, dynamic> settings = {};
+      try {
+        settings = await _apiService.getAdminSettings();
+      } catch (_) {
+        settings = {};
+      }
       List<Map<String, dynamic>> creditReqs = [];
       try {
         creditReqs = await _apiService.getAdminCreditRequests();
@@ -63,14 +76,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         setState(() {
           _stats = stats;
           _users = users;
+          _adminSettings = settings;
           _creditRequests = creditReqs;
+          _selectedPendingUserIds.clear();
+          _selectedCreditRequestIds.clear();
           _isLoading = false;
         });
+        final starting = settings['starting_credits']?.toString();
+        if (starting != null && starting.trim().isNotEmpty) {
+          _startingCreditsController.text = starting.trim();
+        }
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        _showSnackBar('Error loading data: $e', AppColors.rose);
+        _showSnackBar('Error loading data: $e', AppColors.dangerRed);
       }
     }
   }
@@ -79,9 +99,146 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       await _apiService.approveUser(userId);
       _loadData();
-      _showSnackBar('User approved successfully', AppColors.emerald);
+      _showSnackBar('User approved successfully', AppColors.successGreen);
     } catch (e) {
-      _showSnackBar('Error approving user: $e', AppColors.rose);
+      _showSnackBar('Error approving user: $e', AppColors.dangerRed);
+    }
+  }
+
+  String _getApprovalState(Map<String, dynamic> user) {
+    final state = user['approval_state'];
+    if (state is String && state.trim().isNotEmpty) {
+      return state.trim();
+    }
+    final isDenied = user['is_denied'] == true;
+    if (isDenied) return 'denied';
+    return user['is_approved'] == true ? 'approved' : 'pending';
+  }
+
+  Future<void> _denyUser(int userId) async {
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.surfaceDark,
+          shape:
+              RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
+          title: Text(
+            'Deny user?',
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'This will mark the account as denied and optionally email the user.',
+                style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextField(
+                controller: noteController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Optional admin note',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: AppColors.elevatedCardDark,
+                  border: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide:
+                        BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide:
+                        BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(
+                'Cancel',
+                style: AppTypography.labelLarge.copyWith(color: Colors.white70),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.dangerRed,
+                foregroundColor: Colors.white,
+              ),
+              child: Text(
+                'Deny',
+                style:
+                    AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      noteController.dispose();
+      return;
+    }
+
+    try {
+      final note = noteController.text.trim().isEmpty
+          ? null
+          : noteController.text.trim();
+      await _apiService.denyUser(userId, adminNote: note);
+      _loadData();
+      _showSnackBar('User denied', AppColors.warningYellow);
+    } catch (e) {
+      _showSnackBar('Error denying user: $e', AppColors.dangerRed);
+    } finally {
+      noteController.dispose();
+    }
+  }
+
+  Future<void> _restoreUser(int userId) async {
+    try {
+      await _apiService.restoreUser(userId);
+      _loadData();
+      _showSnackBar('User restored to pending', AppColors.successGreen);
+    } catch (e) {
+      _showSnackBar('Error restoring user: $e', AppColors.dangerRed);
+    }
+  }
+
+  bool _settingBool(String key, {bool fallback = false}) {
+    final raw = _adminSettings[key];
+    if (raw is bool) return raw;
+    if (raw is String) return raw.toLowerCase() == 'true';
+    return fallback;
+  }
+
+  String _settingString(String key, {String fallback = ''}) {
+    final raw = _adminSettings[key];
+    if (raw == null) return fallback;
+    return raw.toString();
+  }
+
+  Future<void> _updateSetting(String key, String value) async {
+    try {
+      await _apiService.updateAdminSetting(key, value);
+      if (!mounted) return;
+      setState(() {
+        _adminSettings = Map<String, dynamic>.from(_adminSettings)
+          ..[key] = value;
+      });
+      _showSnackBar('Updated setting: $key', AppColors.successGreen);
+    } catch (e) {
+      _showSnackBar('Failed to update setting: $e', AppColors.dangerRed);
     }
   }
 
@@ -95,9 +252,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       try {
         await _apiService.deleteUser(userId);
         _loadData();
-        _showSnackBar('User deleted successfully', AppColors.emerald);
+        _showSnackBar('User deleted successfully', AppColors.successGreen);
       } catch (e) {
-        _showSnackBar('Error deleting user: $e', AppColors.rose);
+        _showSnackBar('Error deleting user: $e', AppColors.dangerRed);
       }
     }
   }
@@ -106,9 +263,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       await _apiService.approveCreditRequest(requestId);
       _loadData();
-      _showSnackBar('Credit request approved', AppColors.emerald);
+      _showSnackBar('Credit request approved', AppColors.successGreen);
     } catch (e) {
-      _showSnackBar('Error approving request: $e', AppColors.rose);
+      _showSnackBar('Error approving request: $e', AppColors.dangerRed);
     }
   }
 
@@ -116,9 +273,145 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       await _apiService.denyCreditRequest(requestId);
       _loadData();
-      _showSnackBar('Credit request denied', AppColors.amber);
+      _showSnackBar('Credit request denied', AppColors.warningYellow);
     } catch (e) {
-      _showSnackBar('Error denying request: $e', AppColors.rose);
+      _showSnackBar('Error denying request: $e', AppColors.dangerRed);
+    }
+  }
+
+  Future<void> _bulkApproveSelectedUsers() async {
+    if (_bulkActionInProgress || _selectedPendingUserIds.isEmpty) return;
+
+    setState(() => _bulkActionInProgress = true);
+    try {
+      final ids = _selectedPendingUserIds.toList()..sort();
+      final result = await _apiService.bulkApproveUsers(ids);
+      final approved = result['approved'] ?? 0;
+      final skipped = result['skipped'] ?? 0;
+      _showSnackBar(
+        'Approved $approved user(s)${skipped > 0 ? ' (skipped $skipped)' : ''}',
+        AppColors.successGreen,
+      );
+      await _loadData();
+    } catch (e) {
+      _showSnackBar('Bulk approve failed: $e', AppColors.dangerRed);
+    } finally {
+      if (mounted) setState(() => _bulkActionInProgress = false);
+    }
+  }
+
+  Future<void> _bulkApproveSelectedCreditRequests() async {
+    if (_bulkActionInProgress || _selectedCreditRequestIds.isEmpty) return;
+
+    setState(() => _bulkActionInProgress = true);
+    try {
+      final ids = _selectedCreditRequestIds.toList()..sort();
+      final result = await _apiService.bulkApproveCreditRequests(ids);
+      final approved = result['approved'] ?? 0;
+      final skipped = result['skipped'] ?? 0;
+      _showSnackBar(
+        'Approved $approved request(s)${skipped > 0 ? ' (skipped $skipped)' : ''}',
+        AppColors.successGreen,
+      );
+      await _loadData();
+    } catch (e) {
+      _showSnackBar('Bulk approve failed: $e', AppColors.dangerRed);
+    } finally {
+      if (mounted) setState(() => _bulkActionInProgress = false);
+    }
+  }
+
+  Future<void> _bulkDenySelectedCreditRequests() async {
+    if (_bulkActionInProgress || _selectedCreditRequestIds.isEmpty) return;
+
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.surfaceDark,
+          shape: RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
+          title: Text(
+            'Deny selected requests?',
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'This will deny ${_selectedCreditRequestIds.length} request(s).',
+                style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextField(
+                controller: noteController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Optional admin note',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: AppColors.elevatedCardDark,
+                  border: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(
+                'Cancel',
+                style: AppTypography.labelLarge.copyWith(color: Colors.white70),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.dangerRed,
+                foregroundColor: Colors.white,
+              ),
+              child: Text(
+                'Deny',
+                style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      noteController.dispose();
+      return;
+    }
+
+    setState(() => _bulkActionInProgress = true);
+    try {
+      final ids = _selectedCreditRequestIds.toList()..sort();
+      final note = noteController.text.trim().isEmpty ? null : noteController.text.trim();
+      final result = await _apiService.bulkDenyCreditRequests(ids, adminNote: note);
+      final denied = result['denied'] ?? 0;
+      final skipped = result['skipped'] ?? 0;
+      _showSnackBar(
+        'Denied $denied request(s)${skipped > 0 ? ' (skipped $skipped)' : ''}',
+        AppColors.warningYellow,
+      );
+      await _loadData();
+    } catch (e) {
+      _showSnackBar('Bulk deny failed: $e', AppColors.dangerRed);
+    } finally {
+      noteController.dispose();
+      if (mounted) setState(() => _bulkActionInProgress = false);
     }
   }
 
@@ -129,7 +422,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         content: Row(
           children: [
             Icon(
-              color == AppColors.emerald
+              color == AppColors.successGreen
                   ? Icons.check_circle
                   : Icons.error_outline,
               color: Colors.white,
@@ -200,7 +493,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         color: AppColors.backgroundDark.withValues(alpha: 0.95),
         border: Border(
           bottom: BorderSide(
-            color: AppColors.cardDarkHighlight.withValues(alpha: 0.5),
+            color: AppColors.elevatedCardDark.withValues(alpha: 0.5),
           ),
         ),
       ),
@@ -211,12 +504,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             height: 40,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [AppColors.purplePrimary, AppColors.purpleDark],
+                colors: [AppColors.brandPurple, AppColors.discoveryPurpleDark],
               ),
               borderRadius: AppSpacing.borderRadiusMd,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.purplePrimary.withValues(alpha: 0.2),
+                  color: AppColors.brandPurple.withValues(alpha: 0.2),
                   blurRadius: 12,
                   spreadRadius: -6,
                 ),
@@ -286,14 +579,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         child: Container(
           padding: AppSpacing.paddingLg,
           decoration: BoxDecoration(
-            color: AppColors.cardDark,
+            color: AppColors.surfaceDark,
             borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(color: AppColors.cardDarkHighlight),
+            border: Border.all(color: AppColors.elevatedCardDark),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.lock, color: AppColors.rose, size: 48),
+              Icon(Icons.lock, color: AppColors.dangerRed, size: 48),
               const SizedBox(height: AppSpacing.md),
               Text(
                 'Access Denied',
@@ -326,7 +619,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             height: 56,
             child: CircularProgressIndicator(
               strokeWidth: 4,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.purplePrimary),
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -353,7 +646,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ? _buildStatsView(layoutType)
               : _selectedTab == 1
                   ? _buildUsersView()
-                  : _buildCreditsView(),
+                  : _selectedTab == 2
+                      ? _buildCreditsView()
+                      : _buildSettingsView(),
         ),
       ],
     );
@@ -363,15 +658,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: AppColors.cardDark,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.cardDarkHighlight),
+        border: Border.all(color: AppColors.elevatedCardDark),
       ),
       child: Row(
         children: [
           Expanded(child: _buildTab(0, 'Stats', Icons.query_stats)),
           Expanded(child: _buildTab(1, 'Users', Icons.group)),
           Expanded(child: _buildTab(2, 'Credits', Icons.credit_card)),
+          Expanded(child: _buildTab(3, 'Settings', Icons.tune_rounded)),
         ],
       ),
     );
@@ -385,12 +681,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         duration: AppSpacing.durationFast,
         padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.purplePrimary : Colors.transparent,
+          color: isSelected ? AppColors.brandPurple : Colors.transparent,
           borderRadius: AppSpacing.borderRadiusMd,
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: AppColors.purplePrimary.withValues(alpha: 0.25),
+                    color: AppColors.brandPurple.withValues(alpha: 0.25),
                     blurRadius: 12,
                     spreadRadius: -6,
                   ),
@@ -452,13 +748,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 'Total Users',
                 _stats!['total_users'].toString(),
                 Icons.group_add,
-                AppColors.purplePrimary,
+                AppColors.brandPurple,
               ),
               _buildStatCard(
                 'Pending',
                 _stats!['pending_users'].toString(),
                 Icons.pending_actions,
-                AppColors.amber,
+                AppColors.warningYellow,
               ),
               _buildStatCard(
                 'Total Jobs',
@@ -484,7 +780,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   'API Health',
                   (_stats!['api_health'] ?? 'OK').toString(),
                   Icons.health_and_safety_rounded,
-                  AppColors.emerald,
+                  AppColors.successGreen,
                 ),
             ],
           ),
@@ -560,9 +856,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             vertical: AppSpacing.xxs,
           ),
           decoration: BoxDecoration(
-            color: AppColors.cardDark,
+            color: AppColors.surfaceDark,
             borderRadius: AppSpacing.borderRadiusRound,
-            border: Border.all(color: AppColors.cardDarkHighlight),
+            border: Border.all(color: AppColors.elevatedCardDark),
           ),
           child: Text(
             trailing,
@@ -579,9 +875,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: AppColors.cardDark,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.cardDarkHighlight),
+        border: Border.all(color: AppColors.elevatedCardDark),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -635,17 +931,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
   Widget _buildUserPreview(Map<String, dynamic> user) {
-    final isApproved = user['is_approved'] == true;
+    final approvalState = _getApprovalState(user);
+    final isApproved = approvalState == 'approved';
+    final isPending = approvalState == 'pending';
+    final isDenied = approvalState == 'denied';
+    final statusColor = isApproved
+        ? AppColors.successGreen
+        : isDenied
+            ? AppColors.dangerRed
+            : AppColors.warningYellow;
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: AppColors.cardDark,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusLg,
         border: Border.all(
           color: isApproved
-              ? AppColors.cardDarkHighlight
-              : AppColors.amber.withValues(alpha: 0.4),
+              ? AppColors.elevatedCardDark
+              : statusColor.withValues(alpha: 0.4),
         ),
       ),
       child: Column(
@@ -654,7 +958,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             children: [
               _buildAvatar(
                 user['username'] ?? 'U',
-                isApproved ? AppColors.emerald : AppColors.amber,
+                statusColor,
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
@@ -683,15 +987,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   vertical: AppSpacing.xxs,
                 ),
                 decoration: BoxDecoration(
-                  color: isApproved
-                      ? AppColors.emerald.withValues(alpha: 0.12)
-                      : AppColors.amber.withValues(alpha: 0.12),
+                  color: statusColor.withValues(alpha: 0.12),
                   borderRadius: AppSpacing.borderRadiusRound,
                 ),
                 child: Text(
-                  isApproved ? 'Active' : 'Pending',
+                  isApproved
+                      ? 'Active'
+                      : isDenied
+                          ? 'Denied'
+                          : 'Pending',
                   style: AppTypography.labelSmall.copyWith(
-                    color: isApproved ? AppColors.emerald : AppColors.amber,
+                    color: statusColor,
                   ),
                 ),
               ),
@@ -700,25 +1006,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
-              if (!isApproved)
+              if (isPending)
                 Expanded(
                   child: _smallButton(
                     label: 'Approve',
-                    color: AppColors.purplePrimary,
+                    color: AppColors.brandPurple,
                     onTap: () => _approveUser(user['id']),
                   ),
                 ),
-              if (!isApproved) const SizedBox(width: AppSpacing.sm),
+              if (isPending) const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: _smallButton(
-                  label: isApproved ? 'Grant Credits' : 'Reject',
+                  label: isApproved
+                      ? 'Grant Credits'
+                      : isDenied
+                          ? 'Restore'
+                          : 'Deny',
                   color: isApproved
-                      ? AppColors.cardDarkHighlight
-                      : AppColors.cardDark,
-                  textColor: isApproved ? Colors.white : Colors.white70,
+                      ? AppColors.elevatedCardDark
+                      : isDenied
+                          ? AppColors.elevatedCardDark
+                          : AppColors.surfaceDark,
+                  textColor: Colors.white,
                   onTap: isApproved
                       ? () => _showGrantCreditsDialog(user)
-                      : () => _deleteUser(user['id']),
+                      : isDenied
+                          ? () => _restoreUser(user['id'])
+                          : () => _denyUser(user['id']),
                 ),
               ),
             ],
@@ -738,29 +1052,137 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-      itemCount: _users.length,
-      itemBuilder: (context, index) {
-        final user = _users[index];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: AppSpacing.md),
-          child: _buildUserCard(user),
-        );
-      },
+    final pendingUsers =
+        _users.where((u) => _getApprovalState(u) == 'pending').toList(growable: false);
+
+    return Column(
+      children: [
+        if (pendingUsers.isNotEmpty) _buildBulkUsersBar(pendingUsers),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            itemCount: _users.length,
+            itemBuilder: (context, index) {
+              final user = _users[index];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                child: _buildUserCard(user),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBulkUsersBar(List<Map<String, dynamic>> pendingUsers) {
+    final pendingIds = pendingUsers
+        .map((u) => (u['id'] as num?)?.toInt())
+        .whereType<int>()
+        .toList();
+    final allSelected =
+        pendingIds.isNotEmpty && _selectedPendingUserIds.length == pendingIds.length;
+    final selectedCount = _selectedPendingUserIds.length;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        0,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.elevatedCardDark),
+      ),
+      child: Row(
+        children: [
+          Checkbox(
+            value: allSelected,
+            onChanged: _bulkActionInProgress
+                ? null
+                : (v) {
+                    setState(() {
+                      _selectedPendingUserIds
+                        ..clear()
+                        ..addAll(v == true ? pendingIds : const <int>[]);
+                    });
+                  },
+            activeColor: AppColors.brandPurple,
+            checkColor: Colors.white,
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(
+              selectedCount == 0 ? '${pendingUsers.length} pending' : '$selectedCount selected',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white70,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: selectedCount == 0 || _bulkActionInProgress
+                ? null
+                : _bulkApproveSelectedUsers,
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: AppColors.brandPurple.withValues(alpha: 0.5)),
+              foregroundColor: Colors.white,
+            ),
+            icon: _bulkActionInProgress
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.done_all_rounded, size: 18),
+            label: Text(
+              'Approve',
+              style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          TextButton(
+            onPressed: selectedCount == 0 || _bulkActionInProgress
+                ? null
+                : () => setState(() => _selectedPendingUserIds.clear()),
+            child: Text(
+              'Clear',
+              style: AppTypography.labelLarge.copyWith(color: Colors.white70),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildUserCard(Map<String, dynamic> user) {
-    final isApproved = user['is_approved'] == true;
+    final approvalState = _getApprovalState(user);
+    final isApproved = approvalState == 'approved';
+    final isPending = approvalState == 'pending';
+    final isDenied = approvalState == 'denied';
     final isAdmin = user['is_admin'] == true;
+    final userId = (user['id'] as num?)?.toInt();
+    final isSelected =
+        isPending && userId != null && _selectedPendingUserIds.contains(userId);
+    final statusColor = isApproved
+        ? AppColors.successGreen
+        : isDenied
+            ? AppColors.dangerRed
+            : AppColors.warningYellow;
 
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: AppColors.cardDark,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.cardDarkHighlight),
+        border: Border.all(color: AppColors.elevatedCardDark),
       ),
       child: Column(
         children: [
@@ -768,7 +1190,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             children: [
               _buildAvatar(
                 user['username'] ?? 'U',
-                isApproved ? AppColors.emerald : AppColors.amber,
+                statusColor,
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
@@ -795,13 +1217,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                               vertical: 2,
                             ),
                             decoration: BoxDecoration(
-                              color: AppColors.purplePrimary.withValues(alpha: 0.2),
+                              color: AppColors.brandPurple.withValues(alpha: 0.2),
                               borderRadius: AppSpacing.borderRadiusSm,
                             ),
                             child: Text(
                               'ADMIN',
                               style: AppTypography.labelSmall.copyWith(
-                                color: AppColors.purplePrimary,
+                                color: AppColors.brandPurple,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -819,8 +1241,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     Row(
                       children: [
                         _pill(
-                          isApproved ? 'Approved' : 'Pending',
-                          isApproved ? AppColors.emerald : AppColors.amber,
+                          isApproved
+                              ? 'Approved'
+                              : isDenied
+                                  ? 'Denied'
+                                  : 'Pending',
+                          statusColor,
                         ),
                         if (isApproved) ...[
                           const SizedBox(width: 6),
@@ -834,30 +1260,64 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ],
                 ),
               ),
+              if (isPending && userId != null)
+                Checkbox(
+                  value: isSelected,
+                  onChanged: _bulkActionInProgress
+                      ? null
+                      : (v) {
+                          setState(() {
+                            if (v == true) {
+                              _selectedPendingUserIds.add(userId);
+                            } else {
+                              _selectedPendingUserIds.remove(userId);
+                            }
+                          });
+                        },
+                  activeColor: AppColors.brandPurple,
+                  checkColor: Colors.white,
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                ),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
-              if (!isApproved)
+              if (isPending)
                 Expanded(
                   child: _smallButton(
                     label: 'Approve',
-                    color: AppColors.purplePrimary,
+                    color: AppColors.brandPurple,
                     onTap: () => _approveUser(user['id']),
                   ),
                 ),
-              if (!isApproved) const SizedBox(width: AppSpacing.sm),
+              if (isPending) const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: _smallButton(
-                  label: isApproved ? 'Grant Credits' : 'Delete',
-                  color: AppColors.cardDarkHighlight,
+                  label: isApproved
+                      ? 'Grant Credits'
+                      : isDenied
+                          ? 'Delete'
+                          : 'Deny',
+                  color: AppColors.elevatedCardDark,
                   textColor: Colors.white,
                   onTap: isApproved
                       ? () => _showGrantCreditsDialog(user)
-                      : () => _deleteUser(user['id']),
+                      : isDenied
+                          ? () => _deleteUser(user['id'])
+                          : () => _denyUser(user['id']),
                 ),
               ),
+              if (isDenied) ...[
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _smallButton(
+                    label: 'Restore',
+                    color: AppColors.brandPurple,
+                    onTap: () => _restoreUser(user['id']),
+                  ),
+                ),
+              ],
             ],
           ),
         ],
@@ -865,6 +1325,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
   Widget _buildCreditsView() {
+    final selectedCount = _selectedCreditRequestIds.length;
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       child: Column(
@@ -872,6 +1333,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         children: [
           _buildSectionHeader('Credit Requests', '${_creditRequests.length}'),
           const SizedBox(height: AppSpacing.sm),
+          if (_creditRequests.isNotEmpty) _buildBulkCreditRequestsBar(selectedCount),
           if (_creditRequests.isEmpty)
             _buildEmptyCard('No pending requests')
           else
@@ -882,21 +1344,308 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
+  Widget _buildSettingsView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildSectionHeader('Settings', 'Registration & Emails'),
+          const SizedBox(height: AppSpacing.sm),
+          _buildSettingCard(
+            title: 'User Registration',
+            child: Column(
+              children: [
+                SwitchListTile(
+                  value: _settingBool('auto_approve_users', fallback: false),
+                  onChanged: (v) =>
+                      _updateSetting('auto_approve_users', v ? 'true' : 'false'),
+                  activeColor: AppColors.brandPurple,
+                  title: Text(
+                    'Auto-approve new users',
+                    style: AppTypography.titleSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'When OFF, new users must be approved by an admin before they can log in.',
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _startingCreditsController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          labelText: 'Starting credits',
+                          labelStyle: const TextStyle(color: Colors.white70),
+                          filled: true,
+                          fillColor: AppColors.elevatedCardDark,
+                          border: OutlineInputBorder(
+                            borderRadius: AppSpacing.borderRadiusMd,
+                            borderSide:
+                                BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: AppSpacing.borderRadiusMd,
+                            borderSide:
+                                BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    ElevatedButton(
+                      onPressed: () {
+                        final raw = _startingCreditsController.text.trim();
+                        final parsed = int.tryParse(raw);
+                        if (parsed == null || parsed < 0) {
+                          _showSnackBar('Starting credits must be a number ≥ 0',
+                              AppColors.dangerRed);
+                          return;
+                        }
+                        _updateSetting('starting_credits', parsed.toString());
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.brandPurple,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: Text(
+                        'Save',
+                        style: AppTypography.labelLarge.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _buildSettingCard(
+            title: 'Email Notifications',
+            child: Column(
+              children: [
+                SwitchListTile(
+                  value: _settingBool('admin_notification_on_signup', fallback: true),
+                  onChanged: (v) => _updateSetting(
+                      'admin_notification_on_signup', v ? 'true' : 'false'),
+                  activeColor: AppColors.brandPurple,
+                  title: Text(
+                    'Notify admins on signup',
+                    style: AppTypography.titleSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Sends an email to admin(s) when a new user registers and is pending approval.',
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+                SwitchListTile(
+                  value: _settingBool('send_welcome_email', fallback: true),
+                  onChanged: (v) =>
+                      _updateSetting('send_welcome_email', v ? 'true' : 'false'),
+                  activeColor: AppColors.brandPurple,
+                  title: Text(
+                    'Send welcome email',
+                    style: AppTypography.titleSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Sent when users are auto-approved at registration.',
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+                SwitchListTile(
+                  value: _settingBool('send_approval_email', fallback: true),
+                  onChanged: (v) =>
+                      _updateSetting('send_approval_email', v ? 'true' : 'false'),
+                  activeColor: AppColors.brandPurple,
+                  title: Text(
+                    'Send approval email',
+                    style: AppTypography.titleSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Sent when an admin approves a pending user.',
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+                SwitchListTile(
+                  value: _settingBool('send_rejection_email', fallback: true),
+                  onChanged: (v) =>
+                      _updateSetting('send_rejection_email', v ? 'true' : 'false'),
+                  activeColor: AppColors.brandPurple,
+                  title: Text(
+                    'Send rejection email',
+                    style: AppTypography.titleSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Sent when an admin denies a pending user.',
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSettingCard({required String title, required Widget child}) {
+    return Container(
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: AppColors.surfaceDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.elevatedCardDark),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBulkCreditRequestsBar(int selectedCount) {
+    final allSelected = _creditRequests.isNotEmpty &&
+        _selectedCreditRequestIds.length == _creditRequests.length;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.elevatedCardDark),
+      ),
+      child: Row(
+        children: [
+          Checkbox(
+            value: allSelected,
+            onChanged: _bulkActionInProgress
+                ? null
+                : (v) {
+                    setState(() {
+                      _selectedCreditRequestIds
+                        ..clear()
+                        ..addAll(
+                          v == true
+                              ? _creditRequests
+                                  .map((r) => (r['id'] as num?)?.toInt())
+                                  .whereType<int>()
+                              : const <int>[],
+                        );
+                    });
+                  },
+            activeColor: AppColors.brandPurple,
+            checkColor: Colors.white,
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(
+              selectedCount == 0
+                  ? '${_creditRequests.length} pending'
+                  : '$selectedCount selected',
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white70,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: selectedCount == 0 || _bulkActionInProgress
+                ? null
+                : _bulkApproveSelectedCreditRequests,
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: AppColors.successGreen.withValues(alpha: 0.5)),
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.done_all_rounded, size: 18),
+            label: Text(
+              'Approve',
+              style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          OutlinedButton.icon(
+            onPressed: selectedCount == 0 || _bulkActionInProgress
+                ? null
+                : _bulkDenySelectedCreditRequests,
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: AppColors.warningYellow.withValues(alpha: 0.55)),
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.block_rounded, size: 18),
+            label: Text(
+              'Deny',
+              style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          TextButton(
+            onPressed: selectedCount == 0 || _bulkActionInProgress
+                ? null
+                : () => setState(() => _selectedCreditRequestIds.clear()),
+            child: Text(
+              'Clear',
+              style: AppTypography.labelLarge.copyWith(color: Colors.white70),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCreditRequestCard(Map<String, dynamic> request) {
+    final requestId = (request['id'] as num?)?.toInt();
+    final isSelected =
+        requestId != null && _selectedCreditRequestIds.contains(requestId);
+
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.md),
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: AppColors.cardDark,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.cardDarkHighlight),
+        border: Border.all(color: AppColors.elevatedCardDark),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              _buildAvatar(request['username'] ?? 'U', AppColors.purplePrimary),
+              _buildAvatar(request['username'] ?? 'U', AppColors.brandPurple),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
@@ -918,22 +1667,40 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ],
                 ),
               ),
+              if (requestId != null)
+                Checkbox(
+                  value: isSelected,
+                  onChanged: _bulkActionInProgress
+                      ? null
+                      : (v) {
+                          setState(() {
+                            if (v == true) {
+                              _selectedCreditRequestIds.add(requestId);
+                            } else {
+                              _selectedCreditRequestIds.remove(requestId);
+                            }
+                          });
+                        },
+                  activeColor: AppColors.brandPurple,
+                  checkColor: Colors.white,
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.4)),
+                ),
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.sm,
                   vertical: AppSpacing.xxs,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.purplePrimary.withValues(alpha: 0.12),
+                  color: AppColors.brandPurple.withValues(alpha: 0.12),
                   borderRadius: AppSpacing.borderRadiusRound,
                   border: Border.all(
-                    color: AppColors.purplePrimary.withValues(alpha: 0.25),
+                    color: AppColors.brandPurple.withValues(alpha: 0.25),
                   ),
                 ),
                 child: Text(
                   '+${request['amount_requested']} credits',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.purplePrimary,
+                    color: AppColors.brandPurple,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -946,7 +1713,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             Container(
               padding: const EdgeInsets.all(AppSpacing.sm),
               decoration: BoxDecoration(
-                color: AppColors.cardDarkHighlight,
+                color: AppColors.elevatedCardDark,
                 borderRadius: AppSpacing.borderRadiusSm,
               ),
               child: Text(
@@ -963,7 +1730,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               Expanded(
                 child: _smallButton(
                   label: 'Approve',
-                  color: AppColors.emerald,
+                  color: AppColors.successGreen,
                   onTap: () => _approveCreditRequest(request['id']),
                 ),
               ),
@@ -971,7 +1738,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               Expanded(
                 child: _smallButton(
                   label: 'Deny',
-                  color: AppColors.cardDarkHighlight,
+                  color: AppColors.elevatedCardDark,
                   textColor: Colors.white,
                   onTap: () => _denyCreditRequest(request['id']),
                 ),
@@ -987,9 +1754,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     return Container(
       padding: AppSpacing.paddingLg,
       decoration: BoxDecoration(
-        color: AppColors.cardDark,
+        color: AppColors.surfaceDark,
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.cardDarkHighlight),
+        border: Border.all(color: AppColors.elevatedCardDark),
       ),
       child: Center(
         child: Text(
@@ -1005,7 +1772,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       width: 44,
       height: 44,
       decoration: BoxDecoration(
-        color: AppColors.cardDarkHighlight,
+        color: AppColors.elevatedCardDark,
         shape: BoxShape.circle,
         border: Border.all(color: accent.withValues(alpha: 0.4)),
       ),
@@ -1074,14 +1841,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       child: Container(
         padding: AppSpacing.paddingMd,
         decoration: BoxDecoration(
-          color: AppColors.cardDark,
+          color: AppColors.surfaceDark,
           borderRadius: AppSpacing.borderRadiusLg,
-          border: Border.all(color: AppColors.cardDarkHighlight),
+          border: Border.all(color: AppColors.elevatedCardDark),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.warning_rounded, color: AppColors.rose, size: 40),
+            Icon(Icons.warning_rounded, color: AppColors.dangerRed, size: 40),
             const SizedBox(height: AppSpacing.md),
             Text(
               'Delete User',
@@ -1099,7 +1866,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 Expanded(
                   child: _smallButton(
                     label: 'Cancel',
-                    color: AppColors.cardDarkHighlight,
+                    color: AppColors.elevatedCardDark,
                     textColor: Colors.white,
                     onTap: () => Navigator.pop(context, false),
                   ),
@@ -1108,7 +1875,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 Expanded(
                   child: _smallButton(
                     label: 'Delete',
-                    color: AppColors.rose,
+                    color: AppColors.dangerRed,
                     onTap: () => Navigator.pop(context, true),
                   ),
                 ),
@@ -1131,14 +1898,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         child: Container(
           padding: AppSpacing.paddingMd,
           decoration: BoxDecoration(
-            color: AppColors.cardDark,
+            color: AppColors.surfaceDark,
             borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(color: AppColors.cardDarkHighlight),
+            border: Border.all(color: AppColors.elevatedCardDark),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.add_card, color: AppColors.emerald, size: 32),
+              Icon(Icons.add_card, color: AppColors.successGreen, size: 32),
               const SizedBox(height: AppSpacing.md),
               Text(
                 'Grant Credits',
@@ -1158,13 +1925,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   labelText: 'Amount',
                   labelStyle: const TextStyle(color: Colors.white60),
                   filled: true,
-                  fillColor: AppColors.cardDarkHighlight,
+                  fillColor: AppColors.elevatedCardDark,
                   border: OutlineInputBorder(
                     borderRadius: AppSpacing.borderRadiusMd,
                     borderSide: BorderSide.none,
                   ),
                   prefixIcon:
-                      const Icon(Icons.monetization_on, color: AppColors.emerald),
+                      const Icon(Icons.monetization_on, color: AppColors.successGreen),
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -1175,7 +1942,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   labelText: 'Reason (optional)',
                   labelStyle: const TextStyle(color: Colors.white60),
                   filled: true,
-                  fillColor: AppColors.cardDarkHighlight,
+                  fillColor: AppColors.elevatedCardDark,
                   border: OutlineInputBorder(
                     borderRadius: AppSpacing.borderRadiusMd,
                     borderSide: BorderSide.none,
@@ -1190,7 +1957,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   Expanded(
                     child: _smallButton(
                       label: 'Cancel',
-                      color: AppColors.cardDarkHighlight,
+                      color: AppColors.elevatedCardDark,
                       textColor: Colors.white,
                       onTap: () => Navigator.pop(context, false),
                     ),
@@ -1199,11 +1966,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   Expanded(
                     child: _smallButton(
                       label: 'Grant',
-                      color: AppColors.emerald,
+                      color: AppColors.successGreen,
                       onTap: () async {
                         final amount = int.tryParse(amountController.text);
                         if (amount == null || amount <= 0) {
-                          _showSnackBar('Please enter a valid amount', AppColors.rose);
+                          _showSnackBar('Please enter a valid amount', AppColors.dangerRed);
                           return;
                         }
                         try {
@@ -1216,7 +1983,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           );
                           if (context.mounted) Navigator.pop(context, true);
                         } catch (e) {
-                          _showSnackBar('Error granting credits: $e', AppColors.rose);
+                          _showSnackBar('Error granting credits: $e', AppColors.dangerRed);
                         }
                       },
                     ),
@@ -1231,7 +1998,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
     if (result == true) {
       _loadData();
-      _showSnackBar('Credits granted successfully', AppColors.emerald);
+      _showSnackBar('Credits granted successfully', AppColors.successGreen);
     }
   }
 
@@ -1252,7 +2019,7 @@ class _GeoPatternPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = AppColors.purplePrimary.withValues(alpha: 0.05)
+      ..color = AppColors.brandPurple.withValues(alpha: 0.05)
       ..strokeWidth = 1;
 
     const spacing = 60.0;

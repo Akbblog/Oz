@@ -80,6 +80,17 @@ SMTP_USER = os.getenv("SMTP_USER", "your_email@gmail.com")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "your_app_password")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@business-scraper.com")
 
+# Public app URL (used in emails). Example: https://app.infinityleadspro.com
+APP_URL = os.getenv("APP_URL", "").strip()
+
+# Optional override for who receives admin notifications.
+# Comma-separated list of emails (e.g. "admin@a.com,ops@a.com").
+ADMIN_NOTIFICATION_EMAILS = [
+    e.strip()
+    for e in os.getenv("ADMIN_NOTIFICATION_EMAILS", "").split(",")
+    if e.strip()
+]
+
 # Redis Settings (for Celery)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 

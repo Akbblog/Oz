@@ -11,14 +11,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:business_scraper_app/main.dart';
 import 'package:business_scraper_app/providers/auth_provider.dart';
+import 'package:business_scraper_app/providers/scraper_provider.dart';
+import 'package:business_scraper_app/providers/theme_provider.dart';
 
 void main() {
   testWidgets('App boots to auth wrapper', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(
-      ChangeNotifierProvider(
-        create: (_) => AuthProvider(),
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => ThemeProvider()),
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => ScraperProvider()),
+        ],
         child: const MyApp(),
       ),
     );

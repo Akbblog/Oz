@@ -79,7 +79,7 @@ class _RegisterScreenState extends State<RegisterScreen>
             Expanded(child: Text(message)),
           ],
         ),
-        backgroundColor: isError ? AppColors.error : AppColors.success,
+        backgroundColor: isError ? AppColors.dangerRed : AppColors.successGreen,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
           borderRadius: AppSpacing.borderRadiusMd,
@@ -101,7 +101,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     setState(() => _isLoading = true);
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final success = await authProvider.register(
+    final message = await authProvider.register(
       _usernameController.text.trim(),
       _emailController.text.trim(),
       _passwordController.text,
@@ -111,11 +111,13 @@ class _RegisterScreenState extends State<RegisterScreen>
       setState(() => _isLoading = false);
     }
 
-    if (success && mounted) {
-      _showSnackBar('Registration successful! Please wait for account approval.');
+    if (message != null && mounted) {
+      _showSnackBar(message);
       Navigator.of(context).pop();
     } else if (mounted) {
-      _showSnackBar('Registration failed. Please try again.', isError: true);
+      final error = authProvider.errorMessage ??
+          'Registration failed. Please try again.';
+      _showSnackBar(error, isError: true);
     }
   }
 
@@ -139,11 +141,11 @@ class _RegisterScreenState extends State<RegisterScreen>
                     children: [
                       Container(
                         decoration: BoxDecoration(
-                          color: AppColors.cardDark,
+                          color: AppColors.surfaceDark,
                           borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
                         ),
                         child: IconButton(
-                          icon: const Icon(Icons.chevron_left, color: AppColors.textSecondary),
+                          icon: const Icon(Icons.chevron_left, color: AppColors.textSecondaryLight),
                           onPressed: () => Navigator.of(context).pop(),
                         ),
                       ),
@@ -272,10 +274,10 @@ class _RegisterScreenState extends State<RegisterScreen>
       constraints: const BoxConstraints(maxWidth: 450),
       padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        color: AppColors.cardDark.withValues(alpha: 0.8),
+        color: AppColors.surfaceDark.withValues(alpha: 0.8),
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
         border: Border.all(
-          color: AppColors.glassBorder,
+          color: AppColors.borderDark,
         ),
         boxShadow: [
           BoxShadow(
@@ -294,7 +296,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               'Create Account',
               textAlign: TextAlign.center,
               style: AppTypography.titleLarge.copyWith(
-                color: AppColors.textLight,
+                color: AppColors.textPrimaryDark,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -303,7 +305,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               'Fill in your details to get started',
               textAlign: TextAlign.center,
               style: AppTypography.bodySmall.copyWith(
-                color: AppColors.textSecondary,
+                color: AppColors.textSecondaryLight,
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
@@ -313,7 +315,7 @@ class _RegisterScreenState extends State<RegisterScreen>
             const SizedBox(height: 6),
             TextFormField(
               controller: _usernameController,
-              style: const TextStyle(color: AppColors.textPrimary),
+              style: const TextStyle(color: AppColors.textPrimaryLight),
               decoration: _inputDecoration(
                 hint: 'Choose a username',
                 icon: Icons.person_outline_rounded,
@@ -329,7 +331,7 @@ class _RegisterScreenState extends State<RegisterScreen>
             TextFormField(
               controller: _emailController,
               keyboardType: TextInputType.emailAddress,
-              style: const TextStyle(color: AppColors.textPrimary),
+              style: const TextStyle(color: AppColors.textPrimaryLight),
               decoration: _inputDecoration(
                 hint: 'Enter your email',
                 icon: Icons.mail_outline_rounded,
@@ -355,7 +357,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                 return TextFormField(
                   controller: _passwordController,
                   obscureText: !visible,
-                  style: const TextStyle(color: AppColors.textPrimary),
+                  style: const TextStyle(color: AppColors.textPrimaryLight),
                   decoration: _inputDecoration(
                     hint: 'Create a password',
                     icon: Icons.lock_outline_rounded,
@@ -364,7 +366,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                         visible
                             ? Icons.visibility_outlined
                             : Icons.visibility_off_outlined,
-                        color: AppColors.textSecondary,
+                        color: AppColors.textSecondaryLight,
                         size: 20,
                       ),
                       onPressed: () => _passwordVisible.value = !visible,
@@ -387,7 +389,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                 return TextFormField(
                   controller: _confirmPasswordController,
                   obscureText: !visible,
-                  style: const TextStyle(color: AppColors.textPrimary),
+                  style: const TextStyle(color: AppColors.textPrimaryLight),
                   decoration: _inputDecoration(
                     hint: 'Confirm your password',
                     icon: Icons.lock_reset_rounded,
@@ -396,7 +398,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                         visible
                             ? Icons.visibility_outlined
                             : Icons.visibility_off_outlined,
-                        color: AppColors.textSecondary,
+                        color: AppColors.textSecondaryLight,
                         size: 20,
                       ),
                       onPressed: () => _confirmPasswordVisible.value = !visible,
@@ -446,11 +448,11 @@ class _RegisterScreenState extends State<RegisterScreen>
             // Create Account Button
             Container(
               decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
+                color: AppColors.primaryBlue,
                 borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primaryStart.withValues(alpha: 0.3),
+                    color: AppColors.primaryBlue.withValues(alpha: 0.3),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -504,7 +506,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       child: Text(
         text,
         style: AppTypography.bodySmall.copyWith(
-          color: AppColors.textSecondary,
+          color: AppColors.textSecondaryLight,
           fontWeight: FontWeight.w500,
           fontSize: 12,
         ),
@@ -535,11 +537,11 @@ class _RegisterScreenState extends State<RegisterScreen>
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide: const BorderSide(color: AppColors.primaryStart, width: 2),
+        borderSide: const BorderSide(color: AppColors.primaryBlue, width: 2),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide: const BorderSide(color: AppColors.error, width: 1),
+        borderSide: const BorderSide(color: AppColors.dangerRed, width: 1),
       ),
     );
   }
@@ -551,7 +553,7 @@ class _RegisterScreenState extends State<RegisterScreen>
         Text(
           "Already have an account?",
           style: AppTypography.bodyMedium.copyWith(
-            color: AppColors.textSecondary,
+            color: AppColors.textSecondaryLight,
           ),
         ),
         TextButton(

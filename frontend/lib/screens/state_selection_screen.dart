@@ -1,6 +1,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:country_flags/country_flags.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
@@ -11,8 +13,13 @@ import 'scraping_screen.dart';
 
 class StateSelectionScreen extends StatefulWidget {
   final bool showHeader;
+  final void Function(String citiesText, String maxResults)? onContinueToSearch;
 
-  const StateSelectionScreen({super.key, this.showHeader = true});
+  const StateSelectionScreen({
+    super.key,
+    this.showHeader = true,
+    this.onContinueToSearch,
+  });
 
   @override
   State<StateSelectionScreen> createState() => _StateSelectionScreenState();
@@ -30,6 +37,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   bool _isLoading = true;
   bool _isCitiesLoading = false;
   bool _includeSuburbs = true;
+  bool _showDraftBanner = false;
   Map<String, List<String>> _statesAndCities = {};
   final Map<String, List<String>> _citiesCache = {};
   List<String> _filteredStates = [];
@@ -43,6 +51,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   late AnimationController _pulseController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _pulseAnimation;
+
+  static const String _locationDraftKey = 'wizard_location_draft_v1';
 
   @override
   void initState() {
@@ -98,6 +108,14 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   }
   Future<void> _loadInitialData() async {
     try {
+      final draft = await _readLocationDraft();
+      if (draft != null) {
+        _selectedCountry = (draft['country'] as String?) ?? _selectedCountry;
+        _selectedState = (draft['state'] as String?);
+        _selectedCities = List<String>.from(draft['cities'] ?? const <String>[]);
+        _includeSuburbs = (draft['include_suburbs'] as bool?) ?? _includeSuburbs;
+      }
+
       final results = await Future.wait([
         _apiService.getCountries(),
         _apiService.getStates(),
@@ -119,6 +137,11 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         states = List<String>.from(statesByCountry[_selectedCountry]!);
       }
 
+      if (_selectedState != null && !states.contains(_selectedState)) {
+        _selectedState = null;
+        _selectedCities = [];
+      }
+
       if (mounted) {
         setState(() {
           _availableCountries = countries;
@@ -128,10 +151,22 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           };
           _filteredStates = states;
           _isLoading = false;
+          _showDraftBanner = draft != null;
         });
         _animationController.forward();
 
         _preloadCities(states.take(5).toList());
+
+        if (_selectedState != null) {
+          await _loadCitiesForState(_selectedState!);
+          if (!mounted) return;
+          setState(() {
+            final available = _statesAndCities[_selectedState] ?? const <String>[];
+            _selectedCities = _selectedCities.where(available.contains).toList();
+            _selectAllCities = _selectedCities.isNotEmpty &&
+                _selectedCities.length == available.length;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error loading initial data: $e');
@@ -149,6 +184,67 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         _animationController.forward();
       }
     }
+  }
+
+  Future<Map<String, dynamic>?> _readLocationDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_locationDraftKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {
+      // Ignore draft read errors.
+    }
+    return null;
+  }
+
+  Future<void> _saveLocationDraft() async {
+    final country = _selectedCountry;
+    final state = _selectedState;
+    if (country == null || country.isEmpty || state == null || state.isEmpty) {
+      return;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = {
+        'country': country,
+        'state': state,
+        'cities': _selectedCities,
+        'include_suburbs': _includeSuburbs,
+        'saved_at': DateTime.now().toIso8601String(),
+      };
+      await prefs.setString(_locationDraftKey, jsonEncode(payload));
+
+      if (!mounted) return;
+      setState(() => _showDraftBanner = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Draft saved'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      // Ignore save errors.
+    }
+  }
+
+  Future<void> _clearLocationDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_locationDraftKey);
+    } catch (_) {
+      // Ignore clear errors.
+    }
+    if (!mounted) return;
+    setState(() => _showDraftBanner = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Draft cleared'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _preloadCities(List<String> states) async {
@@ -295,6 +391,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         children: [
           if (widget.showHeader) _buildHeader(),
           const WorkflowStepper(currentStep: 0),
+          _buildWizardProgress(),
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(
@@ -316,7 +413,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                     const SizedBox(height: AppSpacing.lg),
                   _buildIncludeSuburbsCard(),
                   const SizedBox(height: AppSpacing.xl),
-                  _buildContinueButton(),
+                  _buildFooterActions(layoutType),
                 ],
               ),
             ),
@@ -333,6 +430,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         children: [
           if (widget.showHeader) _buildHeader(),
           const WorkflowStepper(currentStep: 0),
+          _buildWizardProgress(),
           Expanded(
             child: SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
@@ -354,7 +452,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                     const SizedBox(height: AppSpacing.lg),
                   _buildIncludeSuburbsCard(),
                   const SizedBox(height: AppSpacing.xl),
-                  _buildContinueButton(),
+                  _buildFooterActions(layoutType),
                 ],
               ),
             ),
@@ -375,6 +473,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         children: [
           if (widget.showHeader) _buildHeader(),
           const WorkflowStepper(currentStep: 0),
+          _buildWizardProgress(),
           Expanded(
             child: SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
@@ -410,7 +509,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                   const SizedBox(height: AppSpacing.lg),
                   _buildIncludeSuburbsCard(),
                   const SizedBox(height: AppSpacing.xl),
-                  _buildContinueButton(),
+                  _buildFooterActions(layoutType),
                 ],
               ),
             ),
@@ -1362,18 +1461,120 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  Widget _buildContinueButton() {
+  Widget _buildWizardProgress() {
+    final completed = [
+      _selectedCountry != null && _selectedCountry!.isNotEmpty,
+      _selectedState != null && _selectedState!.isNotEmpty,
+      _selectedCities.isNotEmpty,
+    ].where((v) => v).length;
+    final progress = (completed / 3).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        0,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
+      child: Column(
+        children: [
+          if (_showDraftBanner)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: AppSpacing.sm,
+              ),
+              margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+              decoration: BoxDecoration(
+                color: _LocationColors.primary.withValues(alpha: 0.12),
+                borderRadius: AppSpacing.borderRadiusLg,
+                border: Border.all(
+                  color: _LocationColors.primary.withValues(alpha: 0.22),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.save_rounded,
+                    color: _LocationColors.primaryLight,
+                    size: 18,
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  Expanded(
+                    child: Text(
+                      'Draft loaded',
+                      style: AppTypography.labelSmall.copyWith(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _clearLocationDraft,
+                    child: Text(
+                      'Clear',
+                      style: AppTypography.labelSmall.copyWith(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: AppSpacing.borderRadiusRound,
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 6,
+                    backgroundColor:
+                        _LocationColors.primary.withValues(alpha: 0.18),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _LocationColors.primary,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                '${(progress * 100).round()}%',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFooterActions(LayoutType layoutType) {
     final canContinue = _selectedState != null && _selectedCities.isNotEmpty;
-    return GradientButton(
+    final isCompact = layoutType == LayoutType.mobile;
+
+    final continueButton = GradientButton(
       text: _selectedCities.isEmpty
           ? 'Select locations'
-          : 'Analyze ${_selectedCities.length} Regions',
+          : 'Continue (${_selectedCities.length} cities)',
       icon: Icons.arrow_forward_rounded,
       onPressed: canContinue
           ? () {
               final citiesText = _selectedCities
                   .map((city) => '$city, $_selectedState')
                   .join('; ');
+
+              if (widget.onContinueToSearch != null) {
+                widget.onContinueToSearch!(citiesText, '10');
+                return;
+              }
 
               Navigator.of(context).push(
                 PageRouteBuilder(
@@ -1404,6 +1605,46 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
               );
             }
           : null,
+    );
+
+    final draftButton = OutlinedButton.icon(
+      onPressed: (_selectedState == null) ? null : _saveLocationDraft,
+      style: OutlinedButton.styleFrom(
+        side: BorderSide(
+          color: _LocationColors.primary.withValues(alpha: 0.35),
+        ),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.md,
+        ),
+      ),
+      icon: const Icon(Icons.save_rounded, size: 18),
+      label: Text(
+        'Save draft',
+        style: AppTypography.labelLarge.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+
+    if (isCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          draftButton,
+          const SizedBox(height: AppSpacing.sm),
+          continueButton,
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(child: draftButton),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(flex: 2, child: continueButton),
+      ],
     );
   }
 
@@ -1460,15 +1701,15 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
 }
 
 class _LocationColors {
-  static const Color background = Color(0xFF020617);
-  static const Color surface = Color(0xFF0F172A);
-  static const Color surfaceHighlight = Color(0xFF1E293B);
-  static const Color primary = Color(0xFF4F46E5);
-  static const Color primaryLight = Color(0xFF818CF8);
-  static const Color textSecondary = Color(0xFF94A3B8);
+  static const Color background = AppColors.backgroundDark;
+  static const Color surface = AppColors.surfaceDark;
+  static const Color surfaceHighlight = AppColors.elevatedCardDark;
+  static const Color primary = AppColors.primaryBlue;
+  static const Color primaryLight = AppColors.primaryBlueLight;
+  static const Color textSecondary = AppColors.textSecondaryDark;
 
   static const LinearGradient primaryGradient = LinearGradient(
-    colors: [Color(0xFF4F46E5), Color(0xFF9333EA)],
+    colors: [AppColors.primaryBlue, AppColors.primaryBlueDark],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );

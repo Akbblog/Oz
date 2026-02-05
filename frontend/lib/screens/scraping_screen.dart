@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import '../providers/scraper_provider.dart';
 import '../services/api_service.dart';
+import '../core/download_helper.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
+import '../widgets/progress_stepper.dart';
 import 'results_screen.dart';
 
 class ScrapingScreen extends StatefulWidget {
@@ -12,6 +16,7 @@ class ScrapingScreen extends StatefulWidget {
   final String initialCities;
   final String initialMaxResults;
   final bool showHeader;
+  final VoidCallback? onBackToCities;
 
   const ScrapingScreen({
     super.key,
@@ -19,6 +24,7 @@ class ScrapingScreen extends StatefulWidget {
     this.initialCities = '',
     this.initialMaxResults = '50',
     this.showHeader = true,
+    this.onBackToCities,
   });
 
   @override
@@ -39,6 +45,11 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   bool _loadingCredits = true;
   bool _canCreateJob = true;
   String? _lastCompletedJobId; // Track job completion for auto-navigation
+  String _logFilter = 'All'; // All, Errors
+  bool _attemptedStart = false;
+  bool _draftLoaded = false;
+
+  static const String _searchDraftKey = 'wizard_search_draft_v1';
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
@@ -49,6 +60,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     _categoryController.text = widget.initialCategory;
     _citiesController.text = widget.initialCities;
     _maxResults = int.tryParse(widget.initialMaxResults) ?? 50;
+    _loadSearchDraftIfNeeded();
 
     _fadeController = AnimationController(
       vsync: this,
@@ -67,6 +79,34 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupJobCompletionListener();
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant ScrapingScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final provider = Provider.of<ScraperProvider>(context, listen: false);
+    final isRunning = provider.status == ScrapingStatus.running;
+    if (isRunning) return;
+
+    final citiesChanged = widget.initialCities != oldWidget.initialCities &&
+        widget.initialCities.trim().isNotEmpty;
+    final categoryChanged = widget.initialCategory != oldWidget.initialCategory &&
+        widget.initialCategory.trim().isNotEmpty;
+    final maxChanged = widget.initialMaxResults != oldWidget.initialMaxResults &&
+        widget.initialMaxResults.trim().isNotEmpty;
+
+    if (!citiesChanged && !categoryChanged && !maxChanged) return;
+
+    setState(() {
+      if (citiesChanged) _citiesController.text = widget.initialCities;
+      if (categoryChanged) _categoryController.text = widget.initialCategory;
+      if (maxChanged) {
+        _maxResults = int.tryParse(widget.initialMaxResults) ?? _maxResults;
+      }
+      _attemptedStart = false;
+    });
+    _updateCostEstimate();
   }
 
   void _setupJobCompletionListener() {
@@ -190,20 +230,156 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     }
   }
 
-  Future<void> _startScraping(ScraperProvider provider) async {
+  String? _validationMessage() {
     final category = _categoryController.text.trim();
     final cities = _parseCities();
 
-    if (category.isEmpty || cities.isEmpty) {
+    if (category.isEmpty) {
+      return 'Enter a lead category to continue.';
+    }
+
+    if (cities.isEmpty) {
+      return 'Add at least one target city to continue.';
+    }
+
+    if (!_canCreateJob) {
+      return 'Rate limit reached. Try again later.';
+    }
+
+    if (!_loadingCredits && _estimatedCost > 0 && _creditBalance < _estimatedCost) {
+      return 'Insufficient credits. Required: $_estimatedCost, Available: $_creditBalance';
+    }
+
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _readSearchDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_searchDraftKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {
+      // Ignore draft read errors.
+    }
+    return null;
+  }
+
+  Future<void> _loadSearchDraftIfNeeded() async {
+    final hasInitial =
+        widget.initialCategory.trim().isNotEmpty || widget.initialCities.trim().isNotEmpty;
+    if (hasInitial) return;
+
+    if (_categoryController.text.trim().isNotEmpty ||
+        _citiesController.text.trim().isNotEmpty) {
+      return;
+    }
+
+    final draft = await _readSearchDraft();
+    if (draft == null) return;
+
+    if (!mounted) return;
+    setState(() {
+      _categoryController.text = (draft['category'] as String?) ?? '';
+      _citiesController.text = (draft['cities_text'] as String?) ?? '';
+      _maxResults = (draft['max_results'] as int?) ?? _maxResults;
+      _draftLoaded = true;
+    });
+    _updateCostEstimate();
+  }
+
+  Future<void> _saveSearchDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = {
+        'category': _categoryController.text.trim(),
+        'cities_text': _citiesController.text.trim(),
+        'max_results': _maxResults,
+        'saved_at': DateTime.now().toIso8601String(),
+      };
+      await prefs.setString(_searchDraftKey, jsonEncode(payload));
+      if (!mounted) return;
+      setState(() => _draftLoaded = true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter category and cities')),
+        const SnackBar(
+          content: Text('Draft saved'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      // Ignore save errors.
+    }
+  }
+
+  Future<void> _clearSearchDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_searchDraftKey);
+    } catch (_) {
+      // Ignore clear errors.
+    }
+    if (!mounted) return;
+    setState(() => _draftLoaded = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Draft cleared'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _openReviewSheet(ScraperProvider provider) async {
+    setState(() => _attemptedStart = true);
+
+    final validation = _validationMessage();
+    if (validation != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(validation),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
 
-    if (!_canCreateJob) {
+    final category = _categoryController.text.trim();
+    final cities = _parseCities();
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return _ReviewSheet(
+          category: category,
+          cities: cities,
+          maxResults: _maxResults,
+          estimatedCost: _estimatedCost,
+          creditBalance: _creditBalance,
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      await _startScraping(provider);
+    }
+  }
+
+  Future<void> _startScraping(ScraperProvider provider) async {
+    final category = _categoryController.text.trim();
+    final cities = _parseCities();
+
+    setState(() => _attemptedStart = true);
+    final validation = _validationMessage();
+    if (validation != null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Rate limit reached. Try again later.')),
+        SnackBar(
+          content: Text(validation),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
@@ -220,8 +396,6 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     super.build(context); // Required for AutomaticKeepAliveClientMixin
     final scraperProvider = Provider.of<ScraperProvider>(context);
     final isRunning = scraperProvider.status == ScrapingStatus.running;
-    final progress = scraperProvider.currentJob?.progress ?? 0;
-    final logs = scraperProvider.getCurrentLogs();
     final layoutType =
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
@@ -236,6 +410,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               ? Column(
                   children: [
                     if (widget.showHeader) _buildHeader(),
+                    if (widget.showHeader)
+                      WorkflowStepper(currentStep: isRunning ? 2 : 1),
                     Expanded(
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.fromLTRB(
@@ -251,9 +427,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                             const SizedBox(height: AppSpacing.lg),
                             _buildConfigSection(),
                             const SizedBox(height: AppSpacing.lg),
-                            _buildStartButton(scraperProvider, isRunning),
+                            _buildWizardActions(scraperProvider, isRunning),
                             const SizedBox(height: AppSpacing.lg),
-                            _buildActivitySection(progress, logs, isRunning),
+                            _buildActivitySection(scraperProvider, layoutType),
                           ],
                         ),
                       ),
@@ -263,6 +439,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               : Column(
                   children: [
                     if (widget.showHeader) _buildHeader(),
+                    if (widget.showHeader)
+                      WorkflowStepper(currentStep: isRunning ? 2 : 1),
                     Expanded(
                       child: SingleChildScrollView(
                         padding: EdgeInsets.fromLTRB(
@@ -287,7 +465,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                                     children: [
                                       _buildConfigSection(),
                                       const SizedBox(height: AppSpacing.lg),
-                                      _buildStartButton(
+                                      _buildWizardActions(
                                           scraperProvider, isRunning),
                                     ],
                                   ),
@@ -298,7 +476,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                                       ? 55
                                       : 60,
                                   child: _buildActivitySection(
-                                      progress, logs, isRunning),
+                                      scraperProvider, layoutType),
                                 ),
                               ],
                             ),
@@ -690,45 +868,190 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildStartButton(ScraperProvider provider, bool isRunning) {
-    return GestureDetector(
-      onTap: isRunning ? null : () => _startScraping(provider),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [_ScrapeColors.primary, _ScrapeColors.primaryLight],
-          ),
-          borderRadius: AppSpacing.borderRadiusLg,
-          boxShadow: [
-            BoxShadow(
-              color: _ScrapeColors.primary.withValues(alpha: 0.4),
-              blurRadius: 18,
-              spreadRadius: -8,
+  Widget _buildWizardActions(ScraperProvider provider, bool isRunning) {
+    final validation = _validationMessage();
+    final canReview = !isRunning && validation == null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_draftLoaded)
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.sm,
             ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+            margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: _ScrapeColors.primary.withValues(alpha: 0.12),
+              borderRadius: AppSpacing.borderRadiusLg,
+              border: Border.all(
+                color: _ScrapeColors.primary.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.save_rounded, color: Colors.white70, size: 18),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    'Draft loaded',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _clearSearchDraft,
+                  child: Text(
+                    'Clear',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (!isRunning) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                final cb = widget.onBackToCities;
+                if (cb != null) {
+                  cb();
+                } else {
+                  Navigator.maybePop(context);
+                }
+              },
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xs,
+                  vertical: AppSpacing.xxs,
+                ),
+                foregroundColor: Colors.white70,
+              ),
+              icon: const Icon(Icons.arrow_back_rounded, size: 18),
+              label: Text(
+                'Back to Cities',
+                style: AppTypography.labelSmall.copyWith(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+        ],
+        Row(
           children: [
-            const Icon(Icons.rocket_launch_rounded, color: Colors.white),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: isRunning ? null : _saveSearchDraft,
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.md,
+                  ),
+                ),
+                icon: const Icon(Icons.bookmark_add_rounded, size: 18),
+                label: Text(
+                  'Save draft',
+                  style: AppTypography.labelLarge.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(width: AppSpacing.sm),
-            Text(
-              isRunning ? 'Running...' : 'Start Search',
-              style: AppTypography.labelLarge.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.1,
+            Expanded(
+              flex: 2,
+              child: GestureDetector(
+                onTap: canReview ? () => _openReviewSheet(provider) : () {
+                  setState(() => _attemptedStart = true);
+                  if (validation != null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(validation),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                },
+                child: AnimatedContainer(
+                  duration: AppSpacing.durationFast,
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: canReview
+                          ? [_ScrapeColors.primary, _ScrapeColors.primaryLight]
+                          : [Colors.white24, Colors.white10],
+                    ),
+                    borderRadius: AppSpacing.borderRadiusLg,
+                    boxShadow: canReview
+                        ? [
+                            BoxShadow(
+                              color: _ScrapeColors.primary.withValues(alpha: 0.4),
+                              blurRadius: 18,
+                              spreadRadius: -8,
+                            ),
+                          ]
+                        : null,
+                    border: canReview
+                        ? null
+                        : Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        isRunning ? Icons.autorenew_rounded : Icons.rocket_launch_rounded,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Text(
+                        isRunning ? 'Running...' : 'Review & Start',
+                        style: AppTypography.labelLarge.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
         ),
-      ),
+        if (_attemptedStart && validation != null) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            validation,
+            style: AppTypography.bodySmall.copyWith(
+              color: _ScrapeColors.rose,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ],
     );
   }
 
   Widget _buildActivitySection(
-      int progress, List<String> logs, bool isRunning) {
+      ScraperProvider scraperProvider, LayoutType layoutType) {
+    final job = scraperProvider.currentJob;
+    final isRunning = scraperProvider.status == ScrapingStatus.running;
+    final progress = job?.progress ?? 0;
+    final logs = scraperProvider.getCurrentLogs();
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
@@ -772,16 +1095,24 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               ),
             ],
           ),
+          const SizedBox(height: AppSpacing.sm),
+          _buildJobControls(scraperProvider),
+          const SizedBox(height: AppSpacing.sm),
+          _buildJobStages(job),
           const SizedBox(height: AppSpacing.md),
           Row(
             children: [
               _buildProgressCircle(progress, isRunning),
               const SizedBox(width: AppSpacing.md),
               Expanded(
-                child: _buildLogBox(logs),
+                child: _buildLogBox(logs, jobId: job?.jobId),
               ),
             ],
           ),
+          const SizedBox(height: AppSpacing.md),
+          _buildJobStats(job),
+          const SizedBox(height: AppSpacing.md),
+          _buildCityProgress(job, layoutType),
         ],
       ),
     );
@@ -827,10 +1158,11 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildLogBox(List<String> logs) {
-    final displayLogs = logs.isEmpty
-        ? ['> Waiting for job to start...']
-        : logs.take(6).toList();
+  Widget _buildLogBox(List<String> logs, {String? jobId}) {
+    final filtered = _filteredLogs(logs);
+    final displayLogs = filtered.isEmpty
+        ? ['> Waiting for logs...']
+        : filtered.take(10).toList();
 
     return Container(
       padding: AppSpacing.paddingSm,
@@ -841,41 +1173,971 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           color: Colors.white.withValues(alpha: 0.08),
         ),
       ),
-      child: SizedBox(
-        height: 96,
-        child: ListView.builder(
-          itemCount: displayLogs.length,
-          itemBuilder: (context, index) {
-            final line = displayLogs[index];
-            final color = line.contains('error')
-                ? _ScrapeColors.rose
-                : line.contains('Extracting')
-                    ? _ScrapeColors.primary
-                    : Colors.white70;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                line,
-                style: AppTypography.labelSmall.copyWith(
-                  color: color,
-                  fontFamily: 'monospace',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              _logFilterChip('All'),
+              const SizedBox(width: AppSpacing.xs),
+              _logFilterChip('Errors'),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Export logs',
+                onPressed: (jobId == null || logs.isEmpty)
+                    ? null
+                    : () => _exportLogs(logs, jobId),
+                icon: Icon(
+                  Icons.download_rounded,
+                  color: (jobId == null || logs.isEmpty)
+                      ? Colors.white24
+                      : Colors.white60,
+                  size: 18,
                 ),
               ),
-            );
-          },
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          SizedBox(
+            height: 110,
+            child: ListView.builder(
+              itemCount: displayLogs.length,
+              itemBuilder: (context, index) {
+                final line = displayLogs[index];
+                final color = _isErrorLogLine(line)
+                    ? _ScrapeColors.rose
+                    : line.toLowerCase().contains('starting')
+                        ? _ScrapeColors.primaryLight
+                        : Colors.white70;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    line,
+                    style: AppTypography.labelSmall.copyWith(
+                      color: color,
+                      fontFamily: 'monospace',
+                      height: 1.2,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _logFilterChip(String label) {
+    final isActive = _logFilter == label;
+    return GestureDetector(
+      onTap: () => setState(() => _logFilter = label),
+      child: AnimatedContainer(
+        duration: AppSpacing.durationFast,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xxs,
+        ),
+        decoration: BoxDecoration(
+          color: isActive
+              ? _ScrapeColors.primary.withValues(alpha: 0.25)
+              : Colors.white.withValues(alpha: 0.06),
+          borderRadius: AppSpacing.borderRadiusSm,
+          border: Border.all(
+            color: isActive
+                ? _ScrapeColors.primaryLight
+                : Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
+        child: Text(
+          label,
+          style: AppTypography.labelSmall.copyWith(
+            color: isActive ? Colors.white : Colors.white70,
+            fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
+          ),
         ),
       ),
     );
   }
+
+  List<String> _filteredLogs(List<String> logs) {
+    if (_logFilter == 'Errors') {
+      return logs.where(_isErrorLogLine).toList();
+    }
+    return logs;
+  }
+
+  bool _isErrorLogLine(String line) {
+    final l = line.toLowerCase();
+    return l.contains('error') || l.contains('failed') || l.contains('timeout');
+  }
+
+  Future<void> _exportLogs(List<String> logs, String jobId) async {
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+    final content = logs.join('\n');
+    await saveCsv(content, 'job_logs_${jobId}_$stamp', context: context);
+  }
+
+  Widget _buildJobControls(ScraperProvider scraperProvider) {
+    final job = scraperProvider.currentJob;
+    final status = job?.status ?? ScrapingStatus.idle;
+    final isRunning = status == ScrapingStatus.running;
+
+    Color pillColor;
+    String label;
+    IconData icon;
+
+    switch (status) {
+      case ScrapingStatus.running:
+        pillColor = _ScrapeColors.primaryLight;
+        label = 'Running';
+        icon = Icons.autorenew_rounded;
+        break;
+      case ScrapingStatus.completed:
+        pillColor = _ScrapeColors.emerald;
+        label = 'Completed';
+        icon = Icons.check_circle_rounded;
+        break;
+      case ScrapingStatus.cancelled:
+        pillColor = _ScrapeColors.rose;
+        label = 'Cancelled';
+        icon = Icons.cancel_rounded;
+        break;
+      case ScrapingStatus.failed:
+        pillColor = _ScrapeColors.rose;
+        label = 'Failed';
+        icon = Icons.error_rounded;
+        break;
+      case ScrapingStatus.idle:
+        pillColor = Colors.white38;
+        label = 'Idle';
+        icon = Icons.pause_circle_filled_rounded;
+        break;
+    }
+
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.xxs,
+          ),
+          decoration: BoxDecoration(
+            color: pillColor.withValues(alpha: 0.15),
+            borderRadius: AppSpacing.borderRadiusRound,
+            border: Border.all(color: pillColor.withValues(alpha: 0.35)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: pillColor, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Text(
+            job?.currentCity.isNotEmpty == true
+                ? 'Current: ${job!.currentCity}'
+                : 'Ready to start a search',
+            style: AppTypography.labelSmall.copyWith(
+              color: Colors.white54,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        if (isRunning)
+          OutlinedButton.icon(
+            onPressed: () => _confirmCancel(scraperProvider),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: _ScrapeColors.rose.withValues(alpha: 0.7)),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xs,
+              ),
+            ),
+            icon: const Icon(Icons.stop_circle_rounded, size: 18),
+            label: Text(
+              'Cancel',
+              style: AppTypography.labelSmall.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _confirmCancel(ScraperProvider scraperProvider) async {
+    final jobId = scraperProvider.currentJob?.jobId;
+    if (jobId == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _ScrapeColors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: AppSpacing.borderRadiusLg,
+        ),
+        title: Text(
+          'Cancel job?',
+          style: AppTypography.titleMedium.copyWith(color: Colors.white),
+        ),
+        content: Text(
+          'This will stop the current scraping job. Partial results will remain available.',
+          style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep running'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _ScrapeColors.rose,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cancel job'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await scraperProvider.cancelCurrentJob();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Cancellation requested'),
+          backgroundColor: _ScrapeColors.rose,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to cancel: $e'),
+          backgroundColor: _ScrapeColors.rose,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Widget _buildJobStages(ScrapingJob? job) {
+    if (job == null) {
+      return Container(
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: AppSpacing.borderRadiusMd,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Text(
+          'No active job',
+          style: AppTypography.labelSmall.copyWith(color: Colors.white54),
+        ),
+      );
+    }
+
+    final status = job.status;
+    final isDone = status == ScrapingStatus.completed ||
+        status == ScrapingStatus.failed ||
+        status == ScrapingStatus.cancelled;
+
+    final stages = [
+      _StageItem(
+        label: 'Queued',
+        state: job.progress > 0 || isDone ? _StageState.completed : _StageState.active,
+      ),
+      _StageItem(
+        label: 'Scraping',
+        state: status == ScrapingStatus.running
+            ? _StageState.active
+            : isDone
+                ? _StageState.completed
+                : _StageState.pending,
+      ),
+      _StageItem(
+        label: status == ScrapingStatus.completed
+            ? 'Complete'
+            : status == ScrapingStatus.cancelled
+                ? 'Cancelled'
+                : status == ScrapingStatus.failed
+                    ? 'Failed'
+                    : 'Finish',
+        state: status == ScrapingStatus.completed
+            ? _StageState.completed
+            : status == ScrapingStatus.cancelled || status == ScrapingStatus.failed
+                ? _StageState.completed
+                : _StageState.pending,
+      ),
+    ];
+
+    return Row(
+      children: List.generate(stages.length, (index) {
+        final item = stages[index];
+        return Expanded(
+          child: Row(
+            children: [
+              _stageDot(item),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  item.label,
+                  style: AppTypography.labelSmall.copyWith(
+                    color: item.state == _StageState.pending
+                        ? Colors.white38
+                        : Colors.white70,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (index != stages.length - 1)
+                Container(
+                  width: 22,
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.12),
+                ),
+            ],
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _stageDot(_StageItem item) {
+    Color color;
+    Widget? child;
+
+    switch (item.state) {
+      case _StageState.completed:
+        color = _ScrapeColors.emerald;
+        child = const Icon(Icons.check, size: 12, color: Colors.white);
+        break;
+      case _StageState.active:
+        color = _ScrapeColors.primaryLight;
+        child = const SizedBox(
+          width: 12,
+          height: 12,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+        );
+        break;
+      case _StageState.pending:
+        color = Colors.white24;
+        child = null;
+        break;
+    }
+
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.2),
+        shape: BoxShape.circle,
+        border: Border.all(color: color.withValues(alpha: 0.6)),
+      ),
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+
+  Widget _buildJobStats(ScrapingJob? job) {
+    if (job == null) return const SizedBox.shrink();
+
+    final now = DateTime.now();
+    final end = job.completedAt ?? now;
+    final elapsed = end.difference(job.createdAt);
+
+    final activeIndex = job.currentCity.isNotEmpty
+        ? job.cities.indexOf(job.currentCity)
+        : -1;
+
+    final completedCities = job.status == ScrapingStatus.completed
+        ? job.totalCities
+        : activeIndex >= 0
+            ? activeIndex
+            : 0;
+
+    final remainingCities = (job.totalCities - completedCities).clamp(0, job.totalCities);
+    final avgPerCity = completedCities > 0
+        ? elapsed ~/ completedCities
+        : const Duration(seconds: 0);
+    final estRemaining = job.status == ScrapingStatus.running && completedCities > 0
+        ? avgPerCity * remainingCities
+        : null;
+
+    final stats = [
+      _MiniStat(label: 'Elapsed', value: _formatDuration(elapsed)),
+      _MiniStat(
+        label: 'Est. Remaining',
+        value: estRemaining == null ? '—' : _formatDuration(estRemaining),
+      ),
+      _MiniStat(label: 'Leads', value: '${job.results.length}'),
+      _MiniStat(
+        label: 'Cities',
+        value: '${completedCities.clamp(0, job.totalCities)}/${job.totalCities}',
+      ),
+    ];
+
+    return Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
+      children: stats.map((s) => _miniStatChip(s)).toList(),
+    );
+  }
+
+  Widget _miniStatChip(_MiniStat stat) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            stat.label,
+            style: AppTypography.labelSmall.copyWith(
+              color: Colors.white54,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            stat.value,
+            style: AppTypography.labelLarge.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCityProgress(ScrapingJob? job, LayoutType layoutType) {
+    if (job == null || job.cities.isEmpty) return const SizedBox.shrink();
+
+    final activeIndex = job.currentCity.isNotEmpty
+        ? job.cities.indexOf(job.currentCity)
+        : -1;
+
+    final cityCounts = <String, int>{};
+    for (final result in job.results) {
+      final city = (result['city'] ?? '').toString().trim();
+      final state = (result['state'] ?? '').toString().trim();
+      if (city.isEmpty) continue;
+      final key = state.isEmpty ? city : '$city, $state';
+      cityCounts[key] = (cityCounts[key] ?? 0) + 1;
+    }
+
+    final maxHeight = layoutType == LayoutType.mobile ? 220.0 : 260.0;
+
+    return Container(
+      padding: AppSpacing.paddingSm,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'City Progress',
+            style: AppTypography.labelLarge.copyWith(
+              color: Colors.white70,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          SizedBox(
+            height: maxHeight,
+            child: ListView.builder(
+              itemCount: job.cities.length,
+              itemBuilder: (context, index) {
+                final cityState = job.cities[index];
+                final isCompleted = job.status == ScrapingStatus.completed ||
+                    (activeIndex >= 0 && index < activeIndex);
+                final isActive = job.status == ScrapingStatus.running &&
+                    activeIndex >= 0 &&
+                    index == activeIndex;
+                final isFailedOrCancelled = (job.status == ScrapingStatus.failed ||
+                        job.status == ScrapingStatus.cancelled) &&
+                    activeIndex >= 0 &&
+                    index == activeIndex;
+
+                final count = cityCounts[cityState] ?? 0;
+
+                IconData statusIcon;
+                Color statusColor;
+                String statusLabel;
+
+                if (isCompleted) {
+                  statusIcon = Icons.check_circle_rounded;
+                  statusColor = _ScrapeColors.emerald;
+                  statusLabel = '${count} leads';
+                } else if (isFailedOrCancelled) {
+                  statusIcon = Icons.error_rounded;
+                  statusColor = _ScrapeColors.rose;
+                  statusLabel = job.status == ScrapingStatus.cancelled
+                      ? 'Cancelled'
+                      : 'Failed';
+                } else if (isActive) {
+                  statusIcon = Icons.autorenew_rounded;
+                  statusColor = _ScrapeColors.primaryLight;
+                  statusLabel = 'Scraping...';
+                } else {
+                  statusIcon = Icons.circle_outlined;
+                  statusColor = Colors.white24;
+                  statusLabel = 'Pending';
+                }
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: isActive ? 0.06 : 0.03),
+                    borderRadius: AppSpacing.borderRadiusSm,
+                    border: Border.all(
+                      color: statusColor.withValues(alpha: isActive ? 0.45 : 0.18),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(statusIcon, color: statusColor, size: 18),
+                      const SizedBox(width: AppSpacing.xs),
+                      Expanded(
+                        child: Text(
+                          cityState,
+                          style: AppTypography.labelSmall.copyWith(
+                            color: Colors.white70,
+                            fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      Text(
+                        statusLabel,
+                        style: AppTypography.labelSmall.copyWith(
+                          color: statusColor == Colors.white24
+                              ? Colors.white38
+                              : statusColor.withValues(alpha: 0.95),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds.clamp(0, 9999999);
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return '${hours}h ${minutes}m';
+    }
+    if (minutes > 0) {
+      return '${minutes}m ${seconds}s';
+    }
+    return '${seconds}s';
+  }
+}
+
+enum _StageState { pending, active, completed }
+
+class _StageItem {
+  final String label;
+  final _StageState state;
+
+  const _StageItem({required this.label, required this.state});
+}
+
+class _MiniStat {
+  final String label;
+  final String value;
+
+  const _MiniStat({required this.label, required this.value});
 }
 
 class _ScrapeColors {
-  static const Color background = Color(0xFF0F111A);
-  static const Color card = Color(0xFF161826);
-  static const Color input = Color(0xFF1E2133);
-  static const Color primary = Color(0xFF311FF9);
-  static const Color primaryLight = Color(0xFF6366F1);
-  static const Color emerald = Color(0xFF10B981);
-  static const Color rose = Color(0xFFFB7185);
-  static const Color terminal = Color(0xFF0A0C14);
+  static const Color background = AppColors.backgroundDark;
+  static const Color card = AppColors.surfaceDark;
+  static const Color input = AppColors.inputBackgroundDark;
+  static const Color primary = AppColors.primaryBlue;
+  static const Color primaryLight = AppColors.primaryBlueLight;
+  static const Color emerald = AppColors.successGreen;
+  static const Color rose = AppColors.dangerRed;
+  static const Color terminal = AppColors.backgroundDarkAlt;
+}
+
+class _ReviewSheet extends StatelessWidget {
+  final String category;
+  final List<String> cities;
+  final int maxResults;
+  final int estimatedCost;
+  final int creditBalance;
+
+  const _ReviewSheet({
+    required this.category,
+    required this.cities,
+    required this.maxResults,
+    required this.estimatedCost,
+    required this.creditBalance,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = (creditBalance - estimatedCost).clamp(0, 999999999);
+    final hasEstimate = estimatedCost > 0;
+    final topCities = cities.take(6).toList();
+    final extraCount = (cities.length - topCities.length).clamp(0, cities.length);
+
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.all(AppSpacing.md),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          AppSpacing.sm,
+          AppSpacing.md,
+          AppSpacing.md,
+        ),
+        decoration: BoxDecoration(
+          color: _ScrapeColors.card,
+          borderRadius: AppSpacing.borderRadiusXl,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 22,
+              spreadRadius: -10,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: AppSpacing.borderRadiusRound,
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  Text(
+                    'Review Your Job',
+                    style: AppTypography.titleLarge.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.pop(context, false),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white70),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+              _sectionTitle('Target Market'),
+              const SizedBox(height: AppSpacing.xs),
+              _infoRow('Cities', '${cities.length} selected'),
+              const SizedBox(height: AppSpacing.xs),
+              Wrap(
+                spacing: AppSpacing.xs,
+                runSpacing: AppSpacing.xs,
+                children: [
+                  ...topCities.map(_chip),
+                  if (extraCount > 0)
+                    _chip('+$extraCount more', muted: true),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              _sectionTitle('Category'),
+              const SizedBox(height: AppSpacing.xs),
+              _valueCard(category, icon: Icons.business_center_rounded),
+              const SizedBox(height: AppSpacing.lg),
+              _sectionTitle('Configuration'),
+              const SizedBox(height: AppSpacing.xs),
+              Row(
+                children: [
+                  Expanded(
+                    child: _metricCard(
+                      label: 'Max / City',
+                      value: '$maxResults',
+                      icon: Icons.tune_rounded,
+                      color: _ScrapeColors.primaryLight,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: _metricCard(
+                      label: 'Est. Cost',
+                      value: hasEstimate ? '$estimatedCost credits' : '—',
+                      icon: Icons.payments_rounded,
+                      color: _ScrapeColors.emerald,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: _metricCard(
+                      label: 'Balance',
+                      value: '$creditBalance',
+                      icon: Icons.account_balance_wallet_rounded,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: _metricCard(
+                      label: 'After',
+                      value: hasEstimate ? '$remaining' : '—',
+                      icon: Icons.trending_down_rounded,
+                      color: hasEstimate ? Colors.white70 : Colors.white38,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.18),
+                        ),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: AppSpacing.md,
+                        ),
+                      ),
+                      child: Text(
+                        'Back',
+                        style: AppTypography.labelLarge.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _ScrapeColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          vertical: AppSpacing.md,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: AppSpacing.borderRadiusLg,
+                        ),
+                      ),
+                      icon: const Icon(Icons.rocket_launch_rounded),
+                      label: Text(
+                        'Start scraping',
+                        style: AppTypography.labelLarge.copyWith(
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'By continuing, credits are charged immediately and the job starts in the background.',
+                style: AppTypography.labelSmall.copyWith(color: Colors.white38),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title) {
+    return Text(
+      title.toUpperCase(),
+      style: AppTypography.labelSmall.copyWith(
+        color: Colors.white60,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.4,
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Row(
+      children: [
+        Text(
+          label,
+          style: AppTypography.bodySmall.copyWith(color: Colors.white54),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: AppTypography.bodySmall.copyWith(
+            color: Colors.white70,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _chip(String label, {bool muted = false}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xxs,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: muted ? 0.05 : 0.08),
+        borderRadius: AppSpacing.borderRadiusRound,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: muted ? 0.08 : 0.12),
+        ),
+      ),
+      child: Text(
+        label,
+        style: AppTypography.labelSmall.copyWith(
+          color: muted ? Colors.white54 : Colors.white70,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _valueCard(String value, {required IconData icon}) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: _ScrapeColors.input,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.white70, size: 18),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              value,
+              style: AppTypography.bodyMedium.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metricCard({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 18),
+              const SizedBox(width: AppSpacing.xs),
+              Text(
+                label,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white54,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -6,6 +6,7 @@ enum ScrapingStatus {
   running,
   completed,
   failed,
+  cancelled,
 }
 
 class ScrapingJob {
@@ -13,24 +14,28 @@ class ScrapingJob {
   final String category;
   final List<String> cities;
   final DateTime createdAt;
+  final int totalCities;
   ScrapingStatus status;
   int progress;
   String currentCity;
   List<Map<String, dynamic>> results;
   String? error;
   List<String> logs;
+  DateTime? completedAt;
 
   ScrapingJob({
     required this.jobId,
     required this.category,
     required this.cities,
     required this.createdAt,
+    required this.totalCities,
     this.status = ScrapingStatus.idle,
     this.progress = 0,
     this.currentCity = '',
     this.results = const [],
     this.error,
     this.logs = const [],
+    this.completedAt,
   });
 }
 
@@ -78,11 +83,13 @@ class ScraperProvider with ChangeNotifier {
         maxResultsPerCity: maxResultsPerCity,
       );
 
+      final createdAt = DateTime.tryParse(jobData['created_at'] ?? '') ?? DateTime.now();
       _currentJob = ScrapingJob(
         jobId: jobData['job_id'],
         category: category,
         cities: citiesData,
-        createdAt: DateTime.now(),
+        createdAt: createdAt,
+        totalCities: jobData['total_cities'] ?? citiesData.length,
         status: ScrapingStatus.running,
       );
 
@@ -101,7 +108,7 @@ class ScraperProvider with ChangeNotifier {
     if (_currentJob == null) return;
 
     while (_status == ScrapingStatus.running) {
-      await Future.delayed(Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 2));
 
       try {
         final jobData = await _apiService.getJobStatus(_currentJob!.jobId);
@@ -112,6 +119,7 @@ class ScraperProvider with ChangeNotifier {
         _currentJob!.results =
             List<Map<String, dynamic>>.from(jobData['results'] ?? []);
         _currentJob!.logs = List<String>.from(jobData['logs'] ?? []);
+        _currentJob!.completedAt = DateTime.tryParse(jobData['completed_at'] ?? '');
 
         if (jobData['error'] != null) {
           _currentJob!.error = jobData['error'];
@@ -120,7 +128,8 @@ class ScraperProvider with ChangeNotifier {
         notifyListeners();
 
         if (_currentJob!.status == ScrapingStatus.completed ||
-            _currentJob!.status == ScrapingStatus.failed) {
+            _currentJob!.status == ScrapingStatus.failed ||
+            _currentJob!.status == ScrapingStatus.cancelled) {
           _status = _currentJob!.status;
           break;
         }
@@ -144,8 +153,27 @@ class ScraperProvider with ChangeNotifier {
         return ScrapingStatus.completed;
       case 'failed':
         return ScrapingStatus.failed;
+      case 'cancelled':
+        return ScrapingStatus.cancelled;
       default:
         return ScrapingStatus.idle;
+    }
+  }
+
+  Future<void> cancelCurrentJob() async {
+    final job = _currentJob;
+    if (job == null) return;
+
+    try {
+      await _apiService.cancelJob(job.jobId);
+      job.status = ScrapingStatus.cancelled;
+      job.error = 'Cancelled by user';
+      _status = ScrapingStatus.cancelled;
+      notifyListeners();
+    } catch (e) {
+      job.logs = [...job.logs, 'cancel_error: $e'];
+      notifyListeners();
+      rethrow;
     }
   }
 

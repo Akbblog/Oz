@@ -45,7 +45,7 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> login(String username, String password) async {
+  Future<bool> login(String username, String password, {bool rememberMe = true}) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -54,6 +54,7 @@ class AuthProvider with ChangeNotifier {
       final response = await _apiService.login(
         username: username,
         password: password,
+        rememberMe: rememberMe,
       );
       _currentUser = response['user'];
       _isAuthenticated = true;
@@ -68,25 +69,25 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  Future<bool> register(String username, String email, String password) async {
+  Future<String?> register(String username, String email, String password) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      await _apiService.register(
+      final response = await _apiService.register(
         username: username,
         email: email,
         password: password,
       );
       _isLoading = false;
       notifyListeners();
-      return true;
+      return response['message']?.toString();
     } catch (e) {
       _errorMessage = ErrorHandler.getUserFriendlyMessage(e);
       _isLoading = false;
       notifyListeners();
-      return false;
+      return null;
     }
   }
 
