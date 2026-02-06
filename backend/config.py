@@ -32,8 +32,26 @@ LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 LOG_FILE = "scraper.log"
 
 # CORS
-# Adjust for your frontend URL in production
-ALLOWED_ORIGINS = ["*"]
+# Use explicit origins in production to avoid browser credential-mode conflicts.
+_allowed_origins_raw = os.getenv(
+    "ALLOWED_ORIGINS",
+    ",".join(
+        [
+            "https://infinity-leads.vercel.app",
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:8080",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:8080",
+        ]
+    ),
+)
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in _allowed_origins_raw.split(",")
+    if origin.strip()
+]
 
 # Data files
 USA_DATA_FILE = "states_cities_data.json"
