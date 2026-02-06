@@ -22,6 +22,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _creditRequests = [];
   Map<String, dynamic> _adminSettings = {};
+  int _activePromos = 0;
+  int _promoUses = 0;
   final TextEditingController _startingCreditsController =
       TextEditingController();
   bool _isLoading = true;
@@ -72,12 +74,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       } catch (_) {
         // Ignore credit request failures.
       }
+      int activePromos = 0;
+      int promoUses = 0;
+      try {
+        final promosRes = await _apiService.getAdminPromos();
+        final promos =
+            List<Map<String, dynamic>>.from(promosRes['promos'] ?? const []);
+        activePromos = promos.where((p) => p['is_active'] == true).length;
+        promoUses = promos.fold<int>(
+            0, (acc, p) => acc + ((p['uses_count'] as num? ?? 0).toInt()));
+      } catch (_) {
+        // Ignore promo loading failures.
+      }
       if (mounted) {
         setState(() {
           _stats = stats;
           _users = users;
           _adminSettings = settings;
           _creditRequests = creditReqs;
+          _activePromos = activePromos;
+          _promoUses = promoUses;
           _selectedPendingUserIds.clear();
           _selectedCreditRequestIds.clear();
           _isLoading = false;
@@ -768,6 +784,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 Icons.payments,
                 AppColors.purple,
               ),
+              _buildStatCard(
+                'Active Promos',
+                _activePromos.toString(),
+                Icons.confirmation_number_rounded,
+                AppColors.amber,
+              ),
+              if (layoutType.index >= LayoutType.desktopMedium.index)
+                _buildStatCard(
+                  'Promo Uses',
+                  _promoUses.toString(),
+                  Icons.local_offer_rounded,
+                  AppColors.brandOrange,
+                ),
               if (layoutType.index >= LayoutType.desktopMedium.index)
                 _buildStatCard(
                   'Active Sessions',
@@ -796,7 +825,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     children: [
                       _buildSectionHeader('Recent Users', 'View All'),
                       const SizedBox(height: AppSpacing.sm),
-                      ..._users.take(5).map(_buildUserPreview).toList(),
+                      ..._users.take(5).map(_buildUserPreview),
                     ],
                   ),
                 ),
@@ -815,7 +844,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         ..._creditRequests
                             .take(3)
                             .map(_buildCreditRequestCard)
-                            .toList(),
+                            ,
                     ],
                   ),
                 ),
@@ -824,14 +853,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           else ...[
             _buildSectionHeader('Recent Users', 'View All'),
             const SizedBox(height: AppSpacing.sm),
-            ..._users.take(3).map(_buildUserPreview).toList(),
+            ..._users.take(3).map(_buildUserPreview),
             const SizedBox(height: AppSpacing.lg),
             _buildSectionHeader('Credit Requests', '${_creditRequests.length}'),
             const SizedBox(height: AppSpacing.sm),
             if (_creditRequests.isEmpty)
               _buildEmptyCard('No credit requests')
             else
-              ..._creditRequests.take(2).map(_buildCreditRequestCard).toList(),
+              ..._creditRequests.take(2).map(_buildCreditRequestCard),
           ],
           const SizedBox(height: AppSpacing.xl),
         ],
@@ -1337,7 +1366,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           if (_creditRequests.isEmpty)
             _buildEmptyCard('No pending requests')
           else
-            ..._creditRequests.map(_buildCreditRequestCard).toList(),
+            ..._creditRequests.map(_buildCreditRequestCard),
           const SizedBox(height: AppSpacing.xl),
         ],
       ),
@@ -1360,7 +1389,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   value: _settingBool('auto_approve_users', fallback: false),
                   onChanged: (v) =>
                       _updateSetting('auto_approve_users', v ? 'true' : 'false'),
-                  activeColor: AppColors.brandPurple,
+                  activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Auto-approve new users',
                     style: AppTypography.titleSmall.copyWith(
@@ -1436,7 +1465,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   value: _settingBool('admin_notification_on_signup', fallback: true),
                   onChanged: (v) => _updateSetting(
                       'admin_notification_on_signup', v ? 'true' : 'false'),
-                  activeColor: AppColors.brandPurple,
+                  activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Notify admins on signup',
                     style: AppTypography.titleSmall.copyWith(
@@ -1453,7 +1482,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   value: _settingBool('send_welcome_email', fallback: true),
                   onChanged: (v) =>
                       _updateSetting('send_welcome_email', v ? 'true' : 'false'),
-                  activeColor: AppColors.brandPurple,
+                  activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Send welcome email',
                     style: AppTypography.titleSmall.copyWith(
@@ -1470,7 +1499,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   value: _settingBool('send_approval_email', fallback: true),
                   onChanged: (v) =>
                       _updateSetting('send_approval_email', v ? 'true' : 'false'),
-                  activeColor: AppColors.brandPurple,
+                  activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Send approval email',
                     style: AppTypography.titleSmall.copyWith(
@@ -1487,7 +1516,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   value: _settingBool('send_rejection_email', fallback: true),
                   onChanged: (v) =>
                       _updateSetting('send_rejection_email', v ? 'true' : 'false'),
-                  activeColor: AppColors.brandPurple,
+                  activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Send rejection email',
                     style: AppTypography.titleSmall.copyWith(

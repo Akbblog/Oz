@@ -27,7 +27,7 @@ class ApiService {
 
     if (listValue is List) {
       return listValue
-          .where((e) => e is Map)
+          .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
     }
@@ -803,8 +803,9 @@ class ApiService {
     final body = <String, dynamic>{};
     if (name != null) body['name'] = name;
     if (credits != null) body['credits'] = credits;
-    if (displayPriceCents != null)
+    if (displayPriceCents != null) {
       body['display_price_cents'] = displayPriceCents;
+    }
     if (isActive != null) body['is_active'] = isActive;
 
     final response = await http
@@ -990,14 +991,18 @@ class ApiService {
     final headers = await _getHeaders();
     final body = <String, dynamic>{};
     if (name != null) body['name'] = name;
-    if (minMonthlyCredits != null)
+    if (minMonthlyCredits != null) {
       body['min_monthly_credits'] = minMonthlyCredits;
-    if (maxMonthlyCredits != null)
+    }
+    if (maxMonthlyCredits != null) {
       body['max_monthly_credits'] = maxMonthlyCredits;
-    if (pricePerCreditCents != null)
+    }
+    if (pricePerCreditCents != null) {
       body['price_per_credit_cents'] = pricePerCreditCents;
-    if (discountPercentage != null)
+    }
+    if (discountPercentage != null) {
       body['discount_percentage'] = discountPercentage;
+    }
     if (requiresApproval != null) body['requires_approval'] = requiresApproval;
     if (isActive != null) body['is_active'] = isActive;
 
@@ -1038,6 +1043,12 @@ class ApiService {
     double discountPercentage = 0,
     int discountAmountCents = 0,
     int bonusCredits = 0,
+    int? maxUses,
+    int maxUsesPerUser = 1,
+    int minPurchaseCents = 0,
+    String? validFrom,
+    String? validUntil,
+    String appliesTo = 'all',
     bool isActive = true,
   }) async {
     final headers = await _getHeaders();
@@ -1051,6 +1062,12 @@ class ApiService {
             'discount_percentage': discountPercentage,
             'discount_amount_cents': discountAmountCents,
             'bonus_credits': bonusCredits,
+            'max_uses': maxUses,
+            'max_uses_per_user': maxUsesPerUser,
+            'min_purchase_cents': minPurchaseCents,
+            'valid_from': validFrom,
+            'valid_until': validUntil,
+            'applies_to': appliesTo,
             'is_active': isActive,
           }),
         )
@@ -1070,17 +1087,31 @@ class ApiService {
     double? discountPercentage,
     int? discountAmountCents,
     int? bonusCredits,
+    int? maxUses,
+    int? maxUsesPerUser,
+    int? minPurchaseCents,
+    String? validFrom,
+    String? validUntil,
+    String? appliesTo,
     bool? isActive,
   }) async {
     final headers = await _getHeaders();
     final body = <String, dynamic>{};
     if (code != null) body['code'] = code;
     if (type != null) body['type'] = type;
-    if (discountPercentage != null)
+    if (discountPercentage != null) {
       body['discount_percentage'] = discountPercentage;
-    if (discountAmountCents != null)
+    }
+    if (discountAmountCents != null) {
       body['discount_amount_cents'] = discountAmountCents;
+    }
     if (bonusCredits != null) body['bonus_credits'] = bonusCredits;
+    if (maxUses != null) body['max_uses'] = maxUses;
+    if (maxUsesPerUser != null) body['max_uses_per_user'] = maxUsesPerUser;
+    if (minPurchaseCents != null) body['min_purchase_cents'] = minPurchaseCents;
+    if (validFrom != null) body['valid_from'] = validFrom;
+    if (validUntil != null) body['valid_until'] = validUntil;
+    if (appliesTo != null) body['applies_to'] = appliesTo;
     if (isActive != null) body['is_active'] = isActive;
 
     final response = await http
@@ -1107,6 +1138,22 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Failed to deactivate promo');
+    }
+  }
+
+  Future<Map<String, dynamic>> getAdminPromoUsage(int promoId) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/admin/promos/$promoId/usage'),
+          headers: headers,
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load promo usage');
     }
   }
 
@@ -1517,18 +1564,36 @@ class ApiService {
 
   // ==================== PROMO VALIDATION (USER-FACING) ====================
 
-  Future<Map<String, dynamic>> validatePromoCode(String code) async {
+  Future<Map<String, dynamic>> validatePromoCode(
+    String code, {
+    String appliesTo = 'packages',
+    int? packageId,
+    int quantity = 1,
+    int? subtotalCents,
+  }) async {
     final headers = await _getHeaders();
+    final body = <String, dynamic>{
+      'code': code,
+      'applies_to': appliesTo,
+      'quantity': quantity,
+    };
+    if (packageId != null) body['package_id'] = packageId;
+    if (subtotalCents != null) body['subtotal_cents'] = subtotalCents;
+
     final response = await http
         .post(
           Uri.parse('$baseUrl/api/promos/validate'),
           headers: headers,
-          body: jsonEncode({'code': code}),
+          body: jsonEncode(body),
         )
         .timeout(timeout);
 
     if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic> && decoded['valid'] == false) {
+        throw ApiException('Invalid promo code');
+      }
+      return Map<String, dynamic>.from(decoded as Map);
     } else {
       ErrorHandler.handleHttpError(response, context: 'Promo validation');
       throw ApiException('Invalid promo code');

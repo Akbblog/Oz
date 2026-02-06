@@ -39,7 +39,9 @@ class _ResultsScreenState extends State<ResultsScreen>
   bool _isLoading = false;
   bool _isDownloading = false;
   String? _error;
+  String? _emptyMessage;
   List<Map<String, dynamic>> _loadedResults = [];
+  String? _loadedJobId;
 
   // Search and filter state
   final TextEditingController _searchController = TextEditingController();
@@ -87,7 +89,9 @@ class _ResultsScreenState extends State<ResultsScreen>
 
     if (jobIdChanged || overrideResultsChanged) {
       _error = null;
+      _emptyMessage = null;
       _loadedResults = [];
+      _loadedJobId = null;
       _selectedTableRows = {};
       _tableSortColumnIndex = null;
       _tableSortAscending = true;
@@ -110,48 +114,25 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   Future<void> _loadIfNeeded() async {
-    if (widget.jobId == null || widget.overrideResults != null) {
+    if (widget.overrideResults != null) return;
+
+    if (widget.jobId != null) {
+      await _loadJobResults(widget.jobId!);
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _error = null;
-      _loadedResults = [];
-    });
-
-    try {
-      final data = await _apiService.getJobResults(widget.jobId!);
-      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-      if (mounted) {
-        setState(() {
-          _loadedResults = results;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'Failed to load results: $e';
-          _isLoading = false;
-        });
-      }
-    }
+    await _loadMostRecentResults();
   }
 
   Future<void> _refreshResults() async {
-    if (widget.jobId == null || widget.overrideResults != null) {
+    if (widget.overrideResults != null) {
       return;
     }
 
     try {
-      final data = await _apiService.getJobResults(widget.jobId!);
-      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-      if (mounted) {
-        setState(() {
-          _loadedResults = results;
-        });
-      }
+      final jobId = widget.jobId ?? _loadedJobId;
+      if (jobId == null) return;
+      await _loadJobResults(jobId, showLoading: false);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -164,6 +145,107 @@ class _ResultsScreenState extends State<ResultsScreen>
     }
   }
 
+  Future<void> _loadJobResults(
+    String jobId, {
+    bool showLoading = true,
+  }) async {
+    if (jobId.trim().isEmpty) return;
+
+    if (showLoading) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+        _emptyMessage = null;
+        _loadedResults = [];
+        _loadedJobId = jobId;
+      });
+    } else {
+      setState(() {
+        _error = null;
+        _emptyMessage = null;
+        _loadedJobId = jobId;
+      });
+    }
+
+    try {
+      final data = await _apiService.getJobResults(jobId);
+      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      if (!mounted) return;
+      setState(() {
+        _loadedResults = results;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Failed to load results: $e';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMostRecentResults() async {
+    // If we have live results (current job), don't replace the UI with a loader.
+    final scraperProvider = Provider.of<ScraperProvider>(context, listen: false);
+    final liveResults = scraperProvider.currentJob?.results;
+    if (liveResults != null && liveResults.isNotEmpty) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+      _emptyMessage = null;
+      _loadedResults = [];
+      _loadedJobId = null;
+    });
+
+    try {
+      final jobs = await _apiService.getUserJobs();
+      if (!mounted) return;
+
+      if (jobs.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _loadedResults = [];
+          _loadedJobId = null;
+          _emptyMessage = 'No jobs found. Start a new search to see results.';
+        });
+        return;
+      }
+
+      final latestJob = jobs.first;
+      final latestJobId = (latestJob['job_id'] ?? '').toString();
+      if (latestJobId.trim().isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _loadedResults = [];
+          _loadedJobId = null;
+          _emptyMessage = 'No recent job id found.';
+        });
+        return;
+      }
+
+      final data = await _apiService.getJobResults(latestJobId);
+      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      if (!mounted) return;
+      setState(() {
+        _loadedResults = results;
+        _loadedJobId = latestJobId;
+        _isLoading = false;
+        if (results.isEmpty) {
+          _emptyMessage = 'Your most recent job has no results yet.';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Failed to load results: $e';
+        _isLoading = false;
+      });
+    }
+  }
+
   List<Map<String, dynamic>> _resolveResults(ScraperProvider scraperProvider) {
     if (widget.overrideResults != null) {
       return widget.overrideResults!;
@@ -171,7 +253,9 @@ class _ResultsScreenState extends State<ResultsScreen>
     if (widget.jobId != null) {
       return _loadedResults;
     }
-    return scraperProvider.currentJob?.results ?? [];
+    final live = scraperProvider.currentJob?.results;
+    if (live != null && live.isNotEmpty) return live;
+    return _loadedResults;
   }
 
   List<Map<String, dynamic>> _filterAndSortResults(
@@ -1376,7 +1460,6 @@ class _ResultsScreenState extends State<ResultsScreen>
                   padding: const EdgeInsets.only(bottom: AppSpacing.md),
                   child: _LeadCard(
                     business: business,
-                    onPhoneTap: () => _launchPhone(business['phone'] ?? ''),
                     onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
                     onAddressTap: () => _launchMaps(business['address'] ?? ''),
                   ),
@@ -1398,14 +1481,13 @@ class _ResultsScreenState extends State<ResultsScreen>
                         : 2,
                 crossAxisSpacing: AppSpacing.md,
                 mainAxisSpacing: AppSpacing.md,
-                childAspectRatio: 1.8,
+                childAspectRatio: 1.9,
               ),
               itemCount: results.length,
               itemBuilder: (context, index) {
                 final business = results[index];
                 return _LeadCard(
                   business: business,
-                  onPhoneTap: () => _launchPhone(business['phone'] ?? ''),
                   onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
                   onAddressTap: () => _launchMaps(business['address'] ?? ''),
                 );
@@ -1557,7 +1639,8 @@ class _ResultsScreenState extends State<ResultsScreen>
               ),
               const SizedBox(height: AppSpacing.sm),
               Text(
-                'Start your first lead search to discover\nbusiness opportunities in your area',
+                _emptyMessage ??
+                    'Start your first lead search to discover\nbusiness opportunities in your area',
                 textAlign: TextAlign.center,
                 style: AppTypography.bodyMedium.copyWith(
                   color: Colors.white60,
@@ -1606,8 +1689,9 @@ class _ResultsScreenState extends State<ResultsScreen>
     setState(() => _isDownloading = true);
 
     try {
-      final downloadData = widget.jobId != null
-          ? await _apiService.downloadResults(widget.jobId!)
+      final downloadJobId = widget.jobId ?? _loadedJobId;
+      final downloadData = downloadJobId != null
+          ? await _apiService.downloadResults(downloadJobId)
           : await scraperProvider.downloadResults();
 
       final filename = downloadData['filename'] as String;
@@ -1633,13 +1717,11 @@ class _ResultsScreenState extends State<ResultsScreen>
 
 class _LeadCard extends StatefulWidget {
   final Map<String, dynamic> business;
-  final VoidCallback? onPhoneTap;
   final VoidCallback? onWebsiteTap;
   final VoidCallback? onAddressTap;
 
   const _LeadCard({
     required this.business,
-    this.onPhoneTap,
     this.onWebsiteTap,
     this.onAddressTap,
   });
@@ -1648,267 +1730,207 @@ class _LeadCard extends StatefulWidget {
   State<_LeadCard> createState() => _LeadCardState();
 }
 
-class _LeadCardState extends State<_LeadCard>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _expandController;
-  final Set<String> _expandedContacts = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _expandController = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
-  }
-
-  @override
-  void dispose() {
-    _expandController.dispose();
-    super.dispose();
-  }
-
-  void _toggleContactExpanded(String contactType) {
-    setState(() {
-      if (_expandedContacts.contains(contactType)) {
-        _expandedContacts.remove(contactType);
-      } else {
-        _expandedContacts.add(contactType);
-      }
-    });
-  }
-
+class _LeadCardState extends State<_LeadCard> {
   @override
   Widget build(BuildContext context) {
-    final hasPhone = widget.business['phone'] != null &&
-        widget.business['phone'] != 'N/A' &&
-        widget.business['phone'].toString().isNotEmpty;
-    final hasWebsite = widget.business['website'] != null &&
-        widget.business['website'] != 'N/A' &&
-        widget.business['website'].toString().isNotEmpty;
-    final hasAddress = widget.business['address'] != null &&
-        widget.business['address'] != 'N/A' &&
-        widget.business['address'].toString().isNotEmpty;
+    final business = widget.business;
+
+    final name = (business['business_name'] ?? business['name'] ?? 'Unknown')
+        .toString()
+        .trim();
+    final category = (business['category'] ?? '').toString().trim();
+    final address = (business['address'] ?? '').toString().trim();
+    final phone = (business['phone'] ?? '').toString().trim();
+    final website = (business['website'] ?? '').toString().trim();
+
+    final hasPhone = phone.isNotEmpty && phone != 'N/A';
+    final hasWebsite = website.isNotEmpty && website != 'N/A';
+    final hasAddress = address.isNotEmpty && address != 'N/A';
+    final hasCategory = category.isNotEmpty && category != 'N/A';
 
     return Container(
-      padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
-        color: AppColors.elevatedCardDark,
-        borderRadius: AppSpacing.borderRadiusLg,
-        border:
-            Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.35)),
+        gradient: LinearGradient(
+          colors: [
+            AppColors.surfaceDark,
+            AppColors.surfaceDark.withValues(alpha: 0.78),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryBlue.withValues(alpha: 0.14),
-            blurRadius: 18,
-            spreadRadius: -10,
+            color: AppColors.primaryBlue.withValues(alpha: 0.10),
+            blurRadius: 16,
+            spreadRadius: -8,
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Business Info Header
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.business['business_name'] ?? 'Unknown Business',
-                      style: AppTypography.titleMedium.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    name.isEmpty ? 'Unknown' : name,
+                    style: AppTypography.titleMedium.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
                     ),
-                    const SizedBox(height: 4),
-                    if (hasAddress)
-                      Text(
-                        widget.business['address'],
-                        style: AppTypography.bodySmall.copyWith(
-                          color: Colors.white60,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (hasWebsite)
+                          _iconButton(
+                            icon: Icons.language_rounded,
+                            color: AppColors.primaryBlueLight,
+                            tooltip: 'Open Website',
+                            onTap: widget.onWebsiteTap,
+                          ),
+                        if (hasAddress)
+                          _iconButton(
+                            icon: Icons.location_on_rounded,
+                            color: AppColors.successGreen,
+                            tooltip: 'View on Maps',
+                            onTap: widget.onAddressTap,
+                          ),
+                      ],
+                    ),
+                    if (hasCategory) ...[
+                      const SizedBox(height: 6),
+                      _categoryBadge(category),
+                    ],
                   ],
                 ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.successGreen.withValues(alpha: 0.12),
-                  borderRadius: AppSpacing.borderRadiusRound,
-                  border: Border.all(
-                    color: AppColors.successGreen.withValues(alpha: 0.25),
-                  ),
-                ),
-                child: Text(
-                  widget.business['category'] ?? 'Category',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.successGreen,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: AppSpacing.md),
-          // Verified Badge
-          Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: AppColors.successGreen,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                'Verified Lead',
-                style: AppTypography.labelSmall.copyWith(
+          if (hasAddress)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                address,
+                style: AppTypography.bodySmall.copyWith(
                   color: Colors.white60,
+                  fontSize: 12,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          if (hasPhone)
+            Container(
+              margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryBlue.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.15),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          // Animated Contact Buttons
-          Column(
-            children: [
-              if (hasPhone) ...[
-                _buildExpandableContactButton(
-                  'Phone',
-                  Icons.phone_rounded,
-                  widget.business['phone'] ?? '',
-                  widget.onPhoneTap,
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.phone_rounded,
+                    size: 16,
+                    color: AppColors.successGreen,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      phone,
+                      style: AppTypography.bodySmall.copyWith(
+                        color: Colors.white,
+                        fontFamily: 'Roboto Mono',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: AppColors.successGreen,
+                    shape: BoxShape.circle,
+                  ),
                 ),
-                const SizedBox(height: AppSpacing.xs),
+                const SizedBox(width: 6),
+                Text(
+                  'Verified Lead',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white60,
+                    fontSize: 11,
+                  ),
+                ),
               ],
-              if (hasWebsite) ...[
-                _buildExpandableContactButton(
-                  'Website',
-                  Icons.language_rounded,
-                  widget.business['website'] ?? '',
-                  widget.onWebsiteTap,
-                ),
-                const SizedBox(height: AppSpacing.xs),
-              ],
-              if (hasAddress)
-                _buildExpandableContactButton(
-                  'Maps',
-                  Icons.location_on_rounded,
-                  widget.business['address'] ?? '',
-                  widget.onAddressTap,
-                ),
-            ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildExpandableContactButton(
-    String label,
-    IconData icon,
-    String value,
-    VoidCallback? onTap,
-  ) {
-    final isExpanded = _expandedContacts.contains(label);
+  Widget _iconButton({
+    required IconData icon,
+    required Color color,
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(icon, size: 20, color: color),
+        ),
+      ),
+    );
+  }
 
-    return GestureDetector(
-      onTap: () {
-        if (isExpanded) {
-          // Second click: perform action
-          onTap?.call();
-          _toggleContactExpanded(label);
-        } else {
-          // First click: expand to show value
-          _toggleContactExpanded(label);
-        }
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutCubic,
-        padding: EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: isExpanded ? AppSpacing.xs : AppSpacing.xxs,
+  Widget _categoryBadge(String category) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.successGreen.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: AppColors.successGreen.withValues(alpha: 0.3),
         ),
-        decoration: BoxDecoration(
-          gradient: isExpanded
-              ? LinearGradient(
-                  colors: [AppColors.primaryBlue, AppColors.primaryBlueDark],
-                )
-              : LinearGradient(
-                  colors: [
-                    AppColors.primaryBlue.withValues(alpha: 0.7),
-                    AppColors.primaryBlueDark.withValues(alpha: 0.7),
-                  ],
-                ),
-          borderRadius: AppSpacing.borderRadiusSm,
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.primaryBlueDark.withValues(
-                alpha: isExpanded ? 0.5 : 0.3,
-              ),
-              blurRadius: isExpanded ? 12 : 8,
-              spreadRadius: isExpanded ? -4 : -6,
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 16),
-            const SizedBox(width: AppSpacing.xs),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: AppTypography.labelSmall.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  if (isExpanded) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      value,
-                      style: AppTypography.bodySmall.copyWith(
-                        color: Colors.white70,
-                        fontSize: 11,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            if (isExpanded) ...[
-              const SizedBox(width: AppSpacing.xs),
-              Icon(
-                Icons.arrow_forward_rounded,
-                color: Colors.white,
-                size: 14,
-              ),
-            ] else
-              Icon(
-                Icons.expand_more_rounded,
-                color: Colors.white70,
-                size: 16,
-              ),
-          ],
+      ),
+      child: Text(
+        category,
+        style: AppTypography.labelSmall.copyWith(
+          color: AppColors.successGreen,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
         ),
       ),
     );

@@ -1454,7 +1454,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                 _includeSuburbs = value;
               });
             },
-            activeColor: _LocationColors.primary,
+            activeThumbColor: _LocationColors.primary,
           ),
         ],
       ),

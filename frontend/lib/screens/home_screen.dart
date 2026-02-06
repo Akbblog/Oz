@@ -100,50 +100,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
       body: ResponsiveShell(
-        child: Stack(
-          children: [
-            _buildBackground(),
-            layoutType == LayoutType.mobile
-                ? Column(
-                    children: [
-                      _buildHeader(authProvider),
-                      Expanded(
-                        child: PageView(
-                          controller: _pageController,
-                          onPageChanged: (index) {
-                            setState(() => _currentIndex = index);
-                          },
-                          children: [
-                            DashboardScreen(
-                              showHeader: false,
-                              onNavigateToTab: _onNavTap,
-                            ),
-                            StateSelectionScreen(
-                              showHeader: false,
-                              onContinueToSearch: _startSearchFromCities,
-                            ),
-                            ScrapingScreen(
-                              showHeader: false,
-                              initialCategory: _scrapeInitialCategory,
-                              initialCities: _scrapeInitialCities,
-                              initialMaxResults: _scrapeInitialMaxResults,
-                              onBackToCities: () => _onNavTap(1),
-                            ),
-                            const ResultsScreen(showHeader: false),
-                            const JobHistoryScreen(showHeader: false),
-                          ],
-                        ),
-                      ),
-                    ],
-                  )
-                : Padding(
-                    padding: EdgeInsets.all(
-                      ResponsiveUtils.getScreenPadding(layoutType),
-                    ),
-                    child: _buildDesktopContent(),
-                  ),
-          ],
-        ),
         bottomNavigation:
             layoutType == LayoutType.mobile ? _buildBottomNav() : null,
         topBarBuilder: (context, layoutType, isCollapsed, onToggleSidebar) {
@@ -207,6 +163,50 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             email: authProvider.currentUser?['email'] ?? 'Pro Account',
           );
         },
+        child: Stack(
+          children: [
+            _buildBackground(),
+            layoutType == LayoutType.mobile
+                ? Column(
+                    children: [
+                      _buildHeader(authProvider),
+                      Expanded(
+                        child: PageView(
+                          controller: _pageController,
+                          onPageChanged: (index) {
+                            setState(() => _currentIndex = index);
+                          },
+                          children: [
+                            DashboardScreen(
+                              showHeader: false,
+                              onNavigateToTab: _onNavTap,
+                            ),
+                            StateSelectionScreen(
+                              showHeader: false,
+                              onContinueToSearch: _startSearchFromCities,
+                            ),
+                            ScrapingScreen(
+                              showHeader: false,
+                              initialCategory: _scrapeInitialCategory,
+                              initialCities: _scrapeInitialCities,
+                              initialMaxResults: _scrapeInitialMaxResults,
+                              onBackToCities: () => _onNavTap(1),
+                            ),
+                            const ResultsScreen(showHeader: false),
+                            const JobHistoryScreen(showHeader: false),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : Padding(
+                    padding: EdgeInsets.all(
+                      ResponsiveUtils.getScreenPadding(layoutType),
+                    ),
+                    child: _buildDesktopContent(),
+                  ),
+          ],
+        ),
       ),
     );
   }

@@ -409,7 +409,8 @@ class PromoValidateRequest(BaseModel):
     code: str
     package_id: Optional[int] = None
     quantity: int = 1
-    applies_to: str = "packages"  # 'packages' or 'subscriptions'
+    subtotal_cents: Optional[int] = None
+    applies_to: str = "packages"  # 'packages' or 'all'
 
 
 class PriceCalcRequest(BaseModel):
@@ -2968,20 +2969,29 @@ async def simple_purchase(
     base_cents = request.credits * 10  # $0.10 = 10 cents per credit
     discount_cents = 0
     promo_name = ""
+    bonus_credits = 0
 
     # Apply promo code if provided
     if request.promo_code:
         try:
-            promo = PromoService().validate_promo_code(
-                code=request.promo_code,
-                user_id=current_user["id"]
+            normalized_code = str(request.promo_code).strip().upper()
+            promo_effect = _promo_service.validate_and_calculate(
+                user_id=current_user["id"],
+                code=normalized_code,
+                subtotal_cents=int(base_cents),
+                applies_to="all",
             )
-            if promo:
-                if promo.get("type") == "percentage":
-                    discount_cents = int(base_cents * (promo.get("value", 0) / 100))
-                elif promo.get("type") == "fixed":
-                    discount_cents = int(promo.get("value", 0) * 100)  # Convert $ to cents
-                promo_name = promo.get("name", request.promo_code)
+            if promo_effect:
+                discount_cents = int(promo_effect.discount_cents or 0)
+                bonus_credits = int(promo_effect.bonus_credits or 0)
+                promo_name = str(promo_effect.code or normalized_code)
+                logging.info(
+                    "Applied promo on simple-purchase user_id=%s code=%s discount_cents=%s bonus_credits=%s",
+                    current_user["id"],
+                    promo_name,
+                    discount_cents,
+                    bonus_credits,
+                )
         except Exception as e:
             logging.warning(f"Promo code validation failed: {e}")
 
@@ -3007,7 +3017,10 @@ async def simple_purchase(
             metadata={
                 'user_id': str(current_user['id']),
                 'credits': str(request.credits),
-                'promo_code': request.promo_code or '',
+                'promo_code': (promo_name or (request.promo_code or "")).strip(),
+                'subtotal_cents': str(int(base_cents)),
+                'discount_cents': str(int(discount_cents)),
+                'bonus_credits': str(int(bonus_credits)),
             }
         )
 
@@ -3018,7 +3031,8 @@ async def simple_purchase(
             "subtotal_cents": base_cents,
             "discount_cents": discount_cents,
             "total_cents": total_cents,
-            "promo_applied": promo_name if discount_cents > 0 else None,
+            "bonus_credits": bonus_credits,
+            "promo_applied": promo_name if promo_name else None,
         }
     except Exception as e:
         logging.error(f"Stripe session creation failed: {e}")
@@ -3428,40 +3442,52 @@ async def resume_subscription(stripe_subscription_id: str, current_user: dict = 
 
 @app.post("/api/promos/validate")
 async def validate_promo(req: PromoValidateRequest, current_user: dict = Depends(get_current_user)):
-    """Validate a promo code and return its effect for the given package"""
+    """Validate a promo code and return its calculated effect for the provided context."""
     code = (req.code or "").strip()
     if not code:
         raise HTTPException(status_code=400, detail="code is required")
 
-    if req.applies_to not in ("packages", "subscriptions"):
-        raise HTTPException(status_code=400, detail="applies_to must be 'packages' or 'subscriptions'")
-
-    if req.applies_to == "packages" and not req.package_id:
-        raise HTTPException(status_code=400, detail="package_id is required for package promos")
+    applies_to = (req.applies_to or "packages").strip().lower()
+    if applies_to not in ("packages", "all"):
+        raise HTTPException(status_code=400, detail="applies_to must be 'packages' or 'all'")
 
     # Compute a baseline subtotal without promo, then validate against it.
-    baseline = _pricing_engine.calculate_for_package(
-        user_id=current_user["id"],
-        package_id=req.package_id,
-        quantity=req.quantity,
-        promo_code=None,
-    )
+    if applies_to == "packages":
+        if not req.package_id:
+            raise HTTPException(status_code=400, detail="package_id is required for package promos")
+        baseline = _pricing_engine.calculate_for_package(
+            user_id=current_user["id"],
+            package_id=req.package_id,
+            quantity=req.quantity,
+            promo_code=None,
+        )
+        subtotal_cents = int(baseline["subtotal_cents"])
+    else:
+        if req.subtotal_cents is None:
+            raise HTTPException(status_code=400, detail="subtotal_cents is required for applies_to='all'")
+        subtotal_cents = int(req.subtotal_cents)
 
     effect = _promo_service.validate_and_calculate(
         user_id=current_user["id"],
         code=code,
-        subtotal_cents=int(baseline["subtotal_cents"]),
-        applies_to=req.applies_to,
+        subtotal_cents=subtotal_cents,
+        applies_to=applies_to,
     )
 
     if not effect:
         return {"valid": False}
 
+    promo_def = _promo_service.get_promo_by_code(code) or {}
     return {
         "valid": True,
         "code": effect.code,
+        "type": promo_def.get("type"),
+        "discount_percentage": promo_def.get("discount_percentage"),
+        "discount_amount_cents": promo_def.get("discount_amount_cents"),
         "discount_cents": effect.discount_cents,
         "bonus_credits": effect.bonus_credits,
+        "subtotal_cents": subtotal_cents,
+        "total_cents": max(0, subtotal_cents - int(effect.discount_cents or 0)),
     }
 
 

@@ -16,6 +16,103 @@ except ImportError:
 def _get_db_type() -> str:
     return os.getenv("DB_TYPE", "sqlite").lower()
 
+
+def _convert_qmark_placeholders(query: str) -> str:
+    """Convert sqlite-style '?' placeholders to MySQL '%s' placeholders."""
+    if "?" not in query:
+        return query
+
+    result = []
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    i = 0
+
+    while i < len(query):
+        char = query[i]
+
+        if char == "'" and not in_double_quote and not in_backtick:
+            # SQL escapes single quote in strings as doubled ''.
+            if in_single_quote and i + 1 < len(query) and query[i + 1] == "'":
+                result.append("''")
+                i += 2
+                continue
+            in_single_quote = not in_single_quote
+            result.append(char)
+            i += 1
+            continue
+
+        if char == '"' and not in_single_quote and not in_backtick:
+            in_double_quote = not in_double_quote
+            result.append(char)
+            i += 1
+            continue
+
+        if char == "`" and not in_single_quote and not in_double_quote:
+            in_backtick = not in_backtick
+            result.append(char)
+            i += 1
+            continue
+
+        if char == "?" and not (in_single_quote or in_double_quote or in_backtick):
+            result.append("%s")
+        else:
+            result.append(char)
+        i += 1
+
+    return "".join(result)
+
+
+class _MySQLCursorAdapter:
+    """DB-API cursor adapter that transparently converts qmark placeholders."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, query, args=None):
+        normalized_query = _convert_qmark_placeholders(query) if isinstance(query, str) else query
+        if args is None:
+            return self._cursor.execute(normalized_query)
+        return self._cursor.execute(normalized_query, args)
+
+    def executemany(self, query, args):
+        normalized_query = _convert_qmark_placeholders(query) if isinstance(query, str) else query
+        return self._cursor.executemany(normalized_query, args)
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __enter__(self):
+        self._cursor.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._cursor.__exit__(exc_type, exc_val, exc_tb)
+
+    def __getattr__(self, item):
+        return getattr(self._cursor, item)
+
+
+class _MySQLConnectionAdapter:
+    """Connection adapter that returns placeholder-normalizing cursors."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self, *args, **kwargs):
+        return _MySQLCursorAdapter(self._conn.cursor(*args, **kwargs))
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self._conn.__exit__(exc_type, exc_val, exc_tb)
+
+    def __getattr__(self, item):
+        return getattr(self._conn, item)
+
+
 def _get_placeholders():
     return "%s" if _get_db_type() == "mysql" else "?"
 
@@ -148,16 +245,17 @@ def get_db():
         # DATABASE_URL examples:
         # - mysql://user:password@host:port/db
         # - mysql+pymysql://user:password@host:port/db
-        from urllib.parse import urlparse
+        from urllib.parse import urlparse, unquote
         parsed_url = urlparse(config.DATABASE_URL)
-        return pymysql.connect(
+        raw_conn = pymysql.connect(
             host=parsed_url.hostname,
             port=parsed_url.port or 3306,
-            user=parsed_url.username,
-            password=parsed_url.password,
+            user=unquote(parsed_url.username or ""),
+            password=unquote(parsed_url.password or ""),
             db=parsed_url.path.lstrip('/'),
             autocommit=False
         )
+        return _MySQLConnectionAdapter(raw_conn)
     else:
         raise RuntimeError(f"Unsupported DB_TYPE: {db_type}")
 

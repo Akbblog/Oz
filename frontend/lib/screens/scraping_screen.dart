@@ -1708,7 +1708,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 if (isCompleted) {
                   statusIcon = Icons.check_circle_rounded;
                   statusColor = _ScrapeColors.emerald;
-                  statusLabel = '${count} leads';
+                  statusLabel = '$count leads';
                 } else if (isFailedOrCancelled) {
                   statusIcon = Icons.error_rounded;
                   statusColor = _ScrapeColors.rose;
