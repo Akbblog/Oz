@@ -16,6 +16,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _passwordVisible = ValueNotifier<bool>(false);
@@ -59,6 +60,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     _animationController.dispose();
     _usernameController.dispose();
     _emailController.dispose();
+    _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _passwordVisible.dispose();
@@ -105,6 +107,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       _usernameController.text.trim(),
       _emailController.text.trim(),
       _passwordController.text,
+      _phoneController.text.trim(),
     );
 
     if (mounted) {
@@ -342,6 +345,31 @@ class _RegisterScreenState extends State<RegisterScreen>
                 }
                 if (!value.contains('@')) {
                   return 'Please enter a valid email';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Phone
+            _buildLabel('Phone Number'),
+            const SizedBox(height: 6),
+            TextFormField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              style: const TextStyle(color: AppColors.textPrimaryLight),
+              decoration: _inputDecoration(
+                hint: 'Enter your phone number',
+                icon: Icons.phone_outlined,
+              ),
+              validator: (value) {
+                final raw = (value ?? '').trim();
+                if (raw.isEmpty) {
+                  return 'Please enter a phone number';
+                }
+                final digitsOnly = raw.replaceAll(RegExp(r'[^\d]'), '');
+                if (digitsOnly.length < 7) {
+                  return 'Please enter a valid phone number';
                 }
                 return null;
               },

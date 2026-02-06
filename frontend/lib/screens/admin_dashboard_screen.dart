@@ -275,6 +275,162 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
+  Future<void> _showManageUserDialog(Map<String, dynamic> user) async {
+    final usernameController =
+        TextEditingController(text: (user['username'] ?? '').toString());
+    final emailController =
+        TextEditingController(text: (user['email'] ?? '').toString());
+    final phoneController =
+        TextEditingController(text: (user['phone'] ?? '').toString());
+    bool isAdmin = user['is_admin'] == true;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            padding: AppSpacing.paddingMd,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              borderRadius: AppSpacing.borderRadiusLg,
+              border: Border.all(color: AppColors.elevatedCardDark),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Manage User Profile',
+                  style:
+                      AppTypography.titleMedium.copyWith(color: Colors.white),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  'User #${user['id']}',
+                  style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                TextField(
+                  controller: usernameController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Username',
+                    labelStyle: const TextStyle(color: Colors.white60),
+                    filled: true,
+                    fillColor: AppColors.elevatedCardDark,
+                    border: OutlineInputBorder(
+                      borderRadius: AppSpacing.borderRadiusMd,
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextField(
+                  controller: emailController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Email',
+                    labelStyle: const TextStyle(color: Colors.white60),
+                    filled: true,
+                    fillColor: AppColors.elevatedCardDark,
+                    border: OutlineInputBorder(
+                      borderRadius: AppSpacing.borderRadiusMd,
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextField(
+                  controller: phoneController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Phone',
+                    labelStyle: const TextStyle(color: Colors.white60),
+                    filled: true,
+                    fillColor: AppColors.elevatedCardDark,
+                    border: OutlineInputBorder(
+                      borderRadius: AppSpacing.borderRadiusMd,
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                SwitchListTile.adaptive(
+                  value: isAdmin,
+                  onChanged: (value) => setDialogState(() => isAdmin = value),
+                  title: Text(
+                    'Admin Access',
+                    style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+                  ),
+                  activeThumbColor: AppColors.brandPurple,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _smallButton(
+                        label: 'Cancel',
+                        color: AppColors.elevatedCardDark,
+                        textColor: Colors.white,
+                        onTap: () => Navigator.pop(context, false),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: _smallButton(
+                        label: 'Save',
+                        color: AppColors.brandPurple,
+                        onTap: () async {
+                          final username = usernameController.text.trim();
+                          final email = emailController.text.trim();
+                          final phone = phoneController.text.trim();
+                          if (username.length < 3) {
+                            _showSnackBar(
+                                'Username must be at least 3 characters',
+                                AppColors.dangerRed);
+                            return;
+                          }
+                          if (!email.contains('@')) {
+                            _showSnackBar('Please enter a valid email',
+                                AppColors.dangerRed);
+                            return;
+                          }
+                          try {
+                            await _apiService.updateUserProfileAdmin(
+                              user['id'],
+                              username: username,
+                              email: email,
+                              phone: phone,
+                              isAdmin: isAdmin,
+                            );
+                            if (context.mounted) Navigator.pop(context, true);
+                          } catch (e) {
+                            _showSnackBar('Error updating profile: $e',
+                                AppColors.dangerRed);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    usernameController.dispose();
+    emailController.dispose();
+    phoneController.dispose();
+
+    if (result == true) {
+      _showSnackBar('User profile updated', AppColors.successGreen);
+      _loadData();
+    }
+  }
+
   Future<void> _approveCreditRequest(int requestId) async {
     try {
       await _apiService.approveCreditRequest(requestId);
@@ -964,6 +1120,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final isApproved = approvalState == 'approved';
     final isPending = approvalState == 'pending';
     final isDenied = approvalState == 'denied';
+    final phone = (user['phone'] ?? '').toString().trim();
     final statusColor = isApproved
         ? AppColors.successGreen
         : isDenied
@@ -1007,6 +1164,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         color: Colors.white60,
                       ),
                     ),
+                    if (phone.isNotEmpty)
+                      Text(
+                        phone,
+                        style: AppTypography.bodySmall.copyWith(
+                          color: Colors.white54,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1198,6 +1362,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final isDenied = approvalState == 'denied';
     final isAdmin = user['is_admin'] == true;
     final userId = (user['id'] as num?)?.toInt();
+    final phone = (user['phone'] ?? '').toString().trim();
     final isSelected =
         isPending && userId != null && _selectedPendingUserIds.contains(userId);
     final statusColor = isApproved
@@ -1266,6 +1431,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         color: Colors.white60,
                       ),
                     ),
+                    if (phone.isNotEmpty)
+                      Text(
+                        phone,
+                        style: AppTypography.bodySmall.copyWith(
+                          color: Colors.white54,
+                        ),
+                      ),
                     const SizedBox(height: 6),
                     Row(
                       children: [
@@ -1348,6 +1520,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ),
               ],
             ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          SizedBox(
+            width: double.infinity,
+            child: _smallButton(
+              label: 'Manage Profile',
+              color: AppColors.elevatedCardDark,
+              textColor: Colors.white,
+              onTap: () => _showManageUserDialog(user),
+            ),
           ),
         ],
       ),

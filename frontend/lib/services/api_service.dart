@@ -74,6 +74,7 @@ class ApiService {
     required String username,
     required String email,
     required String password,
+    required String phone,
   }) async {
     try {
       final response = await http
@@ -84,6 +85,7 @@ class ApiService {
               'username': username,
               'email': email,
               'password': password,
+              'phone': phone,
             }),
           )
           .timeout(timeout);
@@ -453,6 +455,31 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Failed to approve user');
+    }
+  }
+
+  Future<void> updateUserProfileAdmin(
+    int userId, {
+    String? username,
+    String? email,
+    String? phone,
+    bool? isAdmin,
+  }) async {
+    final headers = await _getHeaders();
+    final body = <String, dynamic>{};
+    if (username != null) body['username'] = username;
+    if (email != null) body['email'] = email;
+    if (phone != null) body['phone'] = phone;
+    if (isAdmin != null) body['is_admin'] = isAdmin;
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/api/admin/users/$userId'),
+      headers: headers,
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update user profile');
     }
   }
 

@@ -69,7 +69,12 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  Future<String?> register(String username, String email, String password) async {
+  Future<String?> register(
+    String username,
+    String email,
+    String password,
+    String phone,
+  ) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -79,6 +84,7 @@ class AuthProvider with ChangeNotifier {
         username: username,
         email: email,
         password: password,
+        phone: phone,
       );
       _isLoading = false;
       notifyListeners();

@@ -357,6 +357,7 @@ class UserRegister(BaseModel):
     username: str
     email: EmailStr
     password: str
+    phone: Optional[str] = None
     referral_code: Optional[str] = None
 
 class UserLogin(BaseModel):
@@ -373,6 +374,13 @@ class ResetPasswordRequest(BaseModel):
 
 class BulkUserIdsRequest(BaseModel):
     user_ids: List[int]
+
+
+class AdminUserProfileUpdateRequest(BaseModel):
+    username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    is_admin: Optional[bool] = None
 
 class ScrapingRequest(BaseModel):
     category: str
@@ -770,7 +778,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, is_approved, is_admin FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT id, username, email, phone, is_approved, is_admin FROM users WHERE username = ?", (username,))
     user = cursor.fetchone()
     conn.close()
     
@@ -780,7 +788,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             detail="User not found"
         )
     
-    approval_state = _approval_state(user[3])
+    approval_state = _approval_state(user[4])
     if approval_state != APPROVAL_APPROVED:
         detail = "Account pending approval"
         if approval_state == APPROVAL_DENIED:
@@ -791,7 +799,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         "id": user[0],
         "username": user[1],
         "email": user[2],
-        "is_admin": bool(user[4])
+        "phone": user[3],
+        "is_admin": bool(user[5])
     }
 
 async def get_admin_user(current_user: dict = Depends(get_current_user)):
@@ -829,11 +838,12 @@ async def register(user_data: UserRegister, background_tasks: BackgroundTasks):
     
     # Create user with proper approval status and credits
     password_hash = get_password_hash(user_data.password)
+    phone_value = (user_data.phone or "").strip() or None
     created_at = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO users (username, email, password_hash, is_approved, credit_balance, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (user_data.username, user_data.email, password_hash, 
+        INSERT INTO users (username, email, password_hash, phone, is_approved, credit_balance, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_data.username, user_data.email, password_hash, phone_value,
           1 if auto_approve else 0,
           starting_credits if auto_approve else 0,
           created_at))
@@ -956,12 +966,12 @@ async def login(credentials: UserLogin, request: Request):
 
         # Allow users to sign in with either their username or their email
         cursor.execute(
-            "SELECT id, username, email, password_hash, is_approved, is_admin FROM users WHERE username = ? OR email = ?",
+            "SELECT id, username, email, phone, password_hash, is_approved, is_admin FROM users WHERE username = ? OR email = ?",
             (credentials.username, credentials.username),
         )
         user = cursor.fetchone()
 
-        if not user or not verify_password(credentials.password, user[3]):
+        if not user or not verify_password(credentials.password, user[4]):
             locked_ip = _record_login_failure(conn, "ip", ip)
             locked_user = False
             if identifier_username:
@@ -978,7 +988,7 @@ async def login(credentials: UserLogin, request: Request):
                 detail="Incorrect username or password"
             )
 
-        approval_state = _approval_state(user[4])
+        approval_state = _approval_state(user[5])
         if approval_state != APPROVAL_APPROVED:
             detail = "Account pending approval"
             if approval_state == APPROVAL_DENIED:
@@ -1004,7 +1014,8 @@ async def login(credentials: UserLogin, request: Request):
             "id": user[0],
             "username": user[1],
             "email": user[2],
-            "is_admin": bool(user[5])
+            "phone": user[3],
+            "is_admin": bool(user[6])
         }
     }
 
@@ -1138,7 +1149,7 @@ async def _debug_list_users():
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, email, is_approved, is_admin, created_at, last_login, approved_at, denied_at, denied_reason FROM users ORDER BY id DESC"
+        "SELECT id, username, email, phone, is_approved, is_admin, created_at, last_login, approved_at, denied_at, denied_reason FROM users ORDER BY id DESC"
     )
     users = cursor.fetchall()
     conn.close()
@@ -1148,15 +1159,16 @@ async def _debug_list_users():
                 "id": u[0],
                 "username": u[1],
                 "email": u[2],
-                "approval_status": _approval_state(u[3]),
-                "approval_state": _approval_state_label(u[3]),
-                "is_approved": _approval_state(u[3]) == APPROVAL_APPROVED,
-                "is_admin": bool(u[4]),
-                "created_at": u[5],
-                "last_login": u[6],
-                "approved_at": u[7],
-                "denied_at": u[8],
-                "denied_reason": u[9],
+                "phone": u[3],
+                "approval_status": _approval_state(u[4]),
+                "approval_state": _approval_state_label(u[4]),
+                "is_approved": _approval_state(u[4]) == APPROVAL_APPROVED,
+                "is_admin": bool(u[5]),
+                "created_at": u[6],
+                "last_login": u[7],
+                "approved_at": u[8],
+                "denied_at": u[9],
+                "denied_reason": u[10],
             }
             for u in users
         ]
@@ -1170,7 +1182,7 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, username, email, is_approved, is_admin, credit_balance, created_at, last_login,
+        SELECT id, username, email, phone, is_approved, is_admin, credit_balance, created_at, last_login,
                approved_at, approved_by, denied_at, denied_by, denied_reason
         FROM users ORDER BY created_at DESC
     """)
@@ -1183,23 +1195,104 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "id": u[0],
                 "username": u[1],
                 "email": u[2],
-                "approval_status": _approval_state(u[3]),
-                "approval_state": _approval_state_label(u[3]),
-                "is_approved": _approval_state(u[3]) == APPROVAL_APPROVED,
-                "is_denied": _approval_state(u[3]) == APPROVAL_DENIED,
-                "is_admin": bool(u[4]),
-                "credit_balance": u[5] or 0,
-                "created_at": u[6],
-                "last_login": u[7],
-                "approved_at": u[8],
-                "approved_by": u[9],
-                "denied_at": u[10],
-                "denied_by": u[11],
-                "denied_reason": u[12],
+                "phone": u[3],
+                "approval_status": _approval_state(u[4]),
+                "approval_state": _approval_state_label(u[4]),
+                "is_approved": _approval_state(u[4]) == APPROVAL_APPROVED,
+                "is_denied": _approval_state(u[4]) == APPROVAL_DENIED,
+                "is_admin": bool(u[5]),
+                "credit_balance": u[6] or 0,
+                "created_at": u[7],
+                "last_login": u[8],
+                "approved_at": u[9],
+                "approved_by": u[10],
+                "denied_at": u[11],
+                "denied_by": u[12],
+                "denied_reason": u[13],
             }
             for u in users
         ]
     }
+
+
+@app.put("/api/admin/users/{user_id}")
+async def update_user_profile(
+    user_id: int,
+    request: AdminUserProfileUpdateRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Update user profile fields (admin only)."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT id, username, email, phone, is_admin FROM users WHERE id = ?",
+        (user_id,),
+    )
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    update_fields: List[str] = []
+    params: List[object] = []
+
+    if request.username is not None:
+        username = request.username.strip()
+        if len(username) < 3:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+        cursor.execute(
+            "SELECT id FROM users WHERE username = ? AND id != ?",
+            (username, user_id),
+        )
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Username already exists")
+        update_fields.append("username = ?")
+        params.append(username)
+
+    if request.email is not None:
+        email = str(request.email).strip().lower()
+        cursor.execute(
+            "SELECT id FROM users WHERE email = ? AND id != ?",
+            (email, user_id),
+        )
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Email already exists")
+        update_fields.append("email = ?")
+        params.append(email)
+
+    if request.phone is not None:
+        phone = request.phone.strip()
+        update_fields.append("phone = ?")
+        params.append(phone or None)
+
+    if request.is_admin is not None:
+        target_is_admin = bool(existing[4])
+        if target_is_admin and not request.is_admin:
+            cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+            admin_count = int((cursor.fetchone() or [0])[0] or 0)
+            if admin_count <= 1:
+                conn.close()
+                raise HTTPException(status_code=400, detail="Cannot remove the last admin")
+        update_fields.append("is_admin = ?")
+        params.append(1 if request.is_admin else 0)
+
+    if not update_fields:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No profile fields to update")
+
+    params.append(user_id)
+    cursor.execute(
+        f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?",
+        tuple(params),
+    )
+    conn.commit()
+    conn.close()
+
+    return {"ok": True}
 
 @app.post("/api/admin/users/{user_id}/approve")
 async def approve_user(
