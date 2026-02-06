@@ -76,7 +76,7 @@ def get_admin_setting(key: str, default: str = "") -> str:
     try:
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT value FROM admin_settings WHERE key = ?", (key,))
+        cursor.execute("SELECT value FROM admin_settings WHERE `key` = ?", (key,))
         row = cursor.fetchone()
         conn.close()
         return row[0] if row else default
@@ -89,21 +89,21 @@ def set_admin_setting(key: str, value: str, admin_id: int) -> None:
     conn = get_db()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
-    cursor.execute("SELECT 1 FROM admin_settings WHERE key = ? LIMIT 1", (key,))
+    cursor.execute("SELECT 1 FROM admin_settings WHERE `key` = ? LIMIT 1", (key,))
     exists = cursor.fetchone() is not None
     if exists:
         cursor.execute(
             """
             UPDATE admin_settings
             SET value = ?, updated_at = ?, updated_by = ?
-            WHERE key = ?
+            WHERE `key` = ?
             """,
             (value, now, admin_id, key),
         )
     else:
         cursor.execute(
             """
-            INSERT INTO admin_settings (key, value, updated_at, updated_by)
+            INSERT INTO admin_settings (`key`, value, updated_at, updated_by)
             VALUES (?, ?, ?, ?)
             """,
             (key, value, now, admin_id),
@@ -117,7 +117,7 @@ def get_all_admin_settings() -> dict:
     try:
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT key, value FROM admin_settings")
+        cursor.execute("SELECT `key`, value FROM admin_settings")
         rows = cursor.fetchall()
         conn.close()
         return {row[0]: row[1] for row in rows}
@@ -1659,7 +1659,7 @@ async def get_setting(key: str, admin: dict = Depends(get_admin_user)):
     """Get a specific admin setting (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT value FROM admin_settings WHERE key = ?", (key,))
+    cursor.execute("SELECT value FROM admin_settings WHERE `key` = ?", (key,))
     row = cursor.fetchone()
     conn.close()
     if not row:

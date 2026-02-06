@@ -158,6 +158,10 @@ def init_database():
         applied_count = run_pending_migrations(migrations_dir)
         logger.info(f"✓ Database initialized successfully. Applied {applied_count} migration(s).")
         try:
+            _ensure_users_phone_column(logger=logger)
+        except Exception as e:
+            logger.warning(f"Users.phone ensure step skipped/failed: {e}")
+        try:
             _ensure_default_admin_user(logger=logger)
         except Exception as e:
             logger.warning(f"Default admin bootstrap skipped/failed: {e}")
@@ -165,6 +169,39 @@ def init_database():
     except Exception as e:
         logger.error(f"✗ Database initialization failed: {str(e)}")
         raise
+
+
+def _ensure_users_phone_column(logger=None) -> None:
+    """Ensure users.phone exists across supported databases."""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        if _get_db_type() == "mysql":
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'users'
+                  AND COLUMN_NAME = 'phone'
+                """
+            )
+            exists = int((cursor.fetchone() or [0])[0] or 0) > 0
+            if not exists:
+                cursor.execute("ALTER TABLE users ADD COLUMN phone VARCHAR(64) NULL")
+                conn.commit()
+                if logger:
+                    logger.info("✓ Added missing users.phone column (MySQL).")
+            return
+
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [str(row[1]).lower() for row in (cursor.fetchall() or []) if row and len(row) > 1]
+        if "phone" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+            conn.commit()
+            if logger:
+                logger.info("✓ Added missing users.phone column (SQLite).")
+    finally:
+        conn.close()
 
 def _ensure_default_admin_user(logger=None) -> None:
     """
