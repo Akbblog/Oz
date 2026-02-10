@@ -46,7 +46,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       home: const AuthWrapper(),
       routes: {
-        '/home': (context) => const _ProtectedRoute(child: HomeScreen()),
+        '/home': (context) => const HomeScreen(),
         '/login': (context) => LoginScreen(),
         '/admin': (context) => const _ProtectedRoute(
               requireAdmin: true,
@@ -138,11 +138,7 @@ class AuthWrapper extends StatelessWidget {
       );
     }
 
-    if (authProvider.isAuthenticated) {
-      return HomeScreen();
-    }
-
-    return LoginScreen();
+    return const HomeScreen();
   }
 }
 

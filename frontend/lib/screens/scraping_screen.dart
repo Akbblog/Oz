@@ -3,12 +3,14 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../providers/scraper_provider.dart';
+import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../core/download_helper.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
 import '../widgets/progress_stepper.dart';
+import 'register_screen.dart';
 import 'results_screen.dart';
 
 class ScrapingScreen extends StatefulWidget {
@@ -72,7 +74,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
     _fadeController.forward();
 
-    _loadCreditBalance();
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (authProvider.isAuthenticated) {
+      _loadCreditBalance();
+    } else {
+      _loadingCredits = false;
+    }
     _citiesController.addListener(_updateCostEstimate);
 
     // Listen for job completion to auto-navigate
@@ -230,7 +237,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     }
   }
 
-  String? _validationMessage() {
+  String? _validationMessage({bool includeAccountChecks = true}) {
     final category = _categoryController.text.trim();
     final cities = _parseCities();
 
@@ -242,11 +249,14 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       return 'Add at least one target city to continue.';
     }
 
-    if (!_canCreateJob) {
+    if (includeAccountChecks && !_canCreateJob) {
       return 'Rate limit reached. Try again later.';
     }
 
-    if (!_loadingCredits && _estimatedCost > 0 && _creditBalance < _estimatedCost) {
+    if (includeAccountChecks &&
+        !_loadingCredits &&
+        _estimatedCost > 0 &&
+        _creditBalance < _estimatedCost) {
       return 'Insufficient credits. Required: $_estimatedCost, Available: $_creditBalance';
     }
 
@@ -289,7 +299,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     _updateCostEstimate();
   }
 
-  Future<void> _saveSearchDraft() async {
+  Future<void> _saveSearchDraft({bool showFeedback = true}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final payload = {
@@ -301,12 +311,14 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       await prefs.setString(_searchDraftKey, jsonEncode(payload));
       if (!mounted) return;
       setState(() => _draftLoaded = true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Draft saved'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      if (showFeedback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Draft saved'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } catch (_) {
       // Ignore save errors.
     }
@@ -329,10 +341,143 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
+  Future<void> _showAuthRequiredSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(AppSpacing.md),
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            decoration: BoxDecoration(
+              color: _ScrapeColors.card,
+              borderRadius: AppSpacing.borderRadiusXl,
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(AppSpacing.sm),
+                      decoration: BoxDecoration(
+                        color: _ScrapeColors.primary.withValues(alpha: 0.2),
+                        borderRadius: AppSpacing.borderRadiusMd,
+                      ),
+                      child: const Icon(Icons.lock_rounded, color: Colors.white),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        'Sign in required',
+                        style: AppTypography.titleLarge.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  'You can explore cities and search setup freely. To start a live scraping job and use credits, please sign in or create an account.',
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: Colors.white70,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.2),
+                          ),
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Not now'),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(sheetContext);
+                          await _saveSearchDraft(showFeedback: false);
+                          if (!mounted) return;
+                          await Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => const RegisterScreen(),
+                            ),
+                          );
+                        },
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: _ScrapeColors.primary.withValues(alpha: 0.55),
+                          ),
+                          foregroundColor: Colors.white,
+                        ),
+                        icon: const Icon(Icons.person_add_rounded, size: 18),
+                        label: const Text('Sign up'),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(sheetContext);
+                          await _saveSearchDraft(showFeedback: false);
+                          if (!mounted) return;
+                          Navigator.of(context).pushNamed('/login');
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _ScrapeColors.primary,
+                          foregroundColor: Colors.white,
+                        ),
+                        icon: const Icon(Icons.login_rounded, size: 18),
+                        label: const Text('Sign in'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openReviewSheet(ScraperProvider provider) async {
     setState(() => _attemptedStart = true);
 
-    final validation = _validationMessage();
+    final inputValidation = _validationMessage(includeAccountChecks: false);
+    if (inputValidation != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(inputValidation),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (!authProvider.isAuthenticated) {
+      await _showAuthRequiredSheet();
+      return;
+    }
+
+    await _loadCreditBalance();
+    final validation = _validationMessage(includeAccountChecks: true);
     if (validation != null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -347,6 +492,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final category = _categoryController.text.trim();
     final cities = _parseCities();
 
+    if (!mounted) return;
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -372,7 +518,15 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final cities = _parseCities();
 
     setState(() => _attemptedStart = true);
-    final validation = _validationMessage();
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (!authProvider.isAuthenticated) {
+      await _showAuthRequiredSheet();
+      return;
+    }
+
+    await _loadCreditBalance();
+
+    final validation = _validationMessage(includeAccountChecks: true);
     if (validation != null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -395,7 +549,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
     final scraperProvider = Provider.of<ScraperProvider>(context);
+    final authProvider = Provider.of<AuthProvider>(context);
     final isRunning = scraperProvider.status == ScrapingStatus.running;
+    final isAuthenticated = authProvider.isAuthenticated;
     final layoutType =
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
@@ -427,7 +583,11 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                             const SizedBox(height: AppSpacing.lg),
                             _buildConfigSection(),
                             const SizedBox(height: AppSpacing.lg),
-                            _buildWizardActions(scraperProvider, isRunning),
+                            _buildWizardActions(
+                              scraperProvider,
+                              isRunning,
+                              isAuthenticated,
+                            ),
                             const SizedBox(height: AppSpacing.lg),
                             _buildActivitySection(scraperProvider, layoutType),
                           ],
@@ -466,7 +626,10 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                                       _buildConfigSection(),
                                       const SizedBox(height: AppSpacing.lg),
                                       _buildWizardActions(
-                                          scraperProvider, isRunning),
+                                        scraperProvider,
+                                        isRunning,
+                                        isAuthenticated,
+                                      ),
                                     ],
                                   ),
                                 ),
@@ -868,8 +1031,13 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildWizardActions(ScraperProvider provider, bool isRunning) {
-    final validation = _validationMessage();
+  Widget _buildWizardActions(
+    ScraperProvider provider,
+    bool isRunning,
+    bool isAuthenticated,
+  ) {
+    final validation =
+        _validationMessage(includeAccountChecks: isAuthenticated);
     final canReview = !isRunning && validation == null;
 
     return Column(

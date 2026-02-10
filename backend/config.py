@@ -53,6 +53,14 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+# Allow local development origins on any localhost/127.0.0.1 port.
+# Set ALLOWED_ORIGIN_REGEX="" to disable regex-based allowance.
+_allowed_origin_regex_raw = os.getenv(
+    "ALLOWED_ORIGIN_REGEX",
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+).strip()
+ALLOWED_ORIGIN_REGEX = _allowed_origin_regex_raw or None
+
 # Data files
 USA_DATA_FILE = "states_cities_data.json"
 UK_DATA_FILE = "uk_regions_cities.json"

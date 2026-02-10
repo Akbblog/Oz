@@ -734,7 +734,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             onPressed: () async {
               await authProvider.logout();
               if (mounted) {
-                Navigator.of(context).pushReplacementNamed('/login');
+                Navigator.of(context).pushReplacementNamed('/home');
               }
             },
             icon: const Icon(Icons.logout_rounded, color: Colors.white70),

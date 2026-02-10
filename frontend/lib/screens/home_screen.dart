@@ -25,31 +25,79 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  int _currentIndex = 0; // Start on Dashboard
+  int _currentIndex = 1; // Guest starts on Cities
   late PageController _pageController;
+  late final AuthProvider _authProvider;
   final ApiService _apiService = ApiService();
+  bool _isAuthenticated = false;
   int _creditBalance = 0;
   bool _loadingCredits = true;
   String _scrapeInitialCategory = '';
   String _scrapeInitialCities = '';
   String _scrapeInitialMaxResults = '50';
 
-  final List<_NavItem> _navItems = const [
-    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _NavItem(icon: Icons.location_city_rounded, label: 'Cities'),
-    _NavItem(icon: Icons.search_rounded, label: 'Search'),
-    _NavItem(icon: Icons.list_alt_rounded, label: 'Results'),
-    _NavItem(icon: Icons.history_rounded, label: 'History'),
+  static const List<_NavItem> _guestNavItems = [
+    _NavItem(icon: Icons.location_city_rounded, label: 'Cities', pageIndex: 1),
+    _NavItem(icon: Icons.search_rounded, label: 'Search', pageIndex: 2),
   ];
+  static const List<_NavItem> _authenticatedNavItems = [
+    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard', pageIndex: 0),
+    _NavItem(icon: Icons.location_city_rounded, label: 'Cities', pageIndex: 1),
+    _NavItem(icon: Icons.search_rounded, label: 'Search', pageIndex: 2),
+    _NavItem(icon: Icons.list_alt_rounded, label: 'Results', pageIndex: 3),
+    _NavItem(icon: Icons.history_rounded, label: 'History', pageIndex: 4),
+  ];
+  List<_NavItem> _navItems = _guestNavItems;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentIndex);
-    _loadCreditBalance();
+    _authProvider = Provider.of<AuthProvider>(context, listen: false);
+    _authProvider.addListener(_handleAuthStateChanged);
+    _syncAuthState(_authProvider.isAuthenticated, force: true);
+  }
+
+  void _handleAuthStateChanged() {
+    if (!mounted) return;
+    _syncAuthState(_authProvider.isAuthenticated);
+  }
+
+  void _syncAuthState(bool isAuthenticated, {bool force = false}) {
+    if (!force && _isAuthenticated == isAuthenticated) return;
+
+    final targetPage = isAuthenticated ? 0 : 1;
+    setState(() {
+      _isAuthenticated = isAuthenticated;
+      _navItems = isAuthenticated ? _authenticatedNavItems : _guestNavItems;
+      _currentIndex = targetPage;
+      _loadingCredits = isAuthenticated;
+      if (!isAuthenticated) {
+        _creditBalance = 0;
+      }
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_pageController.hasClients) return;
+      _pageController.jumpToPage(targetPage);
+    });
+
+    if (isAuthenticated) {
+      _loadCreditBalance();
+    }
   }
 
   Future<void> _loadCreditBalance() async {
+    if (!_isAuthenticated) {
+      if (mounted) {
+        setState(() {
+          _creditBalance = 0;
+          _loadingCredits = false;
+        });
+      }
+      return;
+    }
+
     try {
       final data = await _apiService.getCreditBalance();
       if (mounted) {
@@ -67,6 +115,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _authProvider.removeListener(_handleAuthStateChanged);
     _pageController.dispose();
     super.dispose();
   }
@@ -91,6 +140,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _onNavTap(2);
   }
 
+  _NavItem _currentNavItem() {
+    if (_navItems.isEmpty) {
+      return _guestNavItems.first;
+    }
+    return _navItems.firstWhere(
+      (item) => item.pageIndex == _currentIndex,
+      orElse: () => _navItems.first,
+    );
+  }
+
+  void _openLogin() {
+    Navigator.of(context).pushNamed('/login');
+  }
+
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
@@ -103,7 +166,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         bottomNavigation:
             layoutType == LayoutType.mobile ? _buildBottomNav() : null,
         topBarBuilder: (context, layoutType, isCollapsed, onToggleSidebar) {
-          final title = _navItems[_currentIndex].label;
+          final title = _currentNavItem().label;
           return TopBar(
             title: title,
             showMenuToggle: layoutType == LayoutType.tablet,
@@ -113,6 +176,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onRefreshCredits: _loadCreditBalance,
             userInitial:
                 (authProvider.currentUser?['username'] ?? 'U')[0].toUpperCase(),
+            isAuthenticated: _isAuthenticated,
             isAdmin: authProvider.isAdmin,
             onAdminTap: () {
               Navigator.of(context).push(
@@ -129,21 +193,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               );
             },
             onLogoutTap: () async {
-              await authProvider.logout();
-              if (mounted) {
-                Navigator.of(context).pushReplacementNamed('/login');
-              }
+              _showLogoutDialog(authProvider);
             },
+            onAuthTap: _openLogin,
           );
         },
         sidebarBuilder: (context, layoutType, isCollapsed) {
           return SidebarNavigation(
             currentIndex: _currentIndex,
-            onTabSelected: (index) {
-              _onNavTap(index);
-            },
+            onTabSelected: _onNavTap,
+            navItems: _navItems
+                .map(
+                  (item) => SidebarNavItem(
+                    icon: item.icon,
+                    label: item.label,
+                    pageIndex: item.pageIndex,
+                  ),
+                )
+                .toList(),
             collapsed: isCollapsed,
             hidden: AppBreakpoints.isSidebarHidden(layoutType),
+            isAuthenticated: _isAuthenticated,
             isAdmin: authProvider.isAdmin,
             onAdminTap: () {
               Navigator.of(context).push(
@@ -159,6 +229,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               );
             },
+            onAuthTap: _openLogin,
             username: authProvider.currentUser?['username'] ?? 'User',
             email: authProvider.currentUser?['email'] ?? 'Pro Account',
           );
@@ -173,6 +244,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       Expanded(
                         child: PageView(
                           controller: _pageController,
+                          physics: _isAuthenticated
+                              ? const PageScrollPhysics()
+                              : const NeverScrollableScrollPhysics(),
                           onPageChanged: (index) {
                             setState(() => _currentIndex = index);
                           },
@@ -314,28 +388,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ],
             ),
           ),
-          _buildCreditPill(),
-          const SizedBox(width: AppSpacing.sm),
-          if (authProvider.isAdmin)
-            _iconButton(
-              icon: Icons.shield_rounded,
-              tooltip: 'Admin Dashboard',
-              onTap: () {
-                Navigator.of(context).push(
-                  PageRouteBuilder(
-                    pageBuilder: (context, animation, secondaryAnimation) =>
-                        AdminDashboardScreen(),
-                    transitionsBuilder:
-                        (context, animation, secondaryAnimation, child) {
-                      return FadeTransition(opacity: animation, child: child);
-                    },
-                    transitionDuration: AppSpacing.durationMedium,
-                  ),
-                );
-              },
+          if (_isAuthenticated) ...[
+            _buildCreditPill(),
+            const SizedBox(width: AppSpacing.sm),
+            if (authProvider.isAdmin)
+              _iconButton(
+                icon: Icons.shield_rounded,
+                tooltip: 'Admin Dashboard',
+                onTap: () {
+                  Navigator.of(context).push(
+                    PageRouteBuilder(
+                      pageBuilder: (context, animation, secondaryAnimation) =>
+                          AdminDashboardScreen(),
+                      transitionsBuilder:
+                          (context, animation, secondaryAnimation, child) {
+                        return FadeTransition(opacity: animation, child: child);
+                      },
+                      transitionDuration: AppSpacing.durationMedium,
+                    ),
+                  );
+                },
+              ),
+            const SizedBox(width: AppSpacing.xs),
+            _buildProfileMenu(authProvider),
+          ] else ...[
+            OutlinedButton.icon(
+              onPressed: _openLogin,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.45),
+                ),
+              ),
+              icon: const Icon(Icons.login_rounded, size: 18),
+              label: Text(
+                'Sign in',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
-          const SizedBox(width: AppSpacing.xs),
-          _buildProfileMenu(authProvider),
+          ],
         ],
       ),
     );
@@ -547,9 +641,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             onPressed: () async {
               Navigator.pop(context);
               await authProvider.logout();
-              if (mounted) {
-                Navigator.of(context).pushReplacementNamed('/login');
-              }
             },
             child: const Text('Logout'),
           ),
@@ -582,11 +673,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: List.generate(_navItems.length, (index) {
             final item = _navItems[index];
-            final isSelected = _currentIndex == index;
+            final isSelected = _currentIndex == item.pageIndex;
 
             return Expanded(
               child: GestureDetector(
-                onTap: () => _onNavTap(index),
+                onTap: () => _onNavTap(item.pageIndex),
                 child: AnimatedContainer(
                   duration: AppSpacing.durationFast,
                   padding: const EdgeInsets.symmetric(
@@ -666,8 +757,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 class _NavItem {
   final IconData icon;
   final String label;
+  final int pageIndex;
 
-  const _NavItem({required this.icon, required this.label});
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.pageIndex,
+  });
 }
 
 // Colors now consolidated in AppColors
