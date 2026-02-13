@@ -71,7 +71,7 @@ class CreditPackageResponse(CreditPackageBase):
 class PaymentTransactionBase(BaseModel):
     """Base fields for payment transactions"""
     user_id: int = Field(..., gt=0)
-    payment_provider: str = Field(..., description="'stripe' or 'coinbase'")
+    payment_provider: str = Field(..., description="'stripe', 'coinbase', or 'paypal'")
     amount_cents: int = Field(..., gt=0, description="Transaction amount in cents")
     currency: str = Field(default="USD", min_length=3, max_length=10)
     credits_purchased: int = Field(..., gt=0)
@@ -81,8 +81,8 @@ class PaymentTransactionBase(BaseModel):
 
     @validator('payment_provider')
     def validate_provider(cls, v):
-        if v not in ['stripe', 'coinbase']:
-            raise ValueError("payment_provider must be 'stripe' or 'coinbase'")
+        if v not in ['stripe', 'coinbase', 'paypal']:
+            raise ValueError("payment_provider must be 'stripe', 'coinbase', or 'paypal'")
         return v
 
 
@@ -223,7 +223,7 @@ class PaymentMethodResponse(PaymentMethodBase):
 class WebhookEventCreate(BaseModel):
     """Model for creating a webhook event"""
     webhook_id: str = Field(..., description="Provider's webhook event ID")
-    provider: str = Field(..., description="'stripe' or 'coinbase'")
+    provider: str = Field(..., description="'stripe', 'coinbase', or 'paypal'")
     event_type: str = Field(..., max_length=100)
     payload: Dict[str, Any] = Field(..., description="Full webhook payload")
     status: str = Field(default="pending")
@@ -231,8 +231,8 @@ class WebhookEventCreate(BaseModel):
 
     @validator('provider')
     def validate_provider(cls, v):
-        if v not in ['stripe', 'coinbase']:
-            raise ValueError("provider must be 'stripe' or 'coinbase'")
+        if v not in ['stripe', 'coinbase', 'paypal']:
+            raise ValueError("provider must be 'stripe', 'coinbase', or 'paypal'")
         return v
 
     @validator('status')

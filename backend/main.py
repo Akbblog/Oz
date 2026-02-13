@@ -337,13 +337,48 @@ with open(config.KSA_DATA_FILE, 'r', encoding='utf-8') as f:
 with open(config.AUSTRALIA_DATA_FILE, 'r', encoding='utf-8') as f:
     AUSTRALIA_CITIES_DATA = json.load(f)
 
+# Load Canada provinces and cities data
+with open(config.CANADA_DATA_FILE, 'r', encoding='utf-8') as f:
+    CANADA_CITIES_DATA = json.load(f)
+
+# Load India states and cities data
+with open(config.INDIA_DATA_FILE, 'r', encoding='utf-8') as f:
+    INDIA_CITIES_DATA = json.load(f)
+
+# Load Qatar regions and cities data
+with open(config.QATAR_DATA_FILE, 'r', encoding='utf-8') as f:
+    QATAR_CITIES_DATA = json.load(f)
+
+# Load Indonesia provinces and cities data
+with open(config.INDONESIA_DATA_FILE, 'r', encoding='utf-8') as f:
+    INDONESIA_CITIES_DATA = json.load(f)
+
+# Load Finland regions and cities data
+with open(config.FINLAND_DATA_FILE, 'r', encoding='utf-8') as f:
+    FINLAND_CITIES_DATA = json.load(f)
+
+# Load Germany states and cities data
+with open(config.GERMANY_DATA_FILE, 'r', encoding='utf-8') as f:
+    GERMANY_CITIES_DATA = json.load(f)
+
+# Load France regions and cities data
+with open(config.FRANCE_DATA_FILE, 'r', encoding='utf-8') as f:
+    FRANCE_CITIES_DATA = json.load(f)
+
 # Mapping of country to its region/state data
 COUNTRIES_DATA = {
     "USA": STATES_CITIES_DATA,
     "UK": UK_REGIONS_DATA,
     "UAE": UAE_CITIES_DATA,
     "KSA": KSA_CITIES_DATA,
-    "Australia": AUSTRALIA_CITIES_DATA
+    "Australia": AUSTRALIA_CITIES_DATA,
+    "Canada": CANADA_CITIES_DATA,
+    "India": INDIA_CITIES_DATA,
+    "Qatar": QATAR_CITIES_DATA,
+    "Indonesia": INDONESIA_CITIES_DATA,
+    "Finland": FINLAND_CITIES_DATA,
+    "Germany": GERMANY_CITIES_DATA,
+    "France": FRANCE_CITIES_DATA
 }
 
 # Results directory
@@ -416,7 +451,7 @@ class PurchaseRequest(BaseModel):
     package_id: int
     quantity: int = 1
     promo_code: Optional[str] = None
-    provider: str = "stripe"  # 'stripe' or 'coinbase'
+    provider: str = "stripe"  # 'stripe', 'coinbase', or 'paypal'
     idempotency_key: str
 
 
@@ -3307,13 +3342,13 @@ async def calculate_price(req: PriceCalcRequest, current_user: dict = Depends(ge
 
 @app.post("/api/payments/purchase")
 async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
-    """Initiate a Stripe PaymentIntent or Coinbase charge for a credit package"""
+    """Initiate a Stripe PaymentIntent, Coinbase charge, or PayPal order for a credit package"""
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="quantity must be > 0")
 
     provider = (req.provider or "stripe").lower()
-    if provider not in ("stripe", "coinbase"):
-        raise HTTPException(status_code=400, detail="provider must be 'stripe' or 'coinbase'")
+    if provider not in ("stripe", "coinbase", "paypal"):
+        raise HTTPException(status_code=400, detail="provider must be 'stripe', 'coinbase', or 'paypal'")
 
     try:
         if provider == "stripe":
@@ -3337,8 +3372,28 @@ async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(ge
                 "client_secret": result.client_secret,
             }
 
-        # coinbase
-        result = _payment_processor.initiate_coinbase_package_purchase(
+        if provider == "coinbase":
+            result = _payment_processor.initiate_coinbase_package_purchase(
+                user_id=current_user["id"],
+                package_id=req.package_id,
+                quantity=req.quantity,
+                promo_code=req.promo_code,
+                idempotency_key=req.idempotency_key,
+                currency=config.PAYMENT_CONFIG.get("currency", "USD"),
+            )
+            return {
+                "transaction_id": result.transaction_id,
+                "payment_provider": result.provider,
+                "amount_cents": result.amount_cents,
+                "currency": result.currency,
+                "credits_purchased": result.credits,
+                "bonus_credits": result.bonus_credits,
+                "provider_transaction_id": result.provider_transaction_id,
+                "hosted_url": result.hosted_url,
+            }
+
+        # paypal
+        result = _payment_processor.initiate_paypal_package_purchase(
             user_id=current_user["id"],
             package_id=req.package_id,
             quantity=req.quantity,
@@ -3362,6 +3417,82 @@ async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(ge
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class PayPalCaptureRequest(BaseModel):
+    transaction_id: str
+
+
+@app.post("/api/payments/paypal/capture")
+async def capture_paypal_order(
+    req: PayPalCaptureRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Capture a PayPal order and finalize the transaction.
+
+    This is a pragmatic "for now" flow: the UI creates an order and sends the user
+    to PayPal to approve it, then calls this endpoint to capture.
+    """
+    from db.payment_crud import get_transaction
+    from payments.paypal_service import PayPalService
+
+    txn = get_transaction(req.transaction_id)
+    if not txn or txn[2] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    provider = str(txn[3] or "").lower()
+    if provider != "paypal":
+        raise HTTPException(status_code=400, detail="Not a PayPal transaction")
+
+    if str(txn[7] or "").lower() == "completed":
+        return {
+            "status": "completed",
+            "transaction_id": req.transaction_id,
+            "payment_provider": "paypal",
+            "amount_cents": int(txn[5] or 0),
+            "credits_purchased": int(txn[8] or 0),
+            "invoice_id": txn[13],
+        }
+
+    order_id = str(txn[4] or "").strip()
+    if not order_id:
+        raise HTTPException(status_code=400, detail="Missing PayPal order id")
+
+    paypal = PayPalService()
+    capture = paypal.capture_order(order_id)
+    status = str(capture.get("status") or "").upper()
+    if status != "COMPLETED":
+        raise HTTPException(status_code=400, detail=f"PayPal order not completed (status={status})")
+
+    # Best-effort paid amount extraction
+    paid_cents = None
+    try:
+        pu = (capture.get("purchase_units") or [])[0]
+        payments = (pu.get("payments") or {})
+        captures = (payments.get("captures") or [])
+        cap0 = captures[0] if captures else {}
+        amt = (cap0.get("amount") or {})
+        value = float(amt.get("value") or 0.0)
+        paid_cents = int(round(value * 100))
+    except Exception:
+        paid_cents = None
+
+    result = _payment_processor.finalize_transaction_completed(
+        transaction_id=req.transaction_id,
+        provider_txn_id=order_id,
+        provider="paypal",
+        paid_amount_cents=paid_cents,
+    )
+
+    # Shape response to match frontend PaymentSuccessScreen expectations.
+    return {
+        **result,
+        "transaction_id": req.transaction_id,
+        "payment_provider": "paypal",
+        "amount_cents": int(paid_cents or txn[5] or 0),
+        "credits_purchased": int(txn[8] or 0),
+    }
 
 
 class SimplePurchaseRequest(BaseModel):
@@ -3425,8 +3556,9 @@ async def simple_purchase(
                 'quantity': 1,
             }],
             mode='payment',
-            success_url=f'{config.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}',
-            cancel_url=f'{config.FRONTEND_URL}/wallet',
+            # Flutter web uses hash-based routing in production (/#/wallet).
+            success_url=f'{config.FRONTEND_URL}/#/wallet?checkout=success&session_id={{CHECKOUT_SESSION_ID}}',
+            cancel_url=f'{config.FRONTEND_URL}/#/wallet?checkout=cancel',
             metadata={
                 'user_id': str(current_user['id']),
                 'credits': str(request.credits),
@@ -4674,7 +4806,14 @@ async def get_states():
         "UK": list(UK_REGIONS_DATA.keys()),
         "UAE": list(UAE_CITIES_DATA.keys()),
         "KSA": list(KSA_CITIES_DATA.keys()),
-        "Australia": list(AUSTRALIA_CITIES_DATA.keys())
+        "Australia": list(AUSTRALIA_CITIES_DATA.keys()),
+        "Canada": list(CANADA_CITIES_DATA.keys()),
+        "India": list(INDIA_CITIES_DATA.keys()),
+        "Qatar": list(QATAR_CITIES_DATA.keys()),
+        "Indonesia": list(INDONESIA_CITIES_DATA.keys()),
+        "Finland": list(FINLAND_CITIES_DATA.keys()),
+        "Germany": list(GERMANY_CITIES_DATA.keys()),
+        "France": list(FRANCE_CITIES_DATA.keys())
     }
 
 @app.get("/api/states/{state}/cities")
@@ -4691,6 +4830,20 @@ async def get_cities(state: str):
         return {"country": "KSA", "region": state, "cities": KSA_CITIES_DATA[state]}
     elif state in AUSTRALIA_CITIES_DATA:
         return {"country": "Australia", "state": state, "cities": AUSTRALIA_CITIES_DATA[state]}
+    elif state in CANADA_CITIES_DATA:
+        return {"country": "Canada", "province": state, "cities": CANADA_CITIES_DATA[state]}
+    elif state in INDIA_CITIES_DATA:
+        return {"country": "India", "state": state, "cities": INDIA_CITIES_DATA[state]}
+    elif state in QATAR_CITIES_DATA:
+        return {"country": "Qatar", "region": state, "cities": QATAR_CITIES_DATA[state]}
+    elif state in INDONESIA_CITIES_DATA:
+        return {"country": "Indonesia", "province": state, "cities": INDONESIA_CITIES_DATA[state]}
+    elif state in FINLAND_CITIES_DATA:
+        return {"country": "Finland", "region": state, "cities": FINLAND_CITIES_DATA[state]}
+    elif state in GERMANY_CITIES_DATA:
+        return {"country": "Germany", "state": state, "cities": GERMANY_CITIES_DATA[state]}
+    elif state in FRANCE_CITIES_DATA:
+        return {"country": "France", "region": state, "cities": FRANCE_CITIES_DATA[state]}
     else:
         raise HTTPException(status_code=404, detail="State or region not found")
 

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 import config
 from db.base import execute_query
 from payments.coinbase_service import CoinbaseCommerceService
+from payments.paypal_service import PayPalService
 from payments.pricing_engine import PricingEngine
 from payments.stripe_service import StripeService
 from promotions.promo_service import PromoEffect, PromoService
@@ -36,6 +37,7 @@ class PaymentProcessor:
     def __init__(self) -> None:
         self._stripe = StripeService()
         self._coinbase = CoinbaseCommerceService()
+        self._paypal = PayPalService()
         self._pricing = PricingEngine()
         self._promos = PromoService()
         self._referrals = ReferralService()
@@ -311,6 +313,106 @@ class PaymentProcessor:
             bonus_credits=int(price["bonus_credits"]),
             provider_transaction_id=charge_id,
             hosted_url=hosted_url,
+        )
+
+    def initiate_paypal_package_purchase(
+        self,
+        *,
+        user_id: int,
+        package_id: int,
+        quantity: int,
+        promo_code: Optional[str],
+        idempotency_key: str,
+        currency: str = "USD",
+    ) -> PurchaseInitResult:
+        existing = self._get_transaction_by_idempotency_key(idempotency_key)
+        if existing:
+            if existing["status"] == "completed":
+                return PurchaseInitResult(
+                    transaction_id=existing["transaction_id"],
+                    provider=existing["payment_provider"],
+                    amount_cents=existing["amount_cents"],
+                    currency=existing["currency"],
+                    credits=existing["credits_purchased"],
+                    bonus_credits=0,
+                    provider_transaction_id=str(existing["provider_transaction_id"] or ""),
+                )
+            if existing["status"] in ("pending", "processing"):
+                raise ValueError("Payment already processing for this idempotency key")
+            # If failed, allow retry by reusing the same transaction row.
+
+        price = self._pricing.calculate_for_package(
+            user_id=user_id,
+            package_id=package_id,
+            quantity=quantity,
+            promo_code=promo_code,
+        )
+
+        total_cents = int(price["total_cents"])
+        if total_cents < int(config.PAYMENT_CONFIG["min_purchase_cents"]):
+            raise ValueError("Purchase amount below minimum")
+        if total_cents > int(config.PAYMENT_CONFIG["max_purchase_cents"]):
+            raise ValueError("Purchase amount above maximum")
+
+        promo_effect: Optional[PromoEffect] = price.get("promo")
+        promo_code_id = promo_effect.promo_code_id if promo_effect else None
+
+        if existing and existing["status"] == "failed":
+            transaction_id = existing["transaction_id"]
+            execute_query(
+                """
+                UPDATE payment_transactions
+                SET amount_cents = ?, currency = ?, credits_purchased = ?, package_id = ?, promo_code_id = ?,
+                    status = 'pending', provider_transaction_id = NULL, updated_at = ?
+                WHERE transaction_id = ?
+                """,
+                (
+                    total_cents,
+                    currency,
+                    int(price["credits_to_receive"]),
+                    package_id,
+                    promo_code_id,
+                    now_db_string(),
+                    transaction_id,
+                ),
+            )
+        else:
+            transaction_id = self._create_transaction(
+                user_id=user_id,
+                provider="paypal",
+                amount_cents=total_cents,
+                currency=currency,
+                credits=int(price["credits_to_receive"]),
+                package_id=package_id,
+                idempotency_key=idempotency_key,
+                promo_code_id=promo_code_id,
+            )
+
+        # PayPal redirects back to the app, but we keep it simple for now:
+        # user can return and press "Complete" (capture) in the UI.
+        return_url = f"{config.FRONTEND_URL}/#/wallet"
+        cancel_url = f"{config.FRONTEND_URL}/#/wallet"
+
+        order_id, approve_url = self._paypal.create_order(
+            amount_cents=total_cents,
+            currency=currency,
+            description=f"Credit package {package_id} x{quantity}",
+            custom_id=transaction_id,
+            return_url=return_url,
+            cancel_url=cancel_url,
+        )
+
+        self._update_transaction_provider_id(transaction_id, str(order_id), "processing")
+
+        return PurchaseInitResult(
+            transaction_id=transaction_id,
+            provider="paypal",
+            amount_cents=total_cents,
+            currency=currency,
+            credits=int(price["credits_to_receive"]),
+            bonus_credits=int(price["bonus_credits"]),
+            provider_transaction_id=str(order_id),
+            hosted_url=str(approve_url),
         )
 
     def _generate_invoice_number(self) -> str:

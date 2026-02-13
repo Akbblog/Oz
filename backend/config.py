@@ -67,6 +67,13 @@ UK_DATA_FILE = "uk_regions_cities.json"
 UAE_DATA_FILE = "uae_cities_data.json"
 KSA_DATA_FILE = "ksa_cities_data.json"
 AUSTRALIA_DATA_FILE = "australia_cities_data.json"
+CANADA_DATA_FILE = "canada_cities_data.json"
+INDIA_DATA_FILE = "india_cities_data.json"
+QATAR_DATA_FILE = "qatar_cities_data.json"
+INDONESIA_DATA_FILE = "indonesia_cities_data.json"
+FINLAND_DATA_FILE = "finland_cities_data.json"
+GERMANY_DATA_FILE = "germany_cities_data.json"
+FRANCE_DATA_FILE = "france_cities_data.json"
 
 # JWT Settings
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
@@ -95,6 +102,12 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "sk_test_...")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_test_...")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_...")
 
+# PayPal Settings
+# Set PAYPAL_ENV to "live" in production, otherwise "sandbox".
+PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "").strip()
+PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
+PAYPAL_ENV = os.getenv("PAYPAL_ENV", "sandbox").strip().lower()
+
 # Coinbase Commerce Settings
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY", "your_coinbase_api_key")
 COINBASE_WEBHOOK_SECRET = os.getenv("COINBASE_WEBHOOK_SECRET", "your_coinbase_webhook_secret")
@@ -108,6 +121,10 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@business-scraper.com")
 
 # Public app URL (used in emails). Example: https://app.infinityleadspro.com
 APP_URL = os.getenv("APP_URL", "").strip()
+
+# Frontend URL used for payment return/cancel redirects.
+# Must be a full origin (e.g. https://infinity-leads.vercel.app). No trailing slash.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://infinity-leads.vercel.app").strip().rstrip("/")
 
 # Optional override for who receives admin notifications.
 # Comma-separated list of emails (e.g. "admin@a.com,ops@a.com").

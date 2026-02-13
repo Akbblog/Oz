@@ -1,4 +1,8 @@
 
+import 'dart:convert';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
@@ -32,6 +36,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   final Set<int> _selectedPendingUserIds = {};
   final Set<int> _selectedCreditRequestIds = {};
 
+  // Activity / Audit state
+  List<Map<String, dynamic>> _activityEvents = [];
+  int _activityTotal = 0;
+  int _activityOffset = 0;
+  static const int _activityPageSize = 25;
+  bool _activityLoading = false;
+  List<String> _activityActions = [];
+  String? _filterAction;
+  String? _filterStatus;
+  String? _filterDateFrom;
+  String? _filterDateTo;
+  final TextEditingController _filterUserIdController = TextEditingController();
+
+  // User KPIs cache
+  final Map<int, Map<String, dynamic>> _userKpis = {};
+
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
@@ -53,6 +73,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void dispose() {
     _animationController.dispose();
+    _filterUserIdController.dispose();
     _startingCreditsController.dispose();
     super.dispose();
   }
@@ -820,7 +841,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ? _buildUsersView()
                   : _selectedTab == 2
                       ? _buildCreditsView()
-                      : _buildSettingsView(),
+                      : _selectedTab == 3
+                          ? _buildActivityView()
+                          : _buildSettingsView(),
         ),
       ],
     );
@@ -839,7 +862,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           Expanded(child: _buildTab(0, 'Stats', Icons.query_stats)),
           Expanded(child: _buildTab(1, 'Users', Icons.group)),
           Expanded(child: _buildTab(2, 'Credits', Icons.credit_card)),
-          Expanded(child: _buildTab(3, 'Settings', Icons.tune_rounded)),
+          Expanded(child: _buildTab(3, 'Activity', Icons.history_rounded)),
+          Expanded(child: _buildTab(4, 'Settings', Icons.tune_rounded)),
         ],
       ),
     );
@@ -2046,6 +2070,436 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
+  // ==================== ACTIVITY LOG ====================
+
+  Future<void> _loadActivityFeed({bool resetOffset = false}) async {
+    if (_activityLoading) return;
+    if (resetOffset) _activityOffset = 0;
+    setState(() => _activityLoading = true);
+    try {
+      final userIdText = _filterUserIdController.text.trim();
+      final userId = userIdText.isNotEmpty ? int.tryParse(userIdText) : null;
+      final data = await _apiService.getActivityFeed(
+        userId: userId,
+        action: _filterAction,
+        status: _filterStatus,
+        dateFrom: _filterDateFrom,
+        dateTo: _filterDateTo,
+        limit: _activityPageSize,
+        offset: _activityOffset,
+      );
+      if (mounted) {
+        setState(() {
+          _activityEvents =
+              List<Map<String, dynamic>>.from(data['events'] ?? []);
+          _activityTotal = (data['total'] as num?)?.toInt() ?? _activityEvents.length;
+          _activityLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _activityLoading = false);
+        _showSnackBar('Failed to load activity: $e', AppColors.dangerRed);
+      }
+    }
+  }
+
+  Future<void> _loadActivityActions() async {
+    try {
+      final actions = await _apiService.getActivityActions();
+      if (mounted) setState(() => _activityActions = actions);
+    } catch (_) {}
+  }
+
+  Future<void> _exportCSV() async {
+    try {
+      final userIdText = _filterUserIdController.text.trim();
+      final userId = userIdText.isNotEmpty ? int.tryParse(userIdText) : null;
+      final response = await _apiService.exportActivityCSV(
+        userId: userId,
+        action: _filterAction,
+        dateFrom: _filterDateFrom,
+        dateTo: _filterDateTo,
+      );
+      final bytes = utf8.encode(response.body);
+      final blob = html.Blob([bytes], 'text/csv');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..setAttribute('download', 'activity_export.csv')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+      _showSnackBar('CSV exported', AppColors.successGreen);
+    } catch (e) {
+      _showSnackBar('Export failed: $e', AppColors.dangerRed);
+    }
+  }
+
+  Future<void> _showUserTimeline(int userId, String username) async {
+    showDialog(
+      context: context,
+      builder: (ctx) => _UserTimelineDialog(
+        apiService: _apiService,
+        userId: userId,
+        username: username,
+      ),
+    );
+  }
+
+  Future<void> _showUserKpis(int userId, String username) async {
+    showDialog(
+      context: context,
+      builder: (ctx) => _UserKpisDialog(
+        apiService: _apiService,
+        userId: userId,
+        username: username,
+      ),
+    );
+  }
+
+  Future<void> _pickDate(bool isFrom) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(2024),
+      lastDate: now,
+      builder: (context, child) => Theme(
+        data: ThemeData.dark().copyWith(
+          colorScheme: ColorScheme.dark(primary: AppColors.brandPurple),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) {
+      final formatted =
+          '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+      setState(() {
+        if (isFrom) {
+          _filterDateFrom = formatted;
+        } else {
+          _filterDateTo = formatted;
+        }
+      });
+    }
+  }
+
+  Widget _buildActivityView() {
+    // Lazy-load on first visit
+    if (_activityEvents.isEmpty && !_activityLoading && _activityActions.isEmpty) {
+      _loadActivityFeed();
+      _loadActivityActions();
+    }
+
+    final currentPage = (_activityOffset ~/ _activityPageSize) + 1;
+    final totalPages = (_activityTotal / _activityPageSize).ceil().clamp(1, 9999);
+
+    return Column(
+      children: [
+        // Filters
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceDark,
+            borderRadius: AppSpacing.borderRadiusLg,
+            border: Border.all(color: AppColors.elevatedCardDark),
+          ),
+          child: Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 100,
+                child: TextField(
+                  controller: _filterUserIdController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'User ID',
+                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                    filled: true,
+                    fillColor: AppColors.elevatedCardDark,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.xs, vertical: AppSpacing.xs),
+                    border: OutlineInputBorder(
+                      borderRadius: AppSpacing.borderRadiusSm,
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+              _buildFilterDropdown(
+                value: _filterAction,
+                hint: 'All Actions',
+                items: _activityActions,
+                onChanged: (v) => setState(() => _filterAction = v),
+                width: 180,
+              ),
+              _buildFilterDropdown(
+                value: _filterStatus,
+                hint: 'All Outcomes',
+                items: const ['success', 'failure'],
+                onChanged: (v) => setState(() => _filterStatus = v),
+                width: 130,
+              ),
+              _buildDateChip('From', _filterDateFrom, () => _pickDate(true),
+                  () => setState(() => _filterDateFrom = null)),
+              _buildDateChip('To', _filterDateTo, () => _pickDate(false),
+                  () => setState(() => _filterDateTo = null)),
+              _smallButton(
+                label: 'Filter',
+                color: AppColors.brandPurple,
+                onTap: () => _loadActivityFeed(resetOffset: true),
+              ),
+              _smallButton(
+                label: 'Export CSV',
+                color: AppColors.elevatedCardDark,
+                textColor: Colors.white,
+                onTap: _exportCSV,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        // Table
+        Expanded(
+          child: _activityLoading
+              ? const Center(
+                  child: CircularProgressIndicator(
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
+                  ),
+                )
+              : _activityEvents.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No activity events found',
+                        style: AppTypography.bodyMedium
+                            .copyWith(color: Colors.white60),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md),
+                      itemCount: _activityEvents.length,
+                      itemBuilder: (context, index) {
+                        final e = _activityEvents[index];
+                        return _buildActivityRow(e);
+                      },
+                    ),
+        ),
+        // Pagination
+        Container(
+          padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.sm, horizontal: AppSpacing.md),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                onPressed: _activityOffset > 0
+                    ? () {
+                        _activityOffset =
+                            (_activityOffset - _activityPageSize).clamp(0, _activityTotal);
+                        _loadActivityFeed();
+                      }
+                    : null,
+                icon: const Icon(Icons.chevron_left, color: Colors.white70),
+              ),
+              Text(
+                'Page $currentPage of $totalPages',
+                style:
+                    AppTypography.labelSmall.copyWith(color: Colors.white54),
+              ),
+              IconButton(
+                onPressed: _activityOffset + _activityPageSize < _activityTotal
+                    ? () {
+                        _activityOffset += _activityPageSize;
+                        _loadActivityFeed();
+                      }
+                    : null,
+                icon: const Icon(Icons.chevron_right, color: Colors.white70),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActivityRow(Map<String, dynamic> e) {
+    final isSuccess = e['status'] == 'success';
+    final statusColor = isSuccess ? AppColors.successGreen : AppColors.dangerRed;
+    final createdAt = e['created_at'] ?? '';
+    String timeStr = '';
+    try {
+      final dt = DateTime.parse(createdAt);
+      timeStr =
+          '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      timeStr = createdAt;
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceDark,
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(color: AppColors.elevatedCardDark),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(
+              timeStr,
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white54,
+                fontSize: 11,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 80,
+            child: Text(
+              e['actor_username'] ?? '#${e['actor_user_id'] ?? '?'}',
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(
+              e['action'] ?? '',
+              style: AppTypography.labelSmall.copyWith(color: Colors.white),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SizedBox(
+            width: 80,
+            child: Text(
+              e['target_type'] != null
+                  ? '${e['target_type']}${e['target_id'] != null ? ' #${e['target_id']}' : ''}'
+                  : '',
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white54,
+                fontSize: 11,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Container(
+            width: 56,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.xxs, vertical: 2),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.12),
+              borderRadius: AppSpacing.borderRadiusSm,
+            ),
+            child: Text(
+              isSuccess ? 'OK' : 'FAIL',
+              style: AppTypography.labelSmall.copyWith(
+                color: statusColor,
+                fontWeight: FontWeight.w700,
+                fontSize: 10,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          SizedBox(
+            width: 90,
+            child: Text(
+              e['ip_address'] ?? '',
+              style: AppTypography.labelSmall.copyWith(
+                color: Colors.white38,
+                fontSize: 10,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterDropdown({
+    required String? value,
+    required String hint,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+    double width = 150,
+  }) {
+    return Container(
+      width: width,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      decoration: BoxDecoration(
+        color: AppColors.elevatedCardDark,
+        borderRadius: AppSpacing.borderRadiusSm,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: value,
+          hint: Text(hint,
+              style: const TextStyle(color: Colors.white38, fontSize: 13)),
+          dropdownColor: AppColors.surfaceDark,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          items: [
+            DropdownMenuItem<String>(
+              value: null,
+              child: Text(hint,
+                  style: const TextStyle(color: Colors.white38, fontSize: 13)),
+            ),
+            ...items.map((a) => DropdownMenuItem(
+                  value: a,
+                  child: Text(a, overflow: TextOverflow.ellipsis),
+                )),
+          ],
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateChip(
+      String label, String? value, VoidCallback onTap, VoidCallback onClear) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xs, vertical: AppSpacing.xxs + 2),
+        decoration: BoxDecoration(
+          color: AppColors.elevatedCardDark,
+          borderRadius: AppSpacing.borderRadiusSm,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              value ?? label,
+              style: TextStyle(
+                color: value != null ? Colors.white : Colors.white38,
+                fontSize: 13,
+              ),
+            ),
+            if (value != null) ...[
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: onClear,
+                child: const Icon(Icons.close, size: 14, color: Colors.white54),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDeleteDialog() {
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -2244,4 +2698,345 @@ class _GeoPatternPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ==================== USER TIMELINE DIALOG ====================
+
+class _UserTimelineDialog extends StatefulWidget {
+  final ApiService apiService;
+  final int userId;
+  final String username;
+
+  const _UserTimelineDialog({
+    required this.apiService,
+    required this.userId,
+    required this.username,
+  });
+
+  @override
+  State<_UserTimelineDialog> createState() => _UserTimelineDialogState();
+}
+
+class _UserTimelineDialogState extends State<_UserTimelineDialog> {
+  List<Map<String, dynamic>> _events = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await widget.apiService.getUserTimeline(widget.userId);
+      if (mounted) {
+        setState(() {
+          _events = List<Map<String, dynamic>>.from(data['events'] ?? []);
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 560,
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.8),
+        padding: AppSpacing.paddingMd,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark,
+          borderRadius: AppSpacing.borderRadiusLg,
+          border: Border.all(color: AppColors.elevatedCardDark),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.timeline, color: AppColors.brandPurple, size: 22),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    'Timeline: ${widget.username}',
+                    style: AppTypography.titleMedium.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(AppSpacing.xl),
+                child: CircularProgressIndicator(
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
+                ),
+              )
+            else if (_events.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.xl),
+                child: Text(
+                  'No activity found for this user.',
+                  style:
+                      AppTypography.bodyMedium.copyWith(color: Colors.white60),
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _events.length,
+                  itemBuilder: (context, i) {
+                    final e = _events[i];
+                    final isSuccess = e['status'] == 'success';
+                    final statusColor =
+                        isSuccess ? AppColors.successGreen : AppColors.dangerRed;
+                    String timeStr = '';
+                    try {
+                      final dt = DateTime.parse(e['created_at'] ?? '');
+                      timeStr =
+                          '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                    } catch (_) {
+                      timeStr = e['created_at'] ?? '';
+                    }
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: AppSpacing.xxs),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+                      decoration: BoxDecoration(
+                        color: AppColors.elevatedCardDark,
+                        borderRadius: AppSpacing.borderRadiusSm,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: statusColor,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.xs),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  e['action'] ?? '',
+                                  style: AppTypography.labelSmall.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  '${e['target_type'] ?? ''}${e['target_id'] != null ? ' #${e['target_id']}' : ''} - $timeStr',
+                                  style: AppTypography.labelSmall.copyWith(
+                                    color: Colors.white54,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: statusColor.withValues(alpha: 0.12),
+                              borderRadius: AppSpacing.borderRadiusSm,
+                            ),
+                            child: Text(
+                              isSuccess ? 'OK' : 'FAIL',
+                              style: AppTypography.labelSmall.copyWith(
+                                color: statusColor,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== USER KPIs DIALOG ====================
+
+class _UserKpisDialog extends StatefulWidget {
+  final ApiService apiService;
+  final int userId;
+  final String username;
+
+  const _UserKpisDialog({
+    required this.apiService,
+    required this.userId,
+    required this.username,
+  });
+
+  @override
+  State<_UserKpisDialog> createState() => _UserKpisDialogState();
+}
+
+class _UserKpisDialogState extends State<_UserKpisDialog> {
+  Map<String, dynamic>? _kpis;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await widget.apiService.getUserKpis(widget.userId);
+      if (mounted) setState(() { _kpis = data; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 420,
+        padding: AppSpacing.paddingMd,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark,
+          borderRadius: AppSpacing.borderRadiusLg,
+          border: Border.all(color: AppColors.elevatedCardDark),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.insights, color: AppColors.brandPurple, size: 22),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    'KPIs: ${widget.username}',
+                    style: AppTypography.titleMedium.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(AppSpacing.xl),
+                child: CircularProgressIndicator(
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
+                ),
+              )
+            else if (_kpis == null)
+              Text('Failed to load KPIs',
+                  style:
+                      AppTypography.bodyMedium.copyWith(color: Colors.white60))
+            else ...[
+              _kpiRow('Jobs Run', '${_kpis!['jobs_run'] ?? 0}',
+                  Icons.work, AppColors.blue),
+              _kpiRow('Results Generated', '${_kpis!['results_generated'] ?? 0}',
+                  Icons.checklist, AppColors.successGreen),
+              _kpiRow('Credits Used', '${_kpis!['credits_used'] ?? 0}',
+                  Icons.payments, AppColors.warningYellow),
+              _kpiRow('Credits Purchased', '${_kpis!['credits_purchased'] ?? 0}',
+                  Icons.add_card, AppColors.brandPurple),
+              _kpiRow(
+                  'Cost / Result',
+                  _kpis!['cost_per_result'] != null
+                      ? (_kpis!['cost_per_result'] as num).toStringAsFixed(1)
+                      : '-',
+                  Icons.trending_down,
+                  AppColors.brandOrange),
+              _kpiRow(
+                  'Last Activity',
+                  _formatKpiDate(_kpis!['last_activity']),
+                  Icons.access_time,
+                  Colors.white54),
+              _kpiRow(
+                  'Last Login',
+                  _formatKpiDate(_kpis!['last_login']),
+                  Icons.login,
+                  Colors.white54),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatKpiDate(dynamic val) {
+    if (val == null) return 'Never';
+    try {
+      final dt = DateTime.parse(val.toString());
+      return '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return val.toString();
+    }
+  }
+
+  Widget _kpiRow(String label, String value, IconData icon, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: AppSpacing.borderRadiusSm,
+            ),
+            child: Icon(icon, color: color, size: 16),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              label,
+              style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+            ),
+          ),
+          Text(
+            value,
+            style: AppTypography.titleSmall.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

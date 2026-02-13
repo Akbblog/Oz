@@ -1350,6 +1350,33 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> capturePayPalPayment({
+    required String transactionId,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/payments/paypal/capture'),
+            headers: headers,
+            body: jsonEncode({'transaction_id': transactionId}),
+          )
+          .timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        ErrorHandler.handleHttpError(response, context: 'PayPal capture');
+        throw ApiException('Failed to complete PayPal payment');
+      }
+    } on TimeoutException {
+      throw NetworkException('PayPal capture timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ErrorHandler.handleNetworkError(e);
+    }
+  }
+
   // ==================== PAYMENT METHODS ====================
 
   Future<List<Map<String, dynamic>>> getPaymentMethods() async {
@@ -1745,6 +1772,160 @@ class ApiService {
       return jsonDecode(response.body);
     } else {
       throw Exception('Failed to update setting: $key');
+    }
+  }
+
+  // ==================== ADMIN ACTIVITY / AUDIT ====================
+
+  Future<Map<String, dynamic>> getActivityFeed({
+    int? userId,
+    String? action,
+    String? status,
+    String? dateFrom,
+    String? dateTo,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final headers = await _getHeaders();
+    final params = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (userId != null) params['user_id'] = userId.toString();
+    if (action != null && action.isNotEmpty) params['action'] = action;
+    if (status != null && status.isNotEmpty) params['status'] = status;
+    if (dateFrom != null && dateFrom.isNotEmpty) params['date_from'] = dateFrom;
+    if (dateTo != null && dateTo.isNotEmpty) params['date_to'] = dateTo;
+
+    final uri = Uri.parse('$baseUrl/api/admin/activity')
+        .replace(queryParameters: params);
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load activity feed');
+    }
+  }
+
+  Future<List<String>> getActivityActions() async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(Uri.parse('$baseUrl/api/admin/activity/actions'), headers: headers)
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return List<String>.from(data['actions'] ?? []);
+    } else {
+      throw Exception('Failed to load activity actions');
+    }
+  }
+
+  Future<http.Response> exportActivityCSV({
+    int? userId,
+    String? action,
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final headers = await _getHeaders();
+    headers.remove('Content-Type');
+    final params = <String, String>{};
+    if (userId != null) params['user_id'] = userId.toString();
+    if (action != null && action.isNotEmpty) params['action'] = action;
+    if (dateFrom != null && dateFrom.isNotEmpty) params['date_from'] = dateFrom;
+    if (dateTo != null && dateTo.isNotEmpty) params['date_to'] = dateTo;
+
+    final uri = Uri.parse('$baseUrl/api/admin/activity/export')
+        .replace(queryParameters: params.isNotEmpty ? params : null);
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return response;
+    } else {
+      throw Exception('Failed to export activity CSV');
+    }
+  }
+
+  Future<Map<String, dynamic>> getUserTimeline(int userId,
+      {int limit = 100, int offset = 0}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/users/$userId/timeline')
+        .replace(queryParameters: {
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    });
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load user timeline');
+    }
+  }
+
+  Future<Map<String, dynamic>> getUserKpis(int userId) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/admin/users/$userId/kpis'),
+          headers: headers,
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load user KPIs');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getUserJobsAdmin(int userId) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/admin/users/$userId/jobs'),
+          headers: headers,
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return _decodeListOfMaps(response.body, key: 'jobs');
+    } else {
+      throw Exception('Failed to load user jobs');
+    }
+  }
+
+  Future<Map<String, dynamic>> getJobResultsAdmin(String jobId) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/admin/jobs/$jobId/results'),
+          headers: headers,
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load job results');
+    }
+  }
+
+  Future<Map<String, dynamic>> updateUserRole(int userId, String role) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .put(
+          Uri.parse('$baseUrl/api/admin/users/$userId'),
+          headers: headers,
+          body: jsonEncode({'role': role}),
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to update user role');
     }
   }
 
