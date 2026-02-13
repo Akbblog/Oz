@@ -2,19 +2,44 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 import config
 
-# Lazily import pymysql if needed
+# Lazily import pymysql only when MySQL is in use.
 pymysql = None
-try:
-    if os.getenv("DB_TYPE", "sqlite").lower() == "mysql":
-        import pymysql  # type: ignore
-except ImportError:
-    raise RuntimeError("PyMySQL is required for MySQL support. Install it with 'pip install PyMySQL'")
+
+
+def _infer_db_type_from_url(database_url: str) -> str:
+    if not database_url:
+        return "sqlite"
+
+    parsed = urlparse(database_url)
+    scheme = (parsed.scheme or "").lower()
+
+    if scheme.startswith("mysql"):
+        return "mysql"
+    if scheme.startswith("sqlite") or scheme == "":
+        return "sqlite"
+    return "sqlite"
 
 
 def _get_db_type() -> str:
-    return os.getenv("DB_TYPE", "sqlite").lower()
+    explicit = os.getenv("DB_TYPE", "").strip().lower()
+    if explicit in ("sqlite", "mysql"):
+        return explicit
+    return _infer_db_type_from_url(config.DATABASE_URL)
+
+
+def _ensure_pymysql():
+    global pymysql
+    if pymysql is not None:
+        return pymysql
+    try:
+        import pymysql as _pymysql  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("PyMySQL is required for MySQL support. Install it with 'pip install PyMySQL'") from exc
+    pymysql = _pymysql
+    return pymysql
 
 
 def _convert_qmark_placeholders(query: str) -> str:
@@ -268,7 +293,7 @@ def _ensure_default_admin_user(logger=None) -> None:
 
 
 def get_db():
-    """Return a DB connection for the configured DB_TYPE"""
+    """Return a DB connection for the configured database backend."""
     db_type = _get_db_type()
     if db_type == "sqlite":
         import sqlite3
@@ -282,9 +307,10 @@ def get_db():
         # DATABASE_URL examples:
         # - mysql://user:password@host:port/db
         # - mysql+pymysql://user:password@host:port/db
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote
+        mysql_client = _ensure_pymysql()
         parsed_url = urlparse(config.DATABASE_URL)
-        raw_conn = pymysql.connect(
+        raw_conn = mysql_client.connect(
             host=parsed_url.hostname,
             port=parsed_url.port or 3306,
             user=unquote(parsed_url.username or ""),

@@ -3,13 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from db.base import execute_query
+from db.base import execute_query, get_db_type
 
 
 def _db_type() -> str:
-    import os
-
-    return os.getenv("DB_TYPE", "sqlite").lower()
+    return get_db_type()
 
 
 def _now() -> datetime:
@@ -123,4 +121,3 @@ def get_usage_summary(user_id: int, days: int = 30) -> Dict[str, Any]:
         "credits_earned": int(credits_earned[0] or 0) if credits_earned else 0,
         "total_jobs": int(jobs_row[0] or 0) if jobs_row else 0,
     }
-

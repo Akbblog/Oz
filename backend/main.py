@@ -37,6 +37,7 @@ from payments.pricing_engine import PricingEngine
 from payments.webhook_handler import WebhookHandler
 from promotions.promo_service import PromoService
 from subscriptions.subscription_manager import SubscriptionManager
+from audit import record_audit_event
 
 # Fix for Windows asyncio event loop
 if sys.platform == 'win32':
@@ -273,6 +274,10 @@ init_database()
 
 app = FastAPI(title="Google Business Scraper API", version="2.0.0", debug=config.DEBUG)
 
+# Audit middleware (attaches request_id, client_ip, user_agent to request.state)
+from audit.middleware import AuditMiddleware
+app.add_middleware(AuditMiddleware)
+
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "Google Business Scraper API"}
@@ -382,6 +387,7 @@ class AdminUserProfileUpdateRequest(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_admin: Optional[bool] = None
+    role: Optional[str] = None  # 'user', 'support', 'admin', 'owner'
 
 class ScrapingRequest(BaseModel):
     category: str
@@ -759,64 +765,96 @@ def _record_login_success(conn, scope: str, identifier: str):
     conn.commit()
 
 
+ROLE_HIERARCHY = {"owner": 3, "admin": 2, "support": 1, "user": 0}
+VALID_ROLES = set(ROLE_HIERARCHY.keys())
+
+def _user_role_level(user: dict) -> int:
+    return ROLE_HIERARCHY.get(user.get("role", "user"), 0)
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get current authenticated user"""
     token = credentials.credentials
     payload = decode_access_token(token)
-    
+
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials"
         )
-    
+
     username = payload.get("sub")
     if username is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials"
         )
-    
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, phone, is_approved, is_admin FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT id, username, email, phone, is_approved, is_admin, role FROM users WHERE username = ?", (username,))
     user = cursor.fetchone()
     conn.close()
-    
+
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
-    
+
     approval_state = _approval_state(user[4])
     if approval_state != APPROVAL_APPROVED:
         detail = "Account pending approval"
         if approval_state == APPROVAL_DENIED:
             detail = "Account denied"
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
-    
+
+    # Derive role: use the role column, fall back to is_admin for backward compat
+    role = user[6] if user[6] else ("admin" if bool(user[5]) else "user")
+
     return {
         "id": user[0],
         "username": user[1],
         "email": user[2],
         "phone": user[3],
-        "is_admin": bool(user[5])
+        "is_admin": bool(user[5]),
+        "role": role,
     }
 
+
 async def get_admin_user(current_user: dict = Depends(get_current_user)):
-    """Get current admin user"""
-    if not current_user.get("is_admin"):
+    """Require at least 'support' role for read-only admin access."""
+    if _user_role_level(current_user) < ROLE_HIERARCHY["support"] and not current_user.get("is_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
         )
     return current_user
 
+
+async def get_admin_or_above(current_user: dict = Depends(get_current_user)):
+    """Require at least 'admin' role for mutation endpoints."""
+    if _user_role_level(current_user) < ROLE_HIERARCHY["admin"] and not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required"
+        )
+    return current_user
+
+
+async def get_owner_user(current_user: dict = Depends(get_current_user)):
+    """Require 'owner' role for destructive/sensitive actions."""
+    if _user_role_level(current_user) < ROLE_HIERARCHY["owner"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner access required"
+        )
+    return current_user
+
 # ==================== AUTH ENDPOINTS ====================
 
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserRegister, background_tasks: BackgroundTasks):
+async def register(user_data: UserRegister, request: Request, background_tasks: BackgroundTasks):
     """Register a new user (can be auto-approved if setting enabled)"""
     conn = get_db()
     cursor = conn.cursor()
@@ -852,6 +890,20 @@ async def register(user_data: UserRegister, background_tasks: BackgroundTasks):
     conn.commit()
     user_id = cursor.lastrowid
     conn.close()
+
+    # Audit: registration
+    from audit import record_audit_event
+    record_audit_event(
+        "auth.register",
+        request_id=request.state.request_id,
+        actor_user_id=int(user_id),
+        actor_username=user_data.username,
+        target_type="user",
+        target_id=str(user_id),
+        after={"username": user_data.username, "email": user_data.email, "auto_approved": auto_approve},
+        ip_address=request.state.client_ip,
+        user_agent=request.state.user_agent,
+    )
 
     # Optional referral capture
     try:
@@ -978,6 +1030,19 @@ async def login(credentials: UserLogin, request: Request):
             if identifier_username:
                 locked_user = _record_login_failure(conn, "username", identifier_username)
 
+            # Audit: failed login
+            from audit import record_audit_event
+            record_audit_event(
+                "auth.login",
+                request_id=request.state.request_id,
+                actor_username=credentials.username,
+                target_type="user",
+                status="failure",
+                failure_reason="Invalid credentials",
+                ip_address=request.state.client_ip,
+                user_agent=request.state.user_agent,
+            )
+
             if locked_ip or locked_user:
                 raise HTTPException(
                     status_code=429,
@@ -1005,9 +1070,22 @@ async def login(credentials: UserLogin, request: Request):
     finally:
         conn.close()
     
+    # Audit: successful login
+    from audit import record_audit_event
+    record_audit_event(
+        "auth.login",
+        request_id=request.state.request_id,
+        actor_user_id=user[0],
+        actor_username=user[1],
+        target_type="user",
+        target_id=str(user[0]),
+        ip_address=request.state.client_ip,
+        user_agent=request.state.user_agent,
+    )
+
     # Create token
     access_token = create_access_token(data={"sub": user[1]})
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -1184,7 +1262,7 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, username, email, phone, is_approved, is_admin, credit_balance, created_at, last_login,
-               approved_at, approved_by, denied_at, denied_by, denied_reason
+               approved_at, approved_by, denied_at, denied_by, denied_reason, role
         FROM users ORDER BY created_at DESC
     """)
     users = cursor.fetchall()
@@ -1210,6 +1288,7 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "denied_at": u[11],
                 "denied_by": u[12],
                 "denied_reason": u[13],
+                "role": u[14] or ("admin" if bool(u[5]) else "user"),
             }
             for u in users
         ]
@@ -1219,7 +1298,8 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
 @app.put("/api/admin/users/{user_id}")
 async def update_user_profile(
     user_id: int,
-    request: AdminUserProfileUpdateRequest,
+    profile_data: AdminUserProfileUpdateRequest,
+    request: Request,
     admin: dict = Depends(get_admin_user),
 ):
     """Update user profile fields (admin only)."""
@@ -1235,11 +1315,18 @@ async def update_user_profile(
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
 
+    before_state = {
+        "username": existing[1],
+        "email": existing[2],
+        "phone": existing[3],
+        "is_admin": bool(existing[4]),
+    }
+
     update_fields: List[str] = []
     params: List[object] = []
 
-    if request.username is not None:
-        username = request.username.strip()
+    if profile_data.username is not None:
+        username = profile_data.username.strip()
         if len(username) < 3:
             conn.close()
             raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
@@ -1253,8 +1340,8 @@ async def update_user_profile(
         update_fields.append("username = ?")
         params.append(username)
 
-    if request.email is not None:
-        email = str(request.email).strip().lower()
+    if profile_data.email is not None:
+        email = str(profile_data.email).strip().lower()
         cursor.execute(
             "SELECT id FROM users WHERE email = ? AND id != ?",
             (email, user_id),
@@ -1265,21 +1352,47 @@ async def update_user_profile(
         update_fields.append("email = ?")
         params.append(email)
 
-    if request.phone is not None:
-        phone = request.phone.strip()
+    if profile_data.phone is not None:
+        phone = profile_data.phone.strip()
         update_fields.append("phone = ?")
         params.append(phone or None)
 
-    if request.is_admin is not None:
+    if profile_data.role is not None:
+        role = profile_data.role.strip().lower()
+        if role not in VALID_ROLES:
+            conn.close()
+            raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}")
+        # Prevent demoting the last owner/admin
+        cursor.execute(
+            "SELECT role FROM users WHERE id = ?", (user_id,),
+        )
+        current_role_row = cursor.fetchone()
+        current_role = current_role_row[0] if current_role_row and current_role_row[0] else "user"
+        if ROLE_HIERARCHY.get(current_role, 0) >= ROLE_HIERARCHY["admin"] and ROLE_HIERARCHY.get(role, 0) < ROLE_HIERARCHY["admin"]:
+            cursor.execute("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'owner') OR is_admin = 1")
+            admin_count = int((cursor.fetchone() or [0])[0] or 0)
+            if admin_count <= 1:
+                conn.close()
+                raise HTTPException(status_code=400, detail="Cannot remove the last admin/owner")
+        update_fields.append("role = ?")
+        params.append(role)
+        # Keep is_admin in sync
+        update_fields.append("is_admin = ?")
+        params.append(1 if role in ("admin", "owner", "support") else 0)
+
+    elif profile_data.is_admin is not None:
         target_is_admin = bool(existing[4])
-        if target_is_admin and not request.is_admin:
+        if target_is_admin and not profile_data.is_admin:
             cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
             admin_count = int((cursor.fetchone() or [0])[0] or 0)
             if admin_count <= 1:
                 conn.close()
                 raise HTTPException(status_code=400, detail="Cannot remove the last admin")
         update_fields.append("is_admin = ?")
-        params.append(1 if request.is_admin else 0)
+        params.append(1 if profile_data.is_admin else 0)
+        # Keep role in sync
+        update_fields.append("role = ?")
+        params.append("admin" if profile_data.is_admin else "user")
 
     if not update_fields:
         conn.close()
@@ -1293,11 +1406,27 @@ async def update_user_profile(
     conn.commit()
     conn.close()
 
+    after_state = {k: v for k, v in profile_data.dict(exclude_unset=True).items()}
+
+    record_audit_event(
+        "admin.user.update",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before=before_state,
+        after=after_state,
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
     return {"ok": True}
 
 @app.post("/api/admin/users/{user_id}/approve")
 async def approve_user(
     user_id: int,
+    request: Request,
     background_tasks: BackgroundTasks,
     admin: dict = Depends(get_admin_user),
 ):
@@ -1373,12 +1502,26 @@ async def approve_user(
     except Exception as e:
         logging.error(f"Error sending approval email: {e}")
 
+    record_audit_event(
+        "admin.user.approve",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before={"is_approved": approval_state},
+        after={"is_approved": 1},
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
     return {"message": f"User approved successfully with {starting_credits} starting credits"}
 
 
 @app.post("/api/admin/users/bulk-approve")
 async def bulk_approve_users(
     payload: BulkUserIdsRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     admin: dict = Depends(get_admin_user),
 ):
@@ -1467,6 +1610,17 @@ async def bulk_approve_users(
         except Exception:
             pass
 
+    record_audit_event(
+        "admin.user.bulk_approve",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+        metadata={"user_ids": approved_ids},
+    )
+
     return {
         "approved": len(approved_ids),
         "skipped": len(skipped_ids),
@@ -1477,6 +1631,7 @@ async def bulk_approve_users(
 @app.post("/api/admin/users/{user_id}/deny")
 async def deny_user(
     user_id: int,
+    request: Request,
     background_tasks: BackgroundTasks,
     admin_note: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
@@ -1531,11 +1686,24 @@ async def deny_user(
     except Exception as e:
         logging.error(f"Error sending rejection email: {e}")
 
+    record_audit_event(
+        "admin.user.deny",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before={"is_approved": approval_state},
+        after={"is_approved": -1},
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
     return {"message": "User registration denied"}
 
 
 @app.post("/api/admin/users/{user_id}/restore")
-async def restore_user(user_id: int, admin: dict = Depends(get_admin_user)):
+async def restore_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
     """Restore a denied user back to pending status (admin only)."""
     conn = get_db()
     cursor = conn.cursor()
@@ -1563,16 +1731,54 @@ async def restore_user(user_id: int, admin: dict = Depends(get_admin_user)):
     )
     conn.commit()
     conn.close()
+    record_audit_event(
+        "admin.user.restore",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before={"is_approved": APPROVAL_DENIED},
+        after={"is_approved": 0},
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
     return {"message": "User restored to pending approval"}
 
 @app.delete("/api/admin/users/{user_id}")
-async def delete_user(user_id: int, admin: dict = Depends(get_admin_user)):
+async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
     """Delete a user (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
+
+    cursor.execute("SELECT id, username, email, is_admin FROM users WHERE id = ?", (user_id,))
+    existing = cursor.fetchone()
+    before_state = None
+    if existing:
+        before_state = {
+            "id": existing[0],
+            "username": existing[1],
+            "email": existing[2],
+            "is_admin": bool(existing[3]),
+        }
+
     cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+    record_audit_event(
+        "admin.user.delete",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before=before_state,
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
     return {"message": "User deleted successfully"}
 
 @app.get("/api/admin/stats")
@@ -1675,6 +1881,7 @@ class AdminSettingUpdate(BaseModel):
 @app.put("/api/admin/settings/{key}")
 async def update_setting(
     key: str,
+    req: Request,
     payload: Optional[AdminSettingUpdate] = Body(default=None),
     value: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
@@ -1683,7 +1890,22 @@ async def update_setting(
     new_value = payload.value if payload is not None else value
     if new_value is None:
         raise HTTPException(status_code=400, detail="Missing setting value")
+    old_value = get_admin_setting(key)
     set_admin_setting(key, str(new_value), admin["id"])
+
+    record_audit_event(
+        "admin.setting.update",
+        request_id=getattr(req.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="setting",
+        target_id=key,
+        before={"value": old_value},
+        after={"value": str(new_value)},
+        ip_address=getattr(req.state, "client_ip", None),
+        user_agent=getattr(req.state, "user_agent", None),
+    )
+
     return {
         "message": f"Setting '{key}' updated successfully",
         "key": key,
@@ -1868,19 +2090,19 @@ async def get_all_credit_requests(admin: dict = Depends(get_admin_user)):
 
 
 @app.post("/api/admin/credits/requests/{request_id}/approve")
-async def approve_credit_request(request_id: int, admin: dict = Depends(get_admin_user)):
+async def approve_credit_request(request_id: int, req: Request, admin: dict = Depends(get_admin_user)):
     """Approve a credit request (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
 
     # Get request details
     cursor.execute("SELECT user_id, amount_requested FROM credit_requests WHERE id = ? AND status = 'pending'", (request_id,))
-    req = cursor.fetchone()
-    if not req:
+    cr = cursor.fetchone()
+    if not cr:
         conn.close()
         raise HTTPException(status_code=404, detail="Credit request not found or already processed")
 
-    user_id, amount = req
+    user_id, amount = cr
 
     # Update request status
     cursor.execute("""
@@ -1893,11 +2115,23 @@ async def approve_credit_request(request_id: int, admin: dict = Depends(get_admi
     # Add credits to user
     new_balance = add_credits(user_id, amount, "Credit request approved", admin["id"])
 
+    record_audit_event(
+        "admin.credits.request_approve",
+        request_id=getattr(req.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="credit_request",
+        target_id=str(request_id),
+        ip_address=getattr(req.state, "client_ip", None),
+        user_agent=getattr(req.state, "user_agent", None),
+        metadata={"user_id": user_id, "amount": amount},
+    )
+
     return {"message": "Credit request approved", "new_balance": new_balance}
 
 
 @app.post("/api/admin/credits/requests/bulk-approve")
-async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, admin: dict = Depends(get_admin_user)):
+async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, request: Request, admin: dict = Depends(get_admin_user)):
     """Bulk-approve credit requests (admin only)."""
     request_ids = sorted({int(r) for r in (payload.request_ids or []) if int(r) > 0})
     if not request_ids:
@@ -1946,6 +2180,15 @@ async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, adm
 
         approved_ids.append(request_id)
 
+    if approved_ids:
+        record_audit_event(
+            "admin.credits.bulk_approve", request_id=request.state.request_id,
+            actor_user_id=admin["id"], actor_username=admin["username"],
+            target_type="credit_request",
+            metadata={"approved_ids": approved_ids, "count": len(approved_ids)},
+            ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+        )
+
     return {
         "approved": len(approved_ids),
         "skipped": len(skipped_ids),
@@ -1955,7 +2198,7 @@ async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, adm
 
 
 @app.post("/api/admin/credits/requests/{request_id}/deny")
-async def deny_credit_request(request_id: int, admin_note: Optional[str] = None, admin: dict = Depends(get_admin_user)):
+async def deny_credit_request(request_id: int, req: Request, admin_note: Optional[str] = None, admin: dict = Depends(get_admin_user)):
     """Deny a credit request (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
@@ -1971,11 +2214,22 @@ async def deny_credit_request(request_id: int, admin_note: Optional[str] = None,
     conn.commit()
     conn.close()
 
+    record_audit_event(
+        "admin.credits.request_deny",
+        request_id=getattr(req.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="credit_request",
+        target_id=str(request_id),
+        ip_address=getattr(req.state, "client_ip", None),
+        user_agent=getattr(req.state, "user_agent", None),
+    )
+
     return {"message": "Credit request denied"}
 
 
 @app.post("/api/admin/credits/requests/bulk-deny")
-async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, admin: dict = Depends(get_admin_user)):
+async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, request: Request, admin: dict = Depends(get_admin_user)):
     """Bulk-deny credit requests (admin only)."""
     request_ids = sorted({int(r) for r in (payload.request_ids or []) if int(r) > 0})
     if not request_ids:
@@ -2009,6 +2263,15 @@ async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, admin:
     finally:
         conn.close()
 
+    if denied_ids:
+        record_audit_event(
+            "admin.credits.bulk_deny", request_id=request.state.request_id,
+            actor_user_id=admin["id"], actor_username=admin["username"],
+            target_type="credit_request",
+            metadata={"denied_ids": denied_ids, "count": len(denied_ids)},
+            ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+        )
+
     return {
         "denied": len(denied_ids),
         "skipped": len(skipped_ids),
@@ -2018,7 +2281,7 @@ async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, admin:
 
 
 @app.post("/api/admin/users/{user_id}/credits")
-async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, admin: dict = Depends(get_admin_user)):
+async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, request: Request, admin: dict = Depends(get_admin_user)):
     """Manually grant credits to a user (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
@@ -2031,6 +2294,18 @@ async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, admin: dict
     conn.close()
 
     new_balance = add_credits(user_id, grant.amount, grant.reason or "Admin manual grant", admin["id"])
+
+    record_audit_event(
+        "admin.credits.grant",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+        metadata={"amount": grant.amount, "reason": grant.reason},
+    )
 
     return {"message": f"Granted {grant.amount} credits", "new_balance": new_balance}
 
@@ -2432,7 +2707,8 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
 
 @app.post("/api/jobs", response_model=ScrapingJob)
 async def create_scraping_job(
-    request: ScrapingRequest,
+    job_request: ScrapingRequest,
+    req: Request,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -2445,8 +2721,8 @@ async def create_scraping_job(
         raise HTTPException(status_code=429, detail=rate_status["reason"])
 
     # Calculate credit cost
-    num_cities = len(request.cities_data)
-    credit_cost = estimate_credit_cost(num_cities, request.max_results_per_city)
+    num_cities = len(job_request.cities_data)
+    credit_cost = estimate_credit_cost(num_cities, job_request.max_results_per_city)
     current_balance = get_user_credit_balance(user_id)
 
     # Check sufficient credits
@@ -2457,7 +2733,7 @@ async def create_scraping_job(
         )
 
     # Deduct credits upfront
-    new_balance = deduct_credits(user_id, credit_cost, reason=f"Job charge: {request.category}")
+    new_balance = deduct_credits(user_id, credit_cost, reason=f"Job charge: {job_request.category}")
 
     job_id = str(uuid.uuid4())
 
@@ -2469,8 +2745,8 @@ async def create_scraping_job(
         INSERT INTO jobs (job_id, user_id, category, cities_data, max_results_per_city, status, total_cities, credit_estimate, credit_charged, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        job_id, user_id, request.category,
-        json.dumps(request.cities_data), request.max_results_per_city,
+        job_id, user_id, job_request.category,
+        json.dumps(job_request.cities_data), job_request.max_results_per_city,
         "pending", num_cities, credit_cost, credit_cost, datetime.now().isoformat()
     ))
     conn.commit()
@@ -2488,20 +2764,34 @@ async def create_scraping_job(
     increment_rate_limit(user_id)
 
     # Start background task
-    background_tasks.add_task(run_scraping_job, job_id, request, user_id)
+    background_tasks.add_task(run_scraping_job, job_id, job_request, user_id)
+
+    # Audit: job create
+    record_audit_event(
+        "job.create",
+        request_id=req.state.request_id,
+        actor_user_id=current_user["id"],
+        actor_username=current_user["username"],
+        target_type="job",
+        target_id=job_id,
+        after={"category": job_request.category, "cities": num_cities, "credit_cost": credit_cost},
+        ip_address=req.state.client_ip,
+        user_agent=req.state.user_agent,
+    )
 
     # Return job
     return ScrapingJob(
         job_id=job_id,
         status=ScrapingStatus.PENDING,
         created_at=datetime.now().isoformat(),
-        logs=[f"Job created for category: {request.category}", f"Credits charged: {credit_cost}"]
+        logs=[f"Job created for category: {job_request.category}", f"Credits charged: {credit_cost}"]
     )
 
 
 @app.post("/api/jobs/{job_id}/cancel")
 async def cancel_scraping_job(
     job_id: str,
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ):
     """Cancel a pending/running scraping job (best-effort)."""
@@ -2539,25 +2829,41 @@ async def cancel_scraping_job(
 
     conn.commit()
     conn.close()
+
+    # Audit: job cancel
+    record_audit_event(
+        "job.cancel",
+        request_id=request.state.request_id,
+        actor_user_id=current_user["id"],
+        actor_username=current_user["username"],
+        target_type="job",
+        target_id=job_id,
+        before={"status": status_value},
+        after={"status": "cancelled"},
+        ip_address=request.state.client_ip,
+        user_agent=request.state.user_agent,
+    )
+
     return {"message": "Cancellation requested"}
 
 
 @app.delete("/api/jobs/{job_id}")
 async def delete_scraping_job(
     job_id: str,
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ):
     """Delete a completed/failed/cancelled job and its results/logs (owner or admin)."""
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT user_id, status FROM jobs WHERE job_id = ?", (job_id,))
+    cursor.execute("SELECT user_id, status, category FROM jobs WHERE job_id = ?", (job_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job_user_id, status_value = row[0], row[1]
+    job_user_id, status_value, category = row[0], row[1], row[2]
     if job_user_id != current_user["id"] and current_user.get("is_admin") is not True:
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
@@ -2572,6 +2878,19 @@ async def delete_scraping_job(
     cursor.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
     conn.commit()
     conn.close()
+
+    # Audit: job delete
+    record_audit_event(
+        "job.delete",
+        request_id=request.state.request_id,
+        actor_user_id=current_user["id"],
+        actor_username=current_user["username"],
+        target_type="job",
+        target_id=job_id,
+        before={"status": status_value, "category": category},
+        ip_address=request.state.client_ip,
+        user_agent=request.state.user_agent,
+    )
 
     return {"message": "Job deleted"}
 
@@ -3636,7 +3955,7 @@ async def list_pricing_tiers(current_user: dict = Depends(get_current_user)):
 
 
 @app.post("/api/admin/pricing/tiers")
-async def admin_create_pricing_tier(req: PricingTierCreateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_pricing_tier(req: PricingTierCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import create_pricing_tier
 
     tier_id = create_pricing_tier(
@@ -3648,11 +3967,18 @@ async def admin_create_pricing_tier(req: PricingTierCreateRequest, admin_user: d
         requires_approval=req.requires_approval,
         is_active=req.is_active,
     )
+    record_audit_event(
+        "admin.pricing.tier_create", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="pricing_tier", target_id=str(tier_id),
+        after={"name": req.name},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"id": int(tier_id)}
 
 
 @app.put("/api/admin/pricing/tiers/{tier_id}")
-async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import update_pricing_tier
 
     updates = {}
@@ -3667,13 +3993,20 @@ async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest,
     ok = update_pricing_tier(tier_id, updates)
     if not ok:
         raise HTTPException(status_code=404, detail="Tier not found")
+    record_audit_event(
+        "admin.pricing.tier_update", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="pricing_tier", target_id=str(tier_id),
+        after=updates,
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
 
 
 # ==================== ADMIN PROMO MANAGEMENT ====================
 
 @app.post("/api/admin/promos")
-async def admin_create_promo(req: PromoCreateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_promo(req: PromoCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import create_promo_code
 
     promo_id = create_promo_code(
@@ -3689,6 +4022,13 @@ async def admin_create_promo(req: PromoCreateRequest, admin_user: dict = Depends
         valid_until=req.valid_until,
         applies_to=req.applies_to,
         is_active=req.is_active,
+    )
+    record_audit_event(
+        "admin.promo.create", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="promo", target_id=str(promo_id),
+        after={"code": req.code, "type": req.type},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
     )
     return {"id": int(promo_id)}
 
@@ -3723,7 +4063,7 @@ async def admin_list_promos(admin_user: dict = Depends(get_admin_user)):
 
 
 @app.put("/api/admin/promos/{promo_id}")
-async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import update_promo_code
 
     updates = {}
@@ -3753,16 +4093,28 @@ async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, admin_user:
     ok = update_promo_code(promo_id, updates)
     if not ok:
         raise HTTPException(status_code=404, detail="Promo not found")
+    record_audit_event(
+        "admin.promo.update", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="promo", target_id=str(promo_id), after=updates,
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
 
 
 @app.delete("/api/admin/promos/{promo_id}")
-async def admin_deactivate_promo(promo_id: int, admin_user: dict = Depends(get_admin_user)):
+async def admin_deactivate_promo(promo_id: int, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import deactivate_promo_code
 
     ok = deactivate_promo_code(promo_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Promo not found")
+    record_audit_event(
+        "admin.promo.delete", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="promo", target_id=str(promo_id),
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
 
 
@@ -3776,7 +4128,7 @@ async def admin_promo_usage(promo_id: int, admin_user: dict = Depends(get_admin_
 # ==================== ADMIN PACKAGES & PLANS ====================
 
 @app.post("/api/admin/payments/packages")
-async def admin_create_credit_package(req: CreditPackageCreateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_credit_package(req: CreditPackageCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import create_credit_package
 
     features_json = json.dumps(req.features) if req.features is not None else None
@@ -3790,6 +4142,13 @@ async def admin_create_credit_package(req: CreditPackageCreateRequest, admin_use
         is_active=req.is_active,
         is_featured=req.is_featured,
         features=features_json,
+    )
+    record_audit_event(
+        "admin.package.create", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="credit_package", target_id=str(pkg_id),
+        after={"name": req.name, "credits": req.credits, "price_cents": req.display_price_cents},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
     )
     return {"id": int(pkg_id)}
 
@@ -3822,7 +4181,7 @@ async def admin_list_credit_packages(admin_user: dict = Depends(get_admin_user))
 
 
 @app.put("/api/admin/payments/packages/{package_id}")
-async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import update_credit_package
 
     updates = {}
@@ -3840,21 +4199,33 @@ async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateR
     ok = update_credit_package(package_id, updates)
     if not ok:
         raise HTTPException(status_code=404, detail="Package not found")
+    record_audit_event(
+        "admin.package.update", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="credit_package", target_id=str(package_id), after=updates,
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
 
 
 @app.delete("/api/admin/payments/packages/{package_id}")
-async def admin_delete_credit_package(package_id: int, admin_user: dict = Depends(get_admin_user)):
+async def admin_delete_credit_package(package_id: int, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import delete_credit_package
 
     ok = delete_credit_package(package_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Package not found")
+    record_audit_event(
+        "admin.package.delete", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="credit_package", target_id=str(package_id),
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
 
 
 @app.post("/api/admin/subscriptions/plans")
-async def admin_create_subscription_plan(req: SubscriptionPlanCreateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_subscription_plan(req: SubscriptionPlanCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import create_subscription_plan
 
     features_json = json.dumps(req.features) if req.features is not None else None
@@ -3870,6 +4241,13 @@ async def admin_create_subscription_plan(req: SubscriptionPlanCreateRequest, adm
         is_active=req.is_active,
         is_featured=req.is_featured,
         features=features_json,
+    )
+    record_audit_event(
+        "admin.plan.create", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="subscription_plan", target_id=str(plan_id),
+        after={"name": req.name, "billing_interval": req.billing_interval},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
     )
     return {"id": int(plan_id)}
 
@@ -3903,7 +4281,7 @@ async def admin_list_subscription_plans(admin_user: dict = Depends(get_admin_use
 
 
 @app.put("/api/admin/subscriptions/plans/{plan_id}")
-async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpdateRequest, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import update_subscription_plan
 
     updates = {}
@@ -3923,17 +4301,312 @@ async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpda
     ok = update_subscription_plan(plan_id, updates)
     if not ok:
         raise HTTPException(status_code=404, detail="Plan not found")
+    record_audit_event(
+        "admin.plan.update", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="subscription_plan", target_id=str(plan_id), after=updates,
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
 
 
 @app.delete("/api/admin/subscriptions/plans/{plan_id}")
-async def admin_delete_subscription_plan(plan_id: int, admin_user: dict = Depends(get_admin_user)):
+async def admin_delete_subscription_plan(plan_id: int, request: Request, admin_user: dict = Depends(get_admin_user)):
     from db.payment_crud import delete_subscription_plan
 
     ok = delete_subscription_plan(plan_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Plan not found")
+    record_audit_event(
+        "admin.plan.delete", request_id=request.state.request_id,
+        actor_user_id=admin_user["id"], actor_username=admin_user["username"],
+        target_type="subscription_plan", target_id=str(plan_id),
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
     return {"ok": True}
+
+# ==================== ADMIN ACTIVITY / AUDIT ENDPOINTS ====================
+
+
+@app.get("/api/admin/activity")
+async def get_activity_feed_endpoint(
+    user_id: Optional[int] = None,
+    action: Optional[str] = None,
+    target_type: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    """Global activity feed with filters."""
+    from audit.queries import get_activity_feed as _get_feed, get_audit_event_count
+    events = _get_feed(
+        actor_user_id=user_id, action=action, target_type=target_type,
+        status=status, date_from=date_from, date_to=date_to,
+        limit=min(limit, 200), offset=offset,
+    )
+    total = get_audit_event_count(
+        actor_user_id=user_id, action=action, target_type=target_type,
+        status=status, date_from=date_from, date_to=date_to,
+    )
+    return {"events": events, "total": total, "limit": limit, "offset": offset}
+
+
+@app.get("/api/admin/activity/actions")
+async def get_activity_actions(admin: dict = Depends(get_admin_user)):
+    """Return distinct action strings for filter dropdowns."""
+    from audit.queries import get_distinct_actions
+    return {"actions": get_distinct_actions()}
+
+
+@app.get("/api/admin/activity/export")
+async def export_activity_csv_endpoint(
+    user_id: Optional[int] = None,
+    action: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Export activity log as CSV."""
+    from audit.queries import export_activity_csv as _export
+    import csv
+    from io import StringIO
+
+    rows = _export(actor_user_id=user_id, action=action, date_from=date_from, date_to=date_to)
+    output = StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=activity_log.csv"},
+    )
+
+
+@app.get("/api/admin/users/{user_id}/timeline")
+async def get_user_timeline_endpoint(
+    user_id: int,
+    limit: int = 100,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    """User-specific activity timeline."""
+    from audit.queries import get_user_timeline as _get_timeline
+    events = _get_timeline(user_id=user_id, limit=limit, offset=offset)
+    return {"events": events, "user_id": user_id}
+
+
+@app.get("/api/admin/users/{user_id}/kpis")
+async def get_user_kpis_endpoint(
+    user_id: int,
+    admin: dict = Depends(get_admin_user),
+):
+    """Per-user value KPIs."""
+    from audit.queries import get_user_kpis as _kpis
+    return _kpis(user_id)
+
+
+@app.get("/api/admin/users/{user_id}/jobs")
+async def get_user_jobs_admin(
+    user_id: int,
+    admin: dict = Depends(get_admin_user),
+):
+    """List all jobs for a specific user (admin view)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT j.job_id, j.category, j.status, j.progress, j.total_cities,
+               j.credit_estimate, j.credit_charged, j.created_at, j.completed_at,
+               (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count
+        FROM jobs j WHERE j.user_id = ?
+        ORDER BY j.created_at DESC
+    """, (user_id,))
+    jobs = [
+        {
+            "job_id": r[0], "category": r[1], "status": r[2], "progress": r[3],
+            "total_cities": r[4], "credit_estimate": r[5], "credit_charged": r[6],
+            "created_at": r[7], "completed_at": r[8], "result_count": r[9],
+        }
+        for r in cursor.fetchall()
+    ]
+    conn.close()
+    return {"jobs": jobs, "user_id": user_id}
+
+
+@app.get("/api/admin/jobs/{job_id}/results")
+async def get_job_results_admin(
+    job_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """View job results (admin view, no ownership check)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, business_name, phone, website, address, category, city, state, google_maps_url
+        FROM results WHERE job_id = ?
+    """, (job_id,))
+    results = [
+        {
+            "id": r[0], "business_name": r[1], "phone": r[2], "website": r[3],
+            "address": r[4], "category": r[5], "city": r[6], "state": r[7],
+            "google_maps_url": r[8],
+        }
+        for r in cursor.fetchall()
+    ]
+    conn.close()
+    return {"results": results, "job_id": job_id}
+
+
+@app.get("/api/admin/audit/integrity")
+async def verify_audit_integrity(
+    limit: int = 1000,
+    admin: dict = Depends(get_owner_user),
+):
+    """Verify tamper-evident hash chain integrity (owner only)."""
+    from audit.retention import verify_hash_chain
+    return verify_hash_chain(limit=limit)
+
+
+@app.post("/api/admin/audit/archive")
+async def trigger_audit_archive(
+    request: Request,
+    admin: dict = Depends(get_owner_user),
+):
+    """Manually trigger archival of old audit events (owner only)."""
+    from audit.retention import archive_old_events
+    count = archive_old_events(hot_days=90)
+    record_audit_event(
+        "admin.audit.archive", request_id=request.state.request_id,
+        actor_user_id=admin["id"], actor_username=admin["username"],
+        metadata={"archived_count": count},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
+    return {"archived": count}
+
+
+# ==================== 2-STEP APPROVAL ENDPOINTS ====================
+
+
+@app.get("/api/admin/approvals/pending")
+async def list_pending_approvals(admin: dict = Depends(get_admin_user)):
+    """List pending 2-step approval requests."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pa.id, pa.request_id, pa.requested_by, u.username,
+               pa.action, pa.target_type, pa.target_id, pa.payload,
+               pa.status, pa.expires_at, pa.created_at
+        FROM pending_approvals pa
+        LEFT JOIN users u ON pa.requested_by = u.id
+        WHERE pa.status = 'pending' AND pa.expires_at > ?
+        ORDER BY pa.created_at DESC
+    """, (datetime.now().isoformat(),))
+    approvals = [
+        {
+            "id": r[0], "request_id": r[1], "requested_by": r[2],
+            "requested_by_username": r[3], "action": r[4],
+            "target_type": r[5], "target_id": r[6],
+            "payload": json.loads(r[7]) if r[7] else None,
+            "status": r[8], "expires_at": r[9], "created_at": r[10],
+        }
+        for r in cursor.fetchall()
+    ]
+    conn.close()
+    return {"approvals": approvals}
+
+
+@app.post("/api/admin/approvals/{approval_id}/approve")
+async def approve_pending_action(
+    approval_id: int,
+    request: Request,
+    admin: dict = Depends(get_owner_user),
+):
+    """Approve a pending destructive action (owner only)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, requested_by, action, target_type, target_id, payload, status, expires_at FROM pending_approvals WHERE id = ?",
+        (approval_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Approval request not found")
+
+    if row[6] != "pending":
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Request already {row[6]}")
+
+    if row[7] and row[7] < datetime.now().isoformat():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Approval request has expired")
+
+    if row[1] == admin["id"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Cannot approve your own request")
+
+    now = datetime.now().isoformat()
+    cursor.execute(
+        "UPDATE pending_approvals SET status = 'approved', reviewed_by = ?, reviewed_at = ? WHERE id = ?",
+        (admin["id"], now, approval_id),
+    )
+    conn.commit()
+    conn.close()
+
+    record_audit_event(
+        "admin.approval.approve", request_id=request.state.request_id,
+        actor_user_id=admin["id"], actor_username=admin["username"],
+        target_type="pending_approval", target_id=str(approval_id),
+        metadata={"original_action": row[2], "target_type": row[3], "target_id": row[4]},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
+
+    return {"ok": True, "message": "Action approved"}
+
+
+@app.post("/api/admin/approvals/{approval_id}/reject")
+async def reject_pending_action(
+    approval_id: int,
+    request: Request,
+    admin: dict = Depends(get_admin_or_above),
+):
+    """Reject a pending destructive action (admin or above)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, status FROM pending_approvals WHERE id = ?",
+        (approval_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Approval request not found")
+
+    if row[1] != "pending":
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Request already {row[1]}")
+
+    now = datetime.now().isoformat()
+    cursor.execute(
+        "UPDATE pending_approvals SET status = 'rejected', reviewed_by = ?, reviewed_at = ? WHERE id = ?",
+        (admin["id"], now, approval_id),
+    )
+    conn.commit()
+    conn.close()
+
+    record_audit_event(
+        "admin.approval.reject", request_id=request.state.request_id,
+        actor_user_id=admin["id"], actor_username=admin["username"],
+        target_type="pending_approval", target_id=str(approval_id),
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
+    )
+
+    return {"ok": True, "message": "Action rejected"}
+
 
 # ==================== UTILITY ENDPOINTS ====================
 

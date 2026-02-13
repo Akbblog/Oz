@@ -12,6 +12,7 @@ import os
 import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 from contextlib import contextmanager
+from urllib.parse import urlparse
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -37,7 +38,15 @@ def get_db_type() -> str:
     Returns:
         'sqlite' or 'mysql'
     """
-    return os.getenv("DB_TYPE", "sqlite").lower()
+    explicit = os.getenv("DB_TYPE", "").strip().lower()
+    if explicit in ("sqlite", "mysql"):
+        return explicit
+
+    database_url = os.getenv("DATABASE_URL", "sqlite:///scraper.db")
+    scheme = (urlparse(database_url).scheme or "").lower()
+    if scheme.startswith("mysql"):
+        return "mysql"
+    return "sqlite"
 
 
 def get_placeholder() -> str:

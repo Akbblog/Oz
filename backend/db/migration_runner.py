@@ -15,13 +15,22 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def _get_db_type() -> str:
-    return os.getenv("DB_TYPE", "sqlite").lower()
+    explicit = os.getenv("DB_TYPE", "").strip().lower()
+    if explicit in ("sqlite", "mysql"):
+        return explicit
+
+    database_url = os.getenv("DATABASE_URL", "sqlite:///scraper.db")
+    scheme = (urlparse(database_url).scheme or "").lower()
+    if scheme.startswith("mysql"):
+        return "mysql"
+    return "sqlite"
 
 
 def _get_placeholder() -> str:

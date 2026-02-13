@@ -4,13 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from db.base import execute_query
+from db.base import execute_query, get_db_type
 
 
 def _db_type() -> str:
-    import os
-
-    return os.getenv("DB_TYPE", "sqlite").lower()
+    return get_db_type()
 
 
 def _now_utc() -> datetime:
@@ -245,4 +243,3 @@ def get_churn_summary() -> Dict[str, Any]:
     churn_rate = canceled / denom
 
     return {"canceled_last_30d": canceled, "active": active, "churn_rate": churn_rate}
-
