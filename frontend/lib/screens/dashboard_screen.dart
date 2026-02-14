@@ -275,8 +275,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               subtitle: isMobile
                   ? null
                   : (runningJobs > 0 ? '$runningJobs active' : null),
-              onTap: () =>
-                  Navigator.of(context).pushNamed('/wallet'),
+              onTap: () => Navigator.of(context).pushNamed('/wallet'),
             ),
             StatCard(
               title: 'Total Jobs',
@@ -545,6 +544,10 @@ class _DashboardScreenState extends State<DashboardScreen>
     final status = (job['status'] ?? '').toString().toLowerCase();
     final jobId = (job['job_id'] ?? '').toString();
     final category = (job['category'] ?? 'Job').toString();
+    final chargedRaw = job['credit_charged'] ?? job['credit_estimate'];
+    final charged = chargedRaw is num
+        ? chargedRaw.toInt()
+        : (chargedRaw is String ? int.tryParse(chargedRaw) : null);
 
     Color color;
     IconData icon;
@@ -609,7 +612,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Job $jobId - $label',
+                  charged != null && charged > 0
+                      ? 'Job $jobId - $label • $charged credits'
+                      : 'Job $jobId - $label',
                   style: AppTypography.labelSmall.copyWith(
                     color: Colors.white54,
                   ),

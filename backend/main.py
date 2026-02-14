@@ -3181,7 +3181,9 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT job_id, category, status, progress, created_at, completed_at
+        SELECT job_id, category, status, progress,
+               total_cities, credit_estimate, credit_charged,
+               created_at, completed_at
         FROM jobs WHERE user_id = ? ORDER BY created_at DESC
     """, (current_user["id"],))
     
@@ -3192,8 +3194,11 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
             "category": row[1],
             "status": row[2],
             "progress": row[3],
-            "created_at": row[4],
-            "completed_at": row[5]
+            "total_cities": row[4],
+            "credit_estimate": row[5],
+            "credit_charged": row[6],
+            "created_at": row[7],
+            "completed_at": row[8]
         })
     
     conn.close()
