@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../core/theme/app_breakpoints.dart';
 import '../core/theme/app_colors.dart';
@@ -22,6 +23,194 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
   int _creditBalance = 0;
   List<String> _methods = const [];
   bool _enableLivePayments = false;
+
+  void _showCreditRequestDialog() {
+    final amountController = TextEditingController();
+    final reasonController = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          backgroundColor: AppColors.surfaceDark,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Text(
+            'Request Credits',
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Amount (required)',
+                  style: AppTypography.labelMedium.copyWith(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                TextField(
+                  controller: amountController,
+                  keyboardType: TextInputType.number,
+                  style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Enter credits needed',
+                    hintStyle: AppTypography.bodyMedium.copyWith(
+                      color: Colors.white38,
+                    ),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.05),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(
+                        color: AppColors.primaryBlue,
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  'Reason (optional)',
+                  style: AppTypography.labelMedium.copyWith(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                TextField(
+                  controller: reasonController,
+                  maxLines: 3,
+                  style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Why do you need more credits?',
+                    hintStyle: AppTypography.bodyMedium.copyWith(
+                      color: Colors.white38,
+                    ),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.05),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(
+                        color: AppColors.primaryBlue,
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed:
+                  isSubmitting ? null : () => Navigator.pop(dialogContext),
+              child: Text(
+                'Cancel',
+                style: AppTypography.labelMedium.copyWith(
+                  color: Colors.white70,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amount = int.tryParse(amountController.text);
+                      if (amount == null || amount <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Please enter a valid amount'),
+                            backgroundColor: AppColors.dangerRed,
+                          ),
+                        );
+                        return;
+                      }
+
+                      setState(() => isSubmitting = true);
+                      final messenger = ScaffoldMessenger.of(this.context);
+                      final navigator = Navigator.of(dialogContext);
+
+                      try {
+                        await _apiService.requestCredits(
+                          amount: amount,
+                          reason: reasonController.text.trim().isEmpty
+                              ? null
+                              : reasonController.text.trim(),
+                        );
+
+                        if (!mounted) return;
+                        navigator.pop();
+                        await _load();
+                        if (!mounted) return;
+
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content:
+                                Text('Credit request submitted successfully'),
+                            backgroundColor: AppColors.successGreen,
+                          ),
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        setState(() => isSubmitting = false);
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text('Failed to submit request: $e'),
+                            backgroundColor: AppColors.dangerRed,
+                          ),
+                        );
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryBlue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Submit'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -205,9 +394,8 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     final icon = _enableLivePayments
         ? Icons.check_circle_outline_rounded
         : Icons.schedule_rounded;
-    final color = _enableLivePayments
-        ? AppColors.successGreen
-        : AppColors.warningYellow;
+    final color =
+        _enableLivePayments ? AppColors.successGreen : AppColors.warningYellow;
 
     return Container(
       padding: AppSpacing.paddingMd,
@@ -279,18 +467,21 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
       case 'stripe':
         return const _MethodSpec(
           name: 'Stripe',
+          assetPath: 'assets/icons/stripe.svg',
           icon: Icons.payment_rounded,
           color: Color(0xFF635BFF),
         );
       case 'paypal':
         return const _MethodSpec(
           name: 'PayPal',
+          assetPath: 'assets/icons/paypal.svg',
           icon: Icons.payments_rounded,
           color: Color(0xFF003087),
         );
       case 'coinbase':
         return const _MethodSpec(
           name: 'Coinbase',
+          assetPath: 'assets/icons/coinbase.svg',
           icon: Icons.currency_bitcoin_rounded,
           color: Color(0xFF1652F0),
         );
@@ -329,7 +520,19 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: spec.color.withValues(alpha: 0.28)),
             ),
-            child: Icon(spec.icon, color: Colors.white, size: 22),
+            child: Center(
+              child: spec.assetPath != null
+                  ? SvgPicture.asset(
+                      spec.assetPath!,
+                      width: 22,
+                      height: 22,
+                      colorFilter: const ColorFilter.mode(
+                        Colors.white,
+                        BlendMode.srcIn,
+                      ),
+                    )
+                  : Icon(spec.icon, color: Colors.white, size: 22),
+            ),
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
@@ -398,9 +601,7 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
             icon: Icons.arrow_forward_rounded,
             expanded: true,
             height: 52,
-            onPressed: () => Navigator.of(context).pushNamed(
-              '/wallet-request-credits',
-            ),
+            onPressed: _showCreditRequestDialog,
           ),
         ],
       ),
@@ -410,11 +611,13 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
 
 class _MethodSpec {
   final String name;
+  final String? assetPath;
   final IconData icon;
   final Color color;
 
   const _MethodSpec({
     required this.name,
+    this.assetPath,
     required this.icon,
     required this.color,
   });
