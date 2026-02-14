@@ -98,10 +98,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
 
     final citiesChanged = widget.initialCities != oldWidget.initialCities &&
         widget.initialCities.trim().isNotEmpty;
-    final categoryChanged = widget.initialCategory != oldWidget.initialCategory &&
-        widget.initialCategory.trim().isNotEmpty;
-    final maxChanged = widget.initialMaxResults != oldWidget.initialMaxResults &&
-        widget.initialMaxResults.trim().isNotEmpty;
+    final categoryChanged =
+        widget.initialCategory != oldWidget.initialCategory &&
+            widget.initialCategory.trim().isNotEmpty;
+    final maxChanged =
+        widget.initialMaxResults != oldWidget.initialMaxResults &&
+            widget.initialMaxResults.trim().isNotEmpty;
 
     if (!citiesChanged && !categoryChanged && !maxChanged) return;
 
@@ -277,8 +279,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   }
 
   Future<void> _loadSearchDraftIfNeeded() async {
-    final hasInitial =
-        widget.initialCategory.trim().isNotEmpty || widget.initialCities.trim().isNotEmpty;
+    final hasInitial = widget.initialCategory.trim().isNotEmpty ||
+        widget.initialCities.trim().isNotEmpty;
     if (hasInitial) return;
 
     if (_categoryController.text.trim().isNotEmpty ||
@@ -368,7 +370,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                         color: _ScrapeColors.primary.withValues(alpha: 0.2),
                         borderRadius: AppSpacing.borderRadiusMd,
                       ),
-                      child: const Icon(Icons.lock_rounded, color: Colors.white),
+                      child:
+                          const Icon(Icons.lock_rounded, color: Colors.white),
                     ),
                     const SizedBox(width: AppSpacing.sm),
                     Expanded(
@@ -420,7 +423,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                         },
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(
-                            color: _ScrapeColors.primary.withValues(alpha: 0.55),
+                            color:
+                                _ScrapeColors.primary.withValues(alpha: 0.55),
                           ),
                           foregroundColor: Colors.white,
                         ),
@@ -1143,17 +1147,19 @@ class _ScrapingScreenState extends State<ScrapingScreen>
             Expanded(
               flex: 2,
               child: GestureDetector(
-                onTap: canReview ? () => _openReviewSheet(provider) : () {
-                  setState(() => _attemptedStart = true);
-                  if (validation != null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(validation),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                },
+                onTap: canReview
+                    ? () => _openReviewSheet(provider)
+                    : () {
+                        setState(() => _attemptedStart = true);
+                        if (validation != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(validation),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
                 child: AnimatedContainer(
                   duration: AppSpacing.durationFast,
                   padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
@@ -1167,7 +1173,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                     boxShadow: canReview
                         ? [
                             BoxShadow(
-                              color: _ScrapeColors.primary.withValues(alpha: 0.4),
+                              color:
+                                  _ScrapeColors.primary.withValues(alpha: 0.4),
                               blurRadius: 18,
                               spreadRadius: -8,
                             ),
@@ -1175,13 +1182,16 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                         : null,
                     border: canReview
                         ? null
-                        : Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                        : Border.all(
+                            color: Colors.white.withValues(alpha: 0.08)),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        isRunning ? Icons.autorenew_rounded : Icons.rocket_launch_rounded,
+                        isRunning
+                            ? Icons.autorenew_rounded
+                            : Icons.rocket_launch_rounded,
                         color: Colors.white,
                       ),
                       const SizedBox(width: AppSpacing.sm),
@@ -1531,7 +1541,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           OutlinedButton.icon(
             onPressed: () => _confirmCancel(scraperProvider),
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: _ScrapeColors.rose.withValues(alpha: 0.7)),
+              side:
+                  BorderSide(color: _ScrapeColors.rose.withValues(alpha: 0.7)),
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.sm,
@@ -1634,7 +1645,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final stages = [
       _StageItem(
         label: 'Queued',
-        state: job.progress > 0 || isDone ? _StageState.completed : _StageState.active,
+        state: job.progress > 0 || isDone
+            ? _StageState.completed
+            : _StageState.active,
       ),
       _StageItem(
         label: 'Scraping',
@@ -1654,7 +1667,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                     : 'Finish',
         state: status == ScrapingStatus.completed
             ? _StageState.completed
-            : status == ScrapingStatus.cancelled || status == ScrapingStatus.failed
+            : status == ScrapingStatus.cancelled ||
+                    status == ScrapingStatus.failed
                 ? _StageState.completed
                 : _StageState.pending,
       ),
@@ -1740,9 +1754,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final end = job.completedAt ?? now;
     final elapsed = end.difference(job.createdAt);
 
-    final activeIndex = job.currentCity.isNotEmpty
-        ? job.cities.indexOf(job.currentCity)
-        : -1;
+    final activeIndex =
+        job.currentCity.isNotEmpty ? job.cities.indexOf(job.currentCity) : -1;
 
     final completedCities = job.status == ScrapingStatus.completed
         ? job.totalCities
@@ -1750,13 +1763,15 @@ class _ScrapingScreenState extends State<ScrapingScreen>
             ? activeIndex
             : 0;
 
-    final remainingCities = (job.totalCities - completedCities).clamp(0, job.totalCities);
+    final remainingCities =
+        (job.totalCities - completedCities).clamp(0, job.totalCities);
     final avgPerCity = completedCities > 0
         ? elapsed ~/ completedCities
         : const Duration(seconds: 0);
-    final estRemaining = job.status == ScrapingStatus.running && completedCities > 0
-        ? avgPerCity * remainingCities
-        : null;
+    final estRemaining =
+        job.status == ScrapingStatus.running && completedCities > 0
+            ? avgPerCity * remainingCities
+            : null;
 
     final stats = [
       _MiniStat(label: 'Elapsed', value: _formatDuration(elapsed)),
@@ -1767,7 +1782,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       _MiniStat(label: 'Leads', value: '${job.results.length}'),
       _MiniStat(
         label: 'Cities',
-        value: '${completedCities.clamp(0, job.totalCities)}/${job.totalCities}',
+        value:
+            '${completedCities.clamp(0, job.totalCities)}/${job.totalCities}',
       ),
     ];
 
@@ -1817,9 +1833,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget _buildCityProgress(ScrapingJob? job, LayoutType layoutType) {
     if (job == null || job.cities.isEmpty) return const SizedBox.shrink();
 
-    final activeIndex = job.currentCity.isNotEmpty
-        ? job.cities.indexOf(job.currentCity)
-        : -1;
+    final activeIndex =
+        job.currentCity.isNotEmpty ? job.cities.indexOf(job.currentCity) : -1;
 
     final cityCounts = <String, int>{};
     for (final result in job.results) {
@@ -1862,10 +1877,11 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 final isActive = job.status == ScrapingStatus.running &&
                     activeIndex >= 0 &&
                     index == activeIndex;
-                final isFailedOrCancelled = (job.status == ScrapingStatus.failed ||
-                        job.status == ScrapingStatus.cancelled) &&
-                    activeIndex >= 0 &&
-                    index == activeIndex;
+                final isFailedOrCancelled =
+                    (job.status == ScrapingStatus.failed ||
+                            job.status == ScrapingStatus.cancelled) &&
+                        activeIndex >= 0 &&
+                        index == activeIndex;
 
                 final count = cityCounts[cityState] ?? 0;
 
@@ -1900,10 +1916,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                     vertical: AppSpacing.xs,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: isActive ? 0.06 : 0.03),
+                    color:
+                        Colors.white.withValues(alpha: isActive ? 0.06 : 0.03),
                     borderRadius: AppSpacing.borderRadiusSm,
                     border: Border.all(
-                      color: statusColor.withValues(alpha: isActive ? 0.45 : 0.18),
+                      color:
+                          statusColor.withValues(alpha: isActive ? 0.45 : 0.18),
                     ),
                   ),
                   child: Row(
@@ -1915,7 +1933,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                           cityState,
                           style: AppTypography.labelSmall.copyWith(
                             color: Colors.white70,
-                            fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+                            fontWeight:
+                                isActive ? FontWeight.w800 : FontWeight.w600,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2004,7 +2023,8 @@ class _ReviewSheet extends StatelessWidget {
     final remaining = (creditBalance - estimatedCost).clamp(0, 999999999);
     final hasEstimate = estimatedCost > 0;
     final topCities = cities.take(6).toList();
-    final extraCount = (cities.length - topCities.length).clamp(0, cities.length);
+    final extraCount =
+        (cities.length - topCities.length).clamp(0, cities.length);
 
     return SafeArea(
       child: Container(
@@ -2056,7 +2076,8 @@ class _ReviewSheet extends StatelessWidget {
                   IconButton(
                     tooltip: 'Close',
                     onPressed: () => Navigator.pop(context, false),
-                    icon: const Icon(Icons.close_rounded, color: Colors.white70),
+                    icon:
+                        const Icon(Icons.close_rounded, color: Colors.white70),
                   ),
                 ],
               ),
@@ -2070,8 +2091,7 @@ class _ReviewSheet extends StatelessWidget {
                 runSpacing: AppSpacing.xs,
                 children: [
                   ...topCities.map(_chip),
-                  if (extraCount > 0)
-                    _chip('+$extraCount more', muted: true),
+                  if (extraCount > 0) _chip('+$extraCount more', muted: true),
                 ],
               ),
               const SizedBox(height: AppSpacing.lg),
@@ -2142,6 +2162,7 @@ class _ReviewSheet extends StatelessWidget {
                       child: Text(
                         'Back',
                         style: AppTypography.labelLarge.copyWith(
+                          color: Colors.white,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
@@ -2166,6 +2187,7 @@ class _ReviewSheet extends StatelessWidget {
                       label: Text(
                         'Start scraping',
                         style: AppTypography.labelLarge.copyWith(
+                          color: Colors.white,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.8,
                         ),
