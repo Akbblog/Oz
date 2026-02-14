@@ -2659,152 +2659,175 @@ class GoogleBusinessScraper:
 async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
     """Background task for running scraping jobs"""
     scraper = GoogleBusinessScraper()
-    conn = get_db()
     
     try:
         logger.info(f"Starting scraping job {job_id}")
         # Debug: log the incoming list of city/state strings
         logger.debug(f"Received {len(request.cities_data)} city/state entries: {request.cities_data}")
         
-        # Update job status
-        cursor = conn.cursor()
-        cursor.execute("UPDATE jobs SET status = ? WHERE job_id = ?", ("running", job_id))
-        conn.commit()
-        
-        # Add log
-        cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                      (job_id, f"Starting scraping job for category: {request.category}", datetime.now().isoformat()))
-        conn.commit()
+        # Get fresh connection for startup
+        conn = get_db()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE jobs SET status = ? WHERE job_id = ?", ("running", job_id))
+            conn.commit()
+            
+            # Add log
+            cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                          (job_id, f"Starting scraping job for category: {request.category}", datetime.now().isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
         
         all_results = []
         
         for idx, city_state in enumerate(request.cities_data):
-            # Check if job was cancelled
-            cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
-            job_status = cursor.fetchone()
-            if job_status and job_status[0] in ("failed", "cancelled"):
-                break
-            
-            # Parse city and state
-            # Log the raw entry for debugging
-            logger.debug(f"Raw city_state entry: '{city_state}'")
-            parts = city_state.split(",")
-            if len(parts) >= 2:
-                city = parts[0].strip()
-                state = parts[1].strip()
-                logger.debug(f"Parsed city: '{city}', state: '{state}'")
+            # Get fresh connection for each iteration to avoid stale connections
+            conn = get_db()
+            try:
+                # Check if job was cancelled
+                cursor = conn.cursor()
+                cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+                job_status = cursor.fetchone()
+                if job_status and job_status[0] in ("failed", "cancelled"):
+                    break
                 
-                current_city = f"{city}, {state}"
-                progress = int((idx + 1) / len(request.cities_data) * 100)
-                
-                # Update job progress
-                cursor.execute("""
-                    UPDATE jobs SET current_city = ?, progress = ?
-                    WHERE job_id = ?
-                """, (current_city, progress, job_id))
-                conn.commit()
-                
-                # Add log
-                cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                              (job_id, f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}", datetime.now().isoformat()))
-                conn.commit()
-                
-                logger.info(f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}")
-                
-                # Scrape this location
-                results = await scraper.scrape_location(
-                    request.category, 
-                    city, 
-                    state, 
-                    request.max_results_per_city
-                )
-                
-                all_results.extend(results)
-                
-                # Save results to database
-                for result in results:
+                # Parse city and state
+                # Log the raw entry for debugging
+                logger.debug(f"Raw city_state entry: '{city_state}'")
+                parts = city_state.split(",")
+                if len(parts) >= 2:
+                    city = parts[0].strip()
+                    state = parts[1].strip()
+                    logger.debug(f"Parsed city: '{city}', state: '{state}'")
+                    
+                    current_city = f"{city}, {state}"
+                    progress = int((idx + 1) / len(request.cities_data) * 100)
+                    
+                    # Update job progress
                     cursor.execute("""
-                        INSERT INTO results (job_id, business_name, phone, website, address, category, city, state, google_maps_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        job_id, result['business_name'], result['phone'], result['website'],
-                        result['address'], result['category'], result['city'], result['state'],
-                        result['google_maps_url']
-                    ))
-                conn.commit()
-                
-                # Add log
-                cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                              (job_id, f"Found {len(results)} businesses in {city}, {state}", datetime.now().isoformat()))
-                conn.commit()
-                
-                logger.info(f"Found {len(results)} businesses in {city}, {state}")
-                
-                await asyncio.sleep(1)
+                        UPDATE jobs SET current_city = ?, progress = ?
+                        WHERE job_id = ?
+                    """, (current_city, progress, job_id))
+                    conn.commit()
+                    
+                    # Add log
+                    cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                                  (job_id, f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}", datetime.now().isoformat()))
+                    conn.commit()
+                    
+                    logger.info(f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}")
+                    
+                    # Scrape this location
+                    results = await scraper.scrape_location(
+                        request.category, 
+                        city, 
+                        state, 
+                        request.max_results_per_city
+                    )
+                    
+                    all_results.extend(results)
+                    
+                    # Save results to database
+                    for result in results:
+                        cursor.execute("""
+                            INSERT INTO results (job_id, business_name, phone, website, address, category, city, state, google_maps_url)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            job_id, result['business_name'], result['phone'], result['website'],
+                            result['address'], result['category'], result['city'], result['state'],
+                            result['google_maps_url']
+                        ))
+                    conn.commit()
+                    
+                    # Add log
+                    cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                                  (job_id, f"Found {len(results)} businesses in {city}, {state}", datetime.now().isoformat()))
+                    conn.commit()
+                    
+                    logger.info(f"Found {len(results)} businesses in {city}, {state}")
+                    
+                    await asyncio.sleep(1)
+            finally:
+                conn.close()
         
-        # If job was cancelled/failed, do not mark it as completed.
-        cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
-        final_status_row = cursor.fetchone()
-        if final_status_row and final_status_row[0] in ("failed", "cancelled"):
-            if final_status_row[0] == "cancelled":
-                cursor.execute(
-                    "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                    (job_id, "Job cancelled by user", datetime.now().isoformat()),
-                )
-                conn.commit()
-            return
+        # Get fresh connection for final status check and completion
+        conn = get_db()
+        try:
+            cursor = conn.cursor()
+            # If job was cancelled/failed, do not mark it as completed.
+            cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+            final_status_row = cursor.fetchone()
+            if final_status_row and final_status_row[0] in ("failed", "cancelled"):
+                if final_status_row[0] == "cancelled":
+                    cursor.execute(
+                        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                        (job_id, "Job cancelled by user", datetime.now().isoformat()),
+                    )
+                    conn.commit()
+                return
 
-        # Save results to CSV file
-        if all_results:
-            filename = os.path.join(RESULTS_DIR, f"results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-            import csv
+            # Save results to CSV file
+            if all_results:
+                filename = os.path.join(RESULTS_DIR, f"results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+                import csv
 
-            fieldnames = [
-                "business_name",
-                "phone",
-                "website",
-                "address",
-                "category",
-                "city",
-                "state",
-                "google_maps_url",
-            ]
-            with open(filename, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(all_results)
-            logger.info(f"Saved {len(all_results)} results to {filename}")
-        
-        # Update job as completed
-        cursor.execute("""
-            UPDATE jobs SET status = ?, progress = ?, completed_at = ?
-            WHERE job_id = ?
-        """, ("completed", 100, datetime.now().isoformat(), job_id))
-        conn.commit()
-        
-        # Add completion log
-        cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                      (job_id, f"Job completed successfully. Total businesses found: {len(all_results)}", datetime.now().isoformat()))
-        conn.commit()
-        
-        logger.info(f"Job {job_id} completed successfully. Total businesses found: {len(all_results)}")
+                fieldnames = [
+                    "business_name",
+                    "phone",
+                    "website",
+                    "address",
+                    "category",
+                    "city",
+                    "state",
+                    "google_maps_url",
+                ]
+                with open(filename, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(all_results)
+                logger.info(f"Saved {len(all_results)} results to {filename}")
+            
+            # Update job as completed
+            cursor.execute("""
+                UPDATE jobs SET status = ?, progress = ?, completed_at = ?
+                WHERE job_id = ?
+            """, ("completed", 100, datetime.now().isoformat(), job_id))
+            conn.commit()
+            
+            # Add completion log
+            cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                          (job_id, f"Job completed successfully. Total businesses found: {len(all_results)}", datetime.now().isoformat()))
+            conn.commit()
+            
+            logger.info(f"Job {job_id} completed successfully. Total businesses found: {len(all_results)}")
+        finally:
+            conn.close()
         
     except Exception as e:
         # Log full traceback for diagnostics
         logger.exception(f"Job {job_id} failed with error: {repr(e)}")
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE jobs SET status = ?, error = ?, completed_at = ?
-            WHERE job_id = ?
-        """, ("failed", repr(e), datetime.now().isoformat(), job_id))
-        conn.commit()
         
-        cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                      (job_id, f"Job failed with error: {repr(e)}", datetime.now().isoformat()))
-        conn.commit()
+        # Get fresh connection for error handling (original connection may be stale)
+        try:
+            error_conn = get_db()
+            try:
+                error_cursor = error_conn.cursor()
+                error_cursor.execute("""
+                    UPDATE jobs SET status = ?, error = ?, completed_at = ?
+                    WHERE job_id = ?
+                """, ("failed", repr(e), datetime.now().isoformat(), job_id))
+                error_conn.commit()
+                
+                error_cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                                  (job_id, f"Job failed with error: {repr(e)}", datetime.now().isoformat()))
+                error_conn.commit()
+            finally:
+                error_conn.close()
+        except Exception as db_error:
+            logger.error(f"Failed to record job error to database: {repr(db_error)}")
     
     finally:
-        conn.close()
         await scraper.close()
         logger.info(f"Closed browser for job {job_id}")
 
