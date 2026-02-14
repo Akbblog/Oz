@@ -5,7 +5,6 @@ import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
 import '../core/download_helper.dart';
-import '../core/theme/app_colors.dart';
 import '../widgets/infinity_data_table.dart';
 import 'results_screen.dart';
 
@@ -20,7 +19,6 @@ class JobHistoryScreen extends StatefulWidget {
 
 class _JobHistoryScreenState extends State<JobHistoryScreen>
     with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-
   @override
   bool get wantKeepAlive => true;
   final ApiService _apiService = ApiService();
@@ -98,8 +96,7 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
         if (query.isNotEmpty) {
           final jobId = job['job_id']?.toString().toLowerCase() ?? '';
           final category = job['category']?.toString().toLowerCase() ?? '';
-          final cities =
-              _citiesList(job['cities']).join(' ').toLowerCase();
+          final cities = _citiesList(job['cities']).join(' ').toLowerCase();
 
           if (!jobId.contains(query) &&
               !category.contains(query) &&
@@ -145,8 +142,10 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
       // Apply sorting
       if (_sortOption == 'Oldest') {
         _filteredJobs.sort((a, b) {
-          final dateA = DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(1970);
-          final dateB = DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(1970);
+          final dateA =
+              DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(1970);
+          final dateB =
+              DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(1970);
           return dateA.compareTo(dateB);
         });
       } else if (_sortOption == 'Most Results') {
@@ -748,7 +747,8 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
           InfinityDataColumn(label: 'Category', keyName: 'category'),
           InfinityDataColumn(label: 'Status', keyName: 'status'),
           InfinityDataColumn(label: 'Date', keyName: 'date'),
-          InfinityDataColumn(label: 'Results', keyName: 'results', numeric: true),
+          InfinityDataColumn(
+              label: 'Results', keyName: 'results', numeric: true),
         ],
         rows: rows,
         showCheckboxes: showCheckboxes,
@@ -969,8 +969,9 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed:
-                      jobId.isEmpty ? null : () => _openResults(jobId, category),
+                  onPressed: jobId.isEmpty
+                      ? null
+                      : () => _openResults(jobId, category),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _JobHistoryColors.neon,
                     side: BorderSide(color: _JobHistoryColors.indigo),
@@ -995,7 +996,8 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
     );
   }
 
-  Widget _filterChip(String label, String currentFilter, Function(String) onTap) {
+  Widget _filterChip(
+      String label, String currentFilter, Function(String) onTap) {
     final isActive = currentFilter == label;
     return GestureDetector(
       onTap: () => onTap(label),
@@ -1103,7 +1105,8 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
                   color: _JobHistoryColors.rose.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.error_outline, color: _JobHistoryColors.rose, size: 48),
+                child: Icon(Icons.error_outline,
+                    color: _JobHistoryColors.rose, size: 48),
               ),
               const SizedBox(height: AppSpacing.md),
               Text(
@@ -1294,7 +1297,8 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(statusStyle.icon, size: 14, color: statusStyle.color),
+                        Icon(statusStyle.icon,
+                            size: 14, color: statusStyle.color),
                         const SizedBox(width: 6),
                         Text(
                           statusStyle.label,
@@ -1321,33 +1325,59 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
                         value: 'view',
                         child: Row(
                           children: [
-                            Icon(Icons.visibility_rounded, size: 18, color: Colors.white70),
+                            Icon(Icons.visibility_rounded,
+                                size: 18, color: Colors.white70),
                             const SizedBox(width: AppSpacing.xs),
-                            Text('View Results', style: AppTypography.bodyMedium.copyWith(color: Colors.white)),
+                            Text('View Results',
+                                style: AppTypography.bodyMedium
+                                    .copyWith(color: Colors.white)),
                           ],
                         ),
                       ),
+                      if (status == 'pending' || status == 'running')
+                        PopupMenuItem(
+                          value: 'cancel',
+                          child: Row(
+                            children: [
+                              Icon(Icons.cancel_rounded,
+                                  size: 18, color: _JobHistoryColors.amber),
+                              const SizedBox(width: AppSpacing.xs),
+                              Text(
+                                'Cancel Job',
+                                style: AppTypography.bodyMedium
+                                    .copyWith(color: _JobHistoryColors.amber),
+                              ),
+                            ],
+                          ),
+                        ),
                       if (status == 'completed')
                         PopupMenuItem(
                           value: 'download',
                           child: Row(
                             children: [
-                              Icon(Icons.download_rounded, size: 18, color: Colors.white70),
+                              Icon(Icons.download_rounded,
+                                  size: 18, color: Colors.white70),
                               const SizedBox(width: AppSpacing.xs),
-                              Text('Download Excel', style: AppTypography.bodyMedium.copyWith(color: Colors.white)),
+                              Text('Download Excel',
+                                  style: AppTypography.bodyMedium
+                                      .copyWith(color: Colors.white)),
                             ],
                           ),
                         ),
-                      PopupMenuItem(
-                        value: 'delete',
-                        child: Row(
-                          children: [
-                            Icon(Icons.delete_outline_rounded, size: 18, color: _JobHistoryColors.rose),
-                            const SizedBox(width: AppSpacing.xs),
-                            Text('Delete', style: AppTypography.bodyMedium.copyWith(color: _JobHistoryColors.rose)),
-                          ],
+                      if (status != 'pending' && status != 'running')
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline_rounded,
+                                  size: 18, color: _JobHistoryColors.rose),
+                              const SizedBox(width: AppSpacing.xs),
+                              Text('Delete',
+                                  style: AppTypography.bodyMedium
+                                      .copyWith(color: _JobHistoryColors.rose)),
+                            ],
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ],
@@ -1382,31 +1412,75 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: status == 'completed' && jobId.isNotEmpty && !isDownloading
-                      ? () => _downloadJob(jobId)
-                      : null,
-                  icon: isDownloading
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                child: status == 'completed'
+                    ? ElevatedButton.icon(
+                        onPressed: jobId.isNotEmpty && !isDownloading
+                            ? () => _downloadJob(jobId)
+                            : null,
+                        icon: isDownloading
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white),
+                                ),
+                              )
+                            : const Icon(Icons.download_rounded, size: 18),
+                        label: Text(isDownloading
+                            ? 'Downloading...'
+                            : 'Download Excel'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _JobHistoryColors.indigo,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: _JobHistoryColors.slate850,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: AppSpacing.borderRadiusSm,
                           ),
-                        )
-                      : const Icon(Icons.download_rounded, size: 18),
-                  label: Text(isDownloading ? 'Downloading...' : 'Download Excel'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _JobHistoryColors.indigo,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: _JobHistoryColors.slate850,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: AppSpacing.borderRadiusSm,
-                    ),
-                  ),
-                ),
+                        ),
+                      )
+                    : (status == 'pending' || status == 'running')
+                        ? OutlinedButton.icon(
+                            onPressed: jobId.isNotEmpty
+                                ? () => _showCancelConfirmation(jobId)
+                                : null,
+                            icon: Icon(Icons.cancel_rounded,
+                                size: 18, color: _JobHistoryColors.amber),
+                            label: Text(
+                              'Cancel Job',
+                              style: AppTypography.labelMedium.copyWith(
+                                color: _JobHistoryColors.amber,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(
+                                  color: _JobHistoryColors.amber
+                                      .withValues(alpha: 0.6)),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: AppSpacing.borderRadiusSm,
+                              ),
+                            ),
+                          )
+                        : ElevatedButton.icon(
+                            onPressed: jobId.isNotEmpty
+                                ? () => _showDeleteConfirmation(jobId)
+                                : null,
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                size: 18),
+                            label: const Text('Delete Job'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _JobHistoryColors.rose,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: AppSpacing.borderRadiusSm,
+                              ),
+                            ),
+                          ),
               ),
             ],
           ),
@@ -1490,10 +1564,52 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
           _downloadJob(jobId);
         }
         break;
+      case 'cancel':
+        if (jobId.isNotEmpty) {
+          _showCancelConfirmation(jobId);
+        }
+        break;
       case 'delete':
         _showDeleteConfirmation(jobId);
         break;
     }
+  }
+
+  void _showCancelConfirmation(String jobId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: _JobHistoryColors.slate900,
+        title: Text(
+          'Cancel Job?',
+          style: AppTypography.titleMedium.copyWith(color: Colors.white),
+        ),
+        content: Text(
+          'This will request cancellation for the running job. Partial results may still be available.',
+          style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Keep running',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _cancelJob(jobId);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _JobHistoryColors.amber,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('Cancel job'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showDeleteConfirmation(String jobId) {
@@ -1532,6 +1648,40 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
     );
   }
 
+  Future<void> _cancelJob(String jobId) async {
+    try {
+      await _apiService.cancelJob(jobId);
+
+      if (!mounted) return;
+
+      setState(() {
+        final idx = _jobs.indexWhere((j) => j['job_id']?.toString() == jobId);
+        if (idx != -1) {
+          final existing = Map<String, dynamic>.from(_jobs[idx]);
+          existing['status'] = 'cancelled';
+          existing['error'] ??= 'Cancelled by user';
+          _jobs[idx] = existing;
+        }
+      });
+      _applyFilter();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Cancellation requested'),
+          backgroundColor: _JobHistoryColors.amber,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to cancel job: $e'),
+          backgroundColor: _JobHistoryColors.rose,
+        ),
+      );
+    }
+  }
+
   Future<void> _deleteJob(String jobId) async {
     try {
       await _apiService.deleteJob(jobId);
@@ -1539,8 +1689,8 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
       if (mounted) {
         setState(() {
           _jobs.removeWhere((job) => job['job_id'] == jobId);
-          _applyFilter();
         });
+        _applyFilter();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Job deleted successfully'),
