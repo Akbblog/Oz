@@ -11,11 +11,34 @@ from db.base import execute_query
 logger = logging.getLogger(__name__)
 
 
+def _is_valid_stripe_secret_key(key: str) -> bool:
+    k = (key or "").strip()
+    if not k:
+        return False
+    # Accept both live and test keys; reject placeholder patterns.
+    if k.startswith("sk_test_...") or k.startswith("sk_live_..."):
+        return False
+    return k.startswith("sk_test_") or k.startswith("sk_live_")
+
+
+class StripeNotConfiguredError(RuntimeError):
+    pass
+
+
 class StripeService:
     def __init__(self) -> None:
-        stripe.api_key = config.STRIPE_SECRET_KEY
+        self._enabled = _is_valid_stripe_secret_key(config.STRIPE_SECRET_KEY)
+        if self._enabled:
+            stripe.api_key = config.STRIPE_SECRET_KEY
+
+    def _require_enabled(self) -> None:
+        if not self._enabled:
+            raise StripeNotConfiguredError(
+                "Stripe is not configured (missing/invalid STRIPE_SECRET_KEY)."
+            )
 
     def _get_or_create_customer_id(self, user_id: int, email: str) -> str:
+        self._require_enabled()
         row = execute_query(
             "SELECT stripe_customer_id FROM users WHERE id = ?",
             (user_id,),
@@ -47,6 +70,7 @@ class StripeService:
         idempotency_key: str,
         metadata: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
+        self._require_enabled()
         customer_id = self._get_or_create_customer_id(user_id, email)
         md = {"user_id": str(user_id), "transaction_id": transaction_id}
         if metadata:
@@ -63,6 +87,7 @@ class StripeService:
         return dict(intent)
 
     def retrieve_payment_intent(self, payment_intent_id: str) -> Dict[str, Any]:
+        self._require_enabled()
         intent = stripe.PaymentIntent.retrieve(payment_intent_id)
         return dict(intent)
 
@@ -76,6 +101,7 @@ class StripeService:
         metadata: Optional[Dict[str, str]] = None,
         trial_period_days: Optional[int] = None,
     ) -> Dict[str, Any]:
+        self._require_enabled()
         customer_id = self._get_or_create_customer_id(user_id, email)
         md = {"user_id": str(user_id)}
         if metadata:
@@ -93,6 +119,7 @@ class StripeService:
         return dict(subscription)
 
     def cancel_subscription(self, stripe_subscription_id: str, *, at_period_end: bool) -> Dict[str, Any]:
+        self._require_enabled()
         if at_period_end:
             sub = stripe.Subscription.modify(stripe_subscription_id, cancel_at_period_end=True)
             return dict(sub)
@@ -100,6 +127,7 @@ class StripeService:
         return dict(sub)
 
     def pause_subscription(self, stripe_subscription_id: str) -> Dict[str, Any]:
+        self._require_enabled()
         sub = stripe.Subscription.modify(
             stripe_subscription_id,
             pause_collection={"behavior": "mark_uncollectible"},
@@ -107,10 +135,12 @@ class StripeService:
         return dict(sub)
 
     def resume_subscription(self, stripe_subscription_id: str) -> Dict[str, Any]:
+        self._require_enabled()
         sub = stripe.Subscription.modify(stripe_subscription_id, pause_collection="")
         return dict(sub)
 
     def construct_event(self, payload: bytes, sig_header: str) -> Dict[str, Any]:
+        self._require_enabled()
         event = stripe.Webhook.construct_event(
             payload=payload,
             sig_header=sig_header,

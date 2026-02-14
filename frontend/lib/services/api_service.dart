@@ -368,14 +368,18 @@ class ApiService {
   Future<Map<String, List<String>>> getStates() async {
     final response = await http.get(Uri.parse('$baseUrl/api/states'));
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return {
-        'USA': List<String>.from(data['USA'] ?? []),
-        'UK': List<String>.from(data['UK'] ?? []),
-        'UAE': List<String>.from(data['UAE'] ?? []),
-        'KSA': List<String>.from(data['KSA'] ?? []),
-        'Australia': List<String>.from(data['Australia'] ?? []),
-      };
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid states response');
+      }
+
+      final out = <String, List<String>>{};
+      decoded.forEach((key, value) {
+        if (value is List) {
+          out[key] = value.map((e) => e.toString()).toList();
+        }
+      });
+      return out;
     } else {
       throw Exception('Failed to load states');
     }
@@ -1724,6 +1728,22 @@ class ApiService {
 
   // ==================== ADMIN SETTINGS ====================
 
+  Future<Map<String, dynamic>> getFeatureFlags() async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/features'),
+          headers: headers,
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to get feature flags');
+    }
+  }
+
   Future<Map<String, dynamic>> getAdminSettings() async {
     final headers = await _getHeaders();
     final response = await http
@@ -1822,7 +1842,7 @@ class ApiService {
     }
   }
 
-  Future<http.Response> exportActivityCSV({
+  Future<String> exportActivityCSV({
     int? userId,
     String? action,
     String? dateFrom,
@@ -1841,7 +1861,7 @@ class ApiService {
     final response = await http.get(uri, headers: headers).timeout(timeout);
 
     if (response.statusCode == 200) {
-      return response;
+      return response.body;
     } else {
       throw Exception('Failed to export activity CSV');
     }

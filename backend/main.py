@@ -8,25 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import List, Dict, Optional, Tuple
-import pandas as pd
 import os
 import uuid
 import json
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
+from functools import lru_cache
 import asyncio
 import sys
 import secrets
 import hashlib
 from urllib.parse import quote_plus
-import requests
-from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
-import base64
 import base64
 from io import BytesIO
 import config
@@ -111,6 +104,37 @@ def set_admin_setting(key: str, value: str, admin_id: int) -> None:
         )
     conn.commit()
     conn.close()
+
+
+def admin_setting_exists(key: str) -> bool:
+    """Return True if an admin setting key exists (even if value is empty)."""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM admin_settings WHERE `key` = ? LIMIT 1", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
+
+
+def ensure_default_admin_settings() -> None:
+    """
+    Ensure required admin settings exist with safe defaults.
+
+    These settings can be modified later via the existing admin settings API.
+    """
+    defaults: List[Tuple[str, str]] = [
+        # When false, users see Payments Coming Soon instead of live payment screens.
+        ("enable_live_payments", "false"),
+        # Future-proof: comma-separated list of payment methods surfaced in the UI.
+        ("payment_methods_enabled", "stripe,paypal,coinbase"),
+    ]
+    for key, value in defaults:
+        if not admin_setting_exists(key):
+            # System bootstrap: attribute to the first admin user (id=1) by convention.
+            set_admin_setting(key, value, admin_id=1)
 
 
 def get_all_admin_settings() -> dict:
@@ -269,10 +293,68 @@ def increment_rate_limit(user_id: int):
     conn.commit()
     conn.close()
 
-# Initialize database
-init_database()
-
 app = FastAPI(title="Google Business Scraper API", version="2.0.0", debug=config.DEBUG)
+
+
+@app.on_event("startup")
+def _startup_init_db() -> None:
+    # Serverless/test environments may want to skip migrations for faster cold-starts.
+    if os.getenv("SKIP_DB_INIT", "").strip().lower() in ("1", "true", "t", "yes", "y"):
+        return
+    init_database()
+    # Ensure feature flags exist for frontend gating.
+    ensure_default_admin_settings()
+
+
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_COUNTRY_DATA_FILES: Dict[str, str] = {
+    "USA": config.USA_DATA_FILE,
+    "UK": config.UK_DATA_FILE,
+    "UAE": config.UAE_DATA_FILE,
+    "KSA": config.KSA_DATA_FILE,
+    "Australia": config.AUSTRALIA_DATA_FILE,
+    "Canada": config.CANADA_DATA_FILE,
+    "India": config.INDIA_DATA_FILE,
+    "Qatar": config.QATAR_DATA_FILE,
+    "Indonesia": config.INDONESIA_DATA_FILE,
+    "Finland": config.FINLAND_DATA_FILE,
+    "Germany": config.GERMANY_DATA_FILE,
+    "France": config.FRANCE_DATA_FILE,
+}
+
+_COUNTRY_REGION_FIELD: Dict[str, str] = {
+    "USA": "state",
+    "UK": "region",
+    "UAE": "emirate",
+    "KSA": "region",
+    "Australia": "state",
+    "Canada": "province",
+    "India": "state",
+    "Qatar": "region",
+    "Indonesia": "province",
+    "Finland": "region",
+    "Germany": "state",
+    "France": "region",
+}
+
+
+@lru_cache(maxsize=None)
+def _load_country_data(country: str) -> dict:
+    filename = _COUNTRY_DATA_FILES.get(country)
+    if not filename:
+        raise KeyError(f"Unknown country: {country}")
+    path = os.path.join(_BACKEND_DIR, filename)
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _find_country_for_region(region: str) -> Optional[str]:
+    for country in _COUNTRY_DATA_FILES.keys():
+        data = _load_country_data(country)
+        if region in data:
+            return country
+    return None
 
 # Audit middleware (attaches request_id, client_ip, user_agent to request.state)
 from audit.middleware import AuditMiddleware
@@ -291,7 +373,7 @@ async def favicon():
 @app.get("/api/countries")
 async def get_countries():
     """Get list of available countries (USA, UK)"""
-    return {"countries": list(COUNTRIES_DATA.keys())}
+    return {"countries": list(_COUNTRY_DATA_FILES.keys())}
 
 # CORS middleware
 app.add_middleware(
@@ -316,70 +398,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Load states and cities data for USA
-with open(config.USA_DATA_FILE, 'r', encoding='utf-8') as f:
-    STATES_CITIES_DATA = json.load(f)
-
-# Load UK regions and cities data
-with open(config.UK_DATA_FILE, 'r', encoding='utf-8') as f:
-    UK_REGIONS_DATA = json.load(f)
-
-# Load UAE emirates and cities data
-with open(config.UAE_DATA_FILE, 'r', encoding='utf-8') as f:
-    UAE_CITIES_DATA = json.load(f)
-
-# Load KSA (Saudi Arabia) regions and cities data
-with open(config.KSA_DATA_FILE, 'r', encoding='utf-8') as f:
-    KSA_CITIES_DATA = json.load(f)
-
-# Load Australia states and cities data
-with open(config.AUSTRALIA_DATA_FILE, 'r', encoding='utf-8') as f:
-    AUSTRALIA_CITIES_DATA = json.load(f)
-
-# Load Canada provinces and cities data
-with open(config.CANADA_DATA_FILE, 'r', encoding='utf-8') as f:
-    CANADA_CITIES_DATA = json.load(f)
-
-# Load India states and cities data
-with open(config.INDIA_DATA_FILE, 'r', encoding='utf-8') as f:
-    INDIA_CITIES_DATA = json.load(f)
-
-# Load Qatar regions and cities data
-with open(config.QATAR_DATA_FILE, 'r', encoding='utf-8') as f:
-    QATAR_CITIES_DATA = json.load(f)
-
-# Load Indonesia provinces and cities data
-with open(config.INDONESIA_DATA_FILE, 'r', encoding='utf-8') as f:
-    INDONESIA_CITIES_DATA = json.load(f)
-
-# Load Finland regions and cities data
-with open(config.FINLAND_DATA_FILE, 'r', encoding='utf-8') as f:
-    FINLAND_CITIES_DATA = json.load(f)
-
-# Load Germany states and cities data
-with open(config.GERMANY_DATA_FILE, 'r', encoding='utf-8') as f:
-    GERMANY_CITIES_DATA = json.load(f)
-
-# Load France regions and cities data
-with open(config.FRANCE_DATA_FILE, 'r', encoding='utf-8') as f:
-    FRANCE_CITIES_DATA = json.load(f)
-
-# Mapping of country to its region/state data
-COUNTRIES_DATA = {
-    "USA": STATES_CITIES_DATA,
-    "UK": UK_REGIONS_DATA,
-    "UAE": UAE_CITIES_DATA,
-    "KSA": KSA_CITIES_DATA,
-    "Australia": AUSTRALIA_CITIES_DATA,
-    "Canada": CANADA_CITIES_DATA,
-    "India": INDIA_CITIES_DATA,
-    "Qatar": QATAR_CITIES_DATA,
-    "Indonesia": INDONESIA_CITIES_DATA,
-    "Finland": FINLAND_CITIES_DATA,
-    "Germany": GERMANY_CITIES_DATA,
-    "France": FRANCE_CITIES_DATA
-}
 
 # Results directory
 RESULTS_DIR = config.RESULTS_DIR
@@ -451,7 +469,9 @@ class PurchaseRequest(BaseModel):
     package_id: int
     quantity: int = 1
     promo_code: Optional[str] = None
+    # Flutter/web clients historically send `payment_provider`; keep both for compatibility.
     provider: str = "stripe"  # 'stripe', 'coinbase', or 'paypal'
+    payment_provider: Optional[str] = None
     idempotency_key: str
 
 
@@ -1888,6 +1908,32 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
     }
 
 
+# ==================== FEATURE FLAGS (Frontend Gating) ====================
+
+@app.get("/api/features")
+async def get_feature_flags(current_user: dict = Depends(get_current_user)):
+    """
+    Return non-sensitive feature flags for authenticated users.
+
+    Note: Admin settings endpoints are admin-only; this endpoint exists so the
+    frontend can gate UI safely for normal users.
+    """
+    enabled_raw = get_admin_setting("enable_live_payments", "false")
+    enable_live_payments = str(enabled_raw).strip().lower() == "true"
+
+    methods_raw = get_admin_setting("payment_methods_enabled", "stripe,paypal,coinbase")
+    methods = [
+        m.strip().lower()
+        for m in str(methods_raw).split(",")
+        if m and str(m).strip()
+    ]
+
+    return {
+        "enable_live_payments": enable_live_payments,
+        "payment_methods_enabled": methods,
+    }
+
+
 # ==================== ADMIN SETTINGS ENDPOINTS ====================
 
 @app.get("/api/admin/settings")
@@ -2398,6 +2444,7 @@ class GoogleBusinessScraper:
         self.browser = None
         self.context = None
         self.page = None
+        self._playwright_timeout_exc = None
         # Determine headless mode from param or environment
         if headless is None:
             self.headless = config.PLAYWRIGHT_HEADLESS
@@ -2410,6 +2457,9 @@ class GoogleBusinessScraper:
             logger.info('Initializing Playwright browser with async API')
 
             # Start Playwright
+            from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout  # lazy import
+
+            self._playwright_timeout_exc = PlaywrightTimeout
             self.playwright = await async_playwright().start()
 
             # Launch browser
@@ -2452,6 +2502,12 @@ class GoogleBusinessScraper:
         """Scrape businesses for a specific location using Playwright"""
         if not self.page:
             await self.init_browser()
+
+        # Make sure we have the Playwright timeout exception class available for `except`.
+        PlaywrightTimeout = self._playwright_timeout_exc
+        if PlaywrightTimeout is None:
+            from playwright.async_api import TimeoutError as PlaywrightTimeout  # lazy import
+            self._playwright_timeout_exc = PlaywrightTimeout
 
         results = []
         search_term = f"{category} in {city}, {state}"
@@ -2700,9 +2756,23 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
 
         # Save results to CSV file
         if all_results:
-            filename = f"{RESULTS_DIR}/results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            df = pd.DataFrame(all_results)
-            df.to_csv(filename, index=False)
+            filename = os.path.join(RESULTS_DIR, f"results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            import csv
+
+            fieldnames = [
+                "business_name",
+                "phone",
+                "website",
+                "address",
+                "category",
+                "city",
+                "state",
+                "google_maps_url",
+            ]
+            with open(filename, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(all_results)
             logger.info(f"Saved {len(all_results)} results to {filename}")
         
         # Update job as completed
@@ -3055,6 +3125,10 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
 
 def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> bytes:
     """Create a professionally formatted Excel file"""
+    # openpyxl is relatively heavy; keep import local to avoid slowing API cold-start.
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
     wb = Workbook()
     ws = wb.active
 
@@ -3346,7 +3420,7 @@ async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(ge
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="quantity must be > 0")
 
-    provider = (req.provider or "stripe").lower()
+    provider = (req.provider or req.payment_provider or "stripe").lower()
     if provider not in ("stripe", "coinbase", "paypal"):
         raise HTTPException(status_code=400, detail="provider must be 'stripe', 'coinbase', or 'paypal'")
 
@@ -3544,7 +3618,15 @@ async def simple_purchase(
     # Create Stripe checkout session
     try:
         import stripe
-        stripe.api_key = config.STRIPE_SECRET_KEY
+        key = (config.STRIPE_SECRET_KEY or "").strip()
+        if (not key) or key.startswith("sk_test_...") or key.startswith("sk_live_...") or (
+            not (key.startswith("sk_test_") or key.startswith("sk_live_"))
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Stripe is not configured (missing/invalid STRIPE_SECRET_KEY)",
+            )
+        stripe.api_key = key
 
         session = stripe.checkout.Session.create(
             line_items=[{
@@ -4801,51 +4883,19 @@ async def admin_conversion(admin: dict = Depends(get_admin_user)):
 @app.get("/api/states")
 async def get_states():
     """Get list of all available states/regions for all countries"""
-    return {
-        "USA": list(STATES_CITIES_DATA.keys()),
-        "UK": list(UK_REGIONS_DATA.keys()),
-        "UAE": list(UAE_CITIES_DATA.keys()),
-        "KSA": list(KSA_CITIES_DATA.keys()),
-        "Australia": list(AUSTRALIA_CITIES_DATA.keys()),
-        "Canada": list(CANADA_CITIES_DATA.keys()),
-        "India": list(INDIA_CITIES_DATA.keys()),
-        "Qatar": list(QATAR_CITIES_DATA.keys()),
-        "Indonesia": list(INDONESIA_CITIES_DATA.keys()),
-        "Finland": list(FINLAND_CITIES_DATA.keys()),
-        "Germany": list(GERMANY_CITIES_DATA.keys()),
-        "France": list(FRANCE_CITIES_DATA.keys())
-    }
+    return {country: list(_load_country_data(country).keys()) for country in _COUNTRY_DATA_FILES.keys()}
 
 @app.get("/api/states/{state}/cities")
 async def get_cities(state: str):
     """Get list of cities for a specific state/region"""
-    # Check each country's data for the state/region
-    if state in STATES_CITIES_DATA:
-        return {"country": "USA", "state": state, "cities": STATES_CITIES_DATA[state]}
-    elif state in UK_REGIONS_DATA:
-        return {"country": "UK", "region": state, "cities": UK_REGIONS_DATA[state]}
-    elif state in UAE_CITIES_DATA:
-        return {"country": "UAE", "emirate": state, "cities": UAE_CITIES_DATA[state]}
-    elif state in KSA_CITIES_DATA:
-        return {"country": "KSA", "region": state, "cities": KSA_CITIES_DATA[state]}
-    elif state in AUSTRALIA_CITIES_DATA:
-        return {"country": "Australia", "state": state, "cities": AUSTRALIA_CITIES_DATA[state]}
-    elif state in CANADA_CITIES_DATA:
-        return {"country": "Canada", "province": state, "cities": CANADA_CITIES_DATA[state]}
-    elif state in INDIA_CITIES_DATA:
-        return {"country": "India", "state": state, "cities": INDIA_CITIES_DATA[state]}
-    elif state in QATAR_CITIES_DATA:
-        return {"country": "Qatar", "region": state, "cities": QATAR_CITIES_DATA[state]}
-    elif state in INDONESIA_CITIES_DATA:
-        return {"country": "Indonesia", "province": state, "cities": INDONESIA_CITIES_DATA[state]}
-    elif state in FINLAND_CITIES_DATA:
-        return {"country": "Finland", "region": state, "cities": FINLAND_CITIES_DATA[state]}
-    elif state in GERMANY_CITIES_DATA:
-        return {"country": "Germany", "state": state, "cities": GERMANY_CITIES_DATA[state]}
-    elif state in FRANCE_CITIES_DATA:
-        return {"country": "France", "region": state, "cities": FRANCE_CITIES_DATA[state]}
-    else:
+    country = _find_country_for_region(state)
+    if not country:
         raise HTTPException(status_code=404, detail="State or region not found")
+
+    data = _load_country_data(country)
+    payload = {"country": country, "cities": data[state]}
+    payload[_COUNTRY_REGION_FIELD.get(country, "region")] = state
+    return payload
 
 if __name__ == "__main__":
     import uvicorn

@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -71,6 +71,10 @@ tmp/
 backend/.env
 backend/.env.*
 
+# Keep example env files in git
+!.env.example
+!backend/.env.example
+
 # Test results
 test_results/
 coverage/
@@ -110,3 +114,5 @@ states_cities_data.json
 # Allow backend requirements.txt and states_cities_data.json
 !backend/requirements.txt
 !backend/states_cities_data.json
+
+.vercel

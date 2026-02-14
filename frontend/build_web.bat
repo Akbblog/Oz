@@ -15,7 +15,9 @@ if not "%API_URL%"=="" (
     set DART_DEFINES=--dart-define=API_URL=%API_URL%
 )
 
-flutter build web --release --web-renderer canvaskit %DART_DEFINES%
+rem NOTE: Flutter 3.29+ removed --web-renderer. Use default renderer.
+rem Disable PWA caching to avoid stale builds after deploys.
+flutter build web --release --pwa-strategy=none %DART_DEFINES%
 
 if %errorlevel% == 0 (
     echo.

@@ -1,8 +1,8 @@
-
 import 'package:flutter/material.dart';
 import 'package:country_flags/country_flags.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:math' as math;
 import '../services/api_service.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
@@ -27,10 +27,11 @@ class StateSelectionScreen extends StatefulWidget {
 
 class _StateSelectionScreenState extends State<StateSelectionScreen>
     with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
-
   @override
   bool get wantKeepAlive => true;
-  String? _selectedCountry = 'USA';
+  String? _selectedCountry;
+  bool _countrySelectionMode =
+      true; // Selecting a country vs selecting regions/cities.
   String? _selectedState;
   List<String> _selectedCities = [];
   bool _selectAllCities = false;
@@ -54,6 +55,11 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
 
   static const String _locationDraftKey = 'wizard_location_draft_v1';
 
+  String _citiesCacheKey(String state) {
+    final country = _selectedCountry ?? '';
+    return '$country::$state';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -73,7 +79,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _loadInitialData();
+    _loadInitialData(loadDraft: true);
     _stateSearchController.addListener(_filterStates);
     _citySearchController.addListener(_filterCities);
   }
@@ -106,14 +112,25 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       }
     });
   }
-  Future<void> _loadInitialData() async {
+
+  Future<void> _loadInitialData({required bool loadDraft}) async {
     try {
-      final draft = await _readLocationDraft();
-      if (draft != null) {
-        _selectedCountry = (draft['country'] as String?) ?? _selectedCountry;
-        _selectedState = (draft['state'] as String?);
-        _selectedCities = List<String>.from(draft['cities'] ?? const <String>[]);
-        _includeSuburbs = (draft['include_suburbs'] as bool?) ?? _includeSuburbs;
+      Map<String, dynamic>? draft;
+      if (loadDraft) {
+        draft = await _readLocationDraft();
+        if (draft != null) {
+          final draftCountry = (draft['country'] as String?)?.trim();
+          _selectedCountry = (draftCountry == null || draftCountry.isEmpty)
+              ? null
+              : draftCountry;
+          final draftState = (draft['state'] as String?)?.trim();
+          _selectedState =
+              (draftState == null || draftState.isEmpty) ? null : draftState;
+          _selectedCities =
+              List<String>.from(draft['cities'] ?? const <String>[]);
+          _includeSuburbs =
+              (draft['include_suburbs'] as bool?) ?? _includeSuburbs;
+        }
       }
 
       final results = await Future.wait([
@@ -123,12 +140,13 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       final countries = results[0] as List<String>;
       final statesByCountry = results[1] as Map<String, List<String>>;
 
-      if (_selectedCountry == null) {
-        if (countries.contains('USA')) {
-          _selectedCountry = 'USA';
-        } else if (countries.isNotEmpty) {
-          _selectedCountry = countries.first;
-        }
+      // Do not auto-select a default country; keep the initial state focused on
+      // country selection unless a draft pre-selected one.
+      if (_selectedCountry != null && !countries.contains(_selectedCountry)) {
+        _selectedCountry = null;
+        _selectedState = null;
+        _selectedCities = [];
+        _selectAllCities = false;
       }
 
       List<String> states = [];
@@ -140,6 +158,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       if (_selectedState != null && !states.contains(_selectedState)) {
         _selectedState = null;
         _selectedCities = [];
+        _selectAllCities = false;
       }
 
       if (mounted) {
@@ -147,13 +166,17 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           _availableCountries = countries;
           _statesAndCities = {
             for (final state in states)
-              state: _citiesCache[state] ?? <String>[],
+              state: _citiesCache[_citiesCacheKey(state)] ?? <String>[],
           };
           _filteredStates = states;
+          _filteredCities = (_selectedState == null)
+              ? <String>[]
+              : (_statesAndCities[_selectedState] ?? <String>[]);
           _isLoading = false;
-          _showDraftBanner = draft != null;
+          _showDraftBanner = loadDraft && draft != null;
+          _countrySelectionMode = _selectedCountry == null;
         });
-        _animationController.forward();
+        _animationController.forward(from: 0.0);
 
         _preloadCities(states.take(5).toList());
 
@@ -161,8 +184,10 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           await _loadCitiesForState(_selectedState!);
           if (!mounted) return;
           setState(() {
-            final available = _statesAndCities[_selectedState] ?? const <String>[];
-            _selectedCities = _selectedCities.where(available.contains).toList();
+            final available =
+                _statesAndCities[_selectedState] ?? const <String>[];
+            _selectedCities =
+                _selectedCities.where(available.contains).toList();
             _selectAllCities = _selectedCities.isNotEmpty &&
                 _selectedCities.length == available.length;
           });
@@ -173,15 +198,25 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       if (mounted) {
         setState(() {
           _availableCountries = ['USA', 'UK', 'UAE', 'KSA', 'Australia'];
-          _statesAndCities = {
-            'California': ['Los Angeles', 'San Diego', 'San Jose', 'San Francisco'],
-            'New York': ['New York', 'Buffalo', 'Rochester'],
-            'Texas': ['Houston', 'Dallas', 'Austin'],
-          };
+          // Keep fallback data minimal; only show regions/cities once a country is selected.
+          _statesAndCities = _selectedCountry == null
+              ? <String, List<String>>{}
+              : {
+                  'California': [
+                    'Los Angeles',
+                    'San Diego',
+                    'San Jose',
+                    'San Francisco'
+                  ],
+                  'New York': ['New York', 'Buffalo', 'Rochester'],
+                  'Texas': ['Houston', 'Dallas', 'Austin'],
+                };
           _filteredStates = _statesAndCities.keys.toList();
+          _filteredCities = <String>[];
           _isLoading = false;
+          _countrySelectionMode = _selectedCountry == null;
         });
-        _animationController.forward();
+        _animationController.forward(from: 0.0);
       }
     }
   }
@@ -249,12 +284,13 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
 
   Future<void> _preloadCities(List<String> states) async {
     for (final state in states) {
-      if (_citiesCache.containsKey(state)) continue;
+      final cacheKey = _citiesCacheKey(state);
+      if (_citiesCache.containsKey(cacheKey)) continue;
       try {
         final cities = await _apiService.getCities(state);
         if (mounted) {
-          _citiesCache[state] = List<String>.from(cities);
-          _statesAndCities[state] = _citiesCache[state]!;
+          _citiesCache[cacheKey] = List<String>.from(cities);
+          _statesAndCities[state] = _citiesCache[cacheKey]!;
         }
       } catch (e) {
         debugPrint('Error preloading cities for $state: $e');
@@ -263,9 +299,10 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   }
 
   Future<void> _loadCitiesForState(String state) async {
-    if (_citiesCache.containsKey(state)) {
+    final cacheKey = _citiesCacheKey(state);
+    if (_citiesCache.containsKey(cacheKey)) {
       setState(() {
-        _statesAndCities[state] = _citiesCache[state] ?? <String>[];
+        _statesAndCities[state] = _citiesCache[cacheKey] ?? <String>[];
         _filteredCities = _statesAndCities[state]!;
         _isCitiesLoading = false;
       });
@@ -281,8 +318,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       final cities = await _apiService.getCities(state);
       if (!mounted) return;
       setState(() {
-        _citiesCache[state] = List<String>.from(cities);
-        _statesAndCities[state] = _citiesCache[state]!;
+        _citiesCache[cacheKey] = List<String>.from(cities);
+        _statesAndCities[state] = _citiesCache[cacheKey]!;
         _filteredCities = _statesAndCities[state]!;
         _isCitiesLoading = false;
       });
@@ -304,6 +341,24 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       _selectAllCities = false;
       _citySearchController.clear();
       _filteredCities = [];
+    });
+  }
+
+  /// Clear country selection and return to country selection mode.
+  void _deselectCountry() {
+    setState(() {
+      _selectedCountry = null;
+      _countrySelectionMode = true;
+      _selectedState = null;
+      _selectedCities = [];
+      _selectAllCities = false;
+      _isCitiesLoading = false;
+      _statesAndCities = {};
+      _filteredStates = [];
+      _filteredCities = [];
+      _showDraftBanner = false;
+      _stateSearchController.clear();
+      _citySearchController.clear();
     });
   }
 
@@ -329,6 +384,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
             ),
     );
   }
+
   Widget _buildLoadingState() {
     return Center(
       child: Column(
@@ -376,7 +432,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
             width: 200,
             child: LinearProgressIndicator(
               backgroundColor: _LocationColors.primary.withValues(alpha: 0.2),
-              valueColor: AlwaysStoppedAnimation<Color>(_LocationColors.primary),
+              valueColor:
+                  AlwaysStoppedAnimation<Color>(_LocationColors.primary),
             ),
           ),
         ],
@@ -385,6 +442,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   }
 
   Widget _buildMobileContent(LayoutType layoutType) {
+    final showDetails = _selectedCountry != null && !_countrySelectionMode;
     return FadeTransition(
       opacity: _fadeAnimation,
       child: Column(
@@ -403,17 +461,19 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildCountrySelector(),
-                  const SizedBox(height: AppSpacing.lg),
-                  _buildStateSection(layoutType: layoutType),
-                  const SizedBox(height: AppSpacing.lg),
-                  if (_selectedState != null)
-                    _buildCitiesSection(layoutType: layoutType),
-                  if (_selectedState != null)
+                  _buildCountrySelector(layoutType),
+                  if (showDetails) ...[
                     const SizedBox(height: AppSpacing.lg),
-                  _buildIncludeSuburbsCard(),
-                  const SizedBox(height: AppSpacing.xl),
-                  _buildFooterActions(layoutType),
+                    _buildStateSection(layoutType: layoutType),
+                    const SizedBox(height: AppSpacing.lg),
+                    if (_selectedState != null)
+                      _buildCitiesSection(layoutType: layoutType),
+                    if (_selectedState != null)
+                      const SizedBox(height: AppSpacing.lg),
+                    _buildIncludeSuburbsCard(),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildFooterActions(layoutType),
+                  ],
                 ],
               ),
             ),
@@ -424,6 +484,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
   }
 
   Widget _buildTabletContent(LayoutType layoutType) {
+    final showDetails = _selectedCountry != null && !_countrySelectionMode;
     return FadeTransition(
       opacity: _fadeAnimation,
       child: Column(
@@ -442,17 +503,19 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildCountrySelector(),
-                  const SizedBox(height: AppSpacing.lg),
-                  _buildStateSection(layoutType: layoutType),
-                  const SizedBox(height: AppSpacing.lg),
-                  if (_selectedState != null)
-                    _buildCitiesSection(layoutType: layoutType),
-                  if (_selectedState != null)
+                  _buildCountrySelector(layoutType),
+                  if (showDetails) ...[
                     const SizedBox(height: AppSpacing.lg),
-                  _buildIncludeSuburbsCard(),
-                  const SizedBox(height: AppSpacing.xl),
-                  _buildFooterActions(layoutType),
+                    _buildStateSection(layoutType: layoutType),
+                    const SizedBox(height: AppSpacing.lg),
+                    if (_selectedState != null)
+                      _buildCitiesSection(layoutType: layoutType),
+                    if (_selectedState != null)
+                      const SizedBox(height: AppSpacing.lg),
+                    _buildIncludeSuburbsCard(),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildFooterActions(layoutType),
+                  ],
                 ],
               ),
             ),
@@ -466,6 +529,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     final leftFlex = layoutType == LayoutType.desktopMedium ? 35 : 40;
     final rightFlex = 100 - leftFlex;
     final showCities = _selectedState != null;
+    final showDetails = _selectedCountry != null && !_countrySelectionMode;
 
     return FadeTransition(
       opacity: _fadeAnimation,
@@ -485,31 +549,33 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildCountrySelector(),
-                  const SizedBox(height: AppSpacing.lg),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: leftFlex,
-                        child: _buildStateSection(
-                          layoutType: layoutType,
-                          inSplitPanel: true,
+                  _buildCountrySelector(layoutType),
+                  if (showDetails) ...[
+                    const SizedBox(height: AppSpacing.lg),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: leftFlex,
+                          child: _buildStateSection(
+                            layoutType: layoutType,
+                            inSplitPanel: true,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: AppSpacing.lg),
-                      Expanded(
-                        flex: rightFlex,
-                        child: showCities
-                            ? _buildCitiesSection(layoutType: layoutType)
-                            : _buildEmptyCitiesPanel(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  _buildIncludeSuburbsCard(),
-                  const SizedBox(height: AppSpacing.xl),
-                  _buildFooterActions(layoutType),
+                        const SizedBox(width: AppSpacing.lg),
+                        Expanded(
+                          flex: rightFlex,
+                          child: showCities
+                              ? _buildCitiesSection(layoutType: layoutType)
+                              : _buildEmptyCitiesPanel(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    _buildIncludeSuburbsCard(),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildFooterActions(layoutType),
+                  ],
                 ],
               ),
             ),
@@ -591,7 +657,28 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  Widget _buildCountrySelector() {
+  int _countryGridColumns(LayoutType layoutType) {
+    switch (layoutType) {
+      case LayoutType.mobile:
+        return 2;
+      case LayoutType.tablet:
+        return 4;
+      case LayoutType.desktopSmall:
+        return 5;
+      case LayoutType.desktopMedium:
+        return 5;
+      case LayoutType.desktopLarge:
+        return 6;
+    }
+  }
+
+  Widget _buildCountrySelector(LayoutType layoutType) {
+    final countryCount = _availableCountries.length;
+    final crossAxisCount = countryCount == 0
+        ? 1
+        : math.min(_countryGridColumns(layoutType), countryCount);
+    final showSelected = _selectedCountry != null && !_countrySelectionMode;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -613,37 +700,165 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
-        SizedBox(
-          height: 64,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _availableCountries.length,
-            separatorBuilder: (context, index) => const SizedBox(width: AppSpacing.xs),
-            itemBuilder: (context, index) {
-              final country = _availableCountries[index];
-              final isSelected = _selectedCountry == country;
-              return _buildCountryCard(country, isSelected);
-            },
-          ),
+        AnimatedSwitcher(
+          duration: AppSpacing.durationMedium,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.98, end: 1.0).animate(
+                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                ),
+                child: child,
+              ),
+            );
+          },
+          child: showSelected
+              ? KeyedSubtree(
+                  key: const ValueKey<String>('selected_country_bar'),
+                  child: _buildSelectedCountryBar(),
+                )
+              : KeyedSubtree(
+                  key: const ValueKey<String>('country_grid'),
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      crossAxisSpacing: AppSpacing.xs,
+                      mainAxisSpacing: AppSpacing.xs,
+                      childAspectRatio: 2.0,
+                    ),
+                    itemCount: _availableCountries.length,
+                    itemBuilder: (context, index) {
+                      final country = _availableCountries[index];
+                      final isSelected = _selectedCountry == country;
+                      return _buildCountryCard(country, isSelected);
+                    },
+                  ),
+                ),
         ),
       ],
     );
   }
+
+  Widget _buildSelectedCountryBar() {
+    final country = _selectedCountry;
+    if (country == null || country.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: _LocationColors.primary.withValues(alpha: 0.15),
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(
+          color: _LocationColors.primary.withValues(alpha: 0.5),
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          Tooltip(
+            message: 'Change country',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _deselectCountry,
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _LocationColors.primary.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.arrow_back_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Change',
+                        style: AppTypography.labelSmall.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          _buildCountryLeading(country, isSelected: true),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              country,
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Tooltip(
+            message: 'Remove country',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _deselectCountry,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.close_rounded,
+                    color: _LocationColors.primary,
+                    size: 20,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCountryCard(String country, bool isSelected) {
     return GestureDetector(
       onTap: () async {
         if (country != _selectedCountry) {
           setState(() {
             _selectedCountry = country;
+            _countrySelectionMode = false;
+            _showDraftBanner = false;
             _selectedState = null;
             _statesAndCities = {};
+            _filteredStates = [];
             _filteredCities = [];
             _isLoading = true;
+            _selectAllCities = false;
+            _selectedCities = [];
+            _stateSearchController.clear();
+            _citySearchController.clear();
           });
-          await _loadInitialData();
+          await _loadInitialData(loadDraft: false);
         }
       },
       child: Container(
+        alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md,
           vertical: AppSpacing.sm,
@@ -668,7 +883,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
             Text(
               country,
               style: AppTypography.labelMedium.copyWith(
-                color: isSelected ? Colors.white : _LocationColors.textSecondary,
+                color:
+                    isSelected ? Colors.white : _LocationColors.textSecondary,
                 fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -696,7 +912,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
 
     return Icon(
       Icons.public_rounded,
-      color: isSelected ? _LocationColors.primary : _LocationColors.textSecondary,
+      color:
+          isSelected ? _LocationColors.primary : _LocationColors.textSecondary,
       size: 18,
     );
   }
@@ -713,9 +930,40 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         return 'SA';
       case 'Australia':
         return 'AU';
+      case 'Canada':
+        return 'CA';
+      case 'India':
+        return 'IN';
+      case 'Qatar':
+        return 'QA';
+      case 'Indonesia':
+        return 'ID';
+      case 'Finland':
+        return 'FI';
+      case 'Germany':
+        return 'DE';
+      case 'France':
+        return 'FR';
       default:
         return null;
     }
+  }
+
+  String _formatCityQuery(String city, String state) {
+    final trimmed = city.trim();
+    if (trimmed.isEmpty) return state;
+
+    final lower = trimmed.toLowerCase();
+    final lowerState = state.trim().toLowerCase();
+    if (lowerState.isNotEmpty &&
+        (lower.endsWith(', $lowerState') || lower.contains(', $lowerState'))) {
+      return trimmed;
+    }
+    if (trimmed.contains(',')) {
+      // Most datasets already include ", Region" in the city string.
+      return trimmed;
+    }
+    return '$trimmed, $state';
   }
 
   Widget _buildStateSection({
@@ -803,7 +1051,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         ),
         suffixIcon: _stateSearchController.text.isNotEmpty
             ? IconButton(
-                icon: const Icon(Icons.clear_rounded, color: Colors.white70, size: 20),
+                icon: const Icon(Icons.clear_rounded,
+                    color: Colors.white70, size: 20),
                 onPressed: () {
                   _stateSearchController.clear();
                   _filterStates();
@@ -952,9 +1201,12 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
               ),
               child: Center(
                 child: Text(
-                  state.length >= 2 ? state.substring(0, 2).toUpperCase() : state,
+                  state.length >= 2
+                      ? state.substring(0, 2).toUpperCase()
+                      : state,
                   style: AppTypography.labelSmall.copyWith(
-                    color: isSelected ? _LocationColors.primary : Colors.white60,
+                    color:
+                        isSelected ? _LocationColors.primary : Colors.white60,
                     fontWeight: FontWeight.w700,
                     fontSize: 10,
                   ),
@@ -1000,6 +1252,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       ),
     );
   }
+
   Widget _buildCitiesSection({required LayoutType layoutType}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1068,7 +1321,8 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         ),
         suffixIcon: _citySearchController.text.isNotEmpty
             ? IconButton(
-                icon: const Icon(Icons.clear_rounded, color: Colors.white70, size: 20),
+                icon: const Icon(Icons.clear_rounded,
+                    color: Colors.white70, size: 20),
                 onPressed: () {
                   _citySearchController.clear();
                   _filterCities();
@@ -1568,7 +1822,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       onPressed: canContinue
           ? () {
               final citiesText = _selectedCities
-                  .map((city) => '$city, $_selectedState')
+                  .map((city) => _formatCityQuery(city, _selectedState!))
                   .join('; ');
 
               if (widget.onContinueToSearch != null) {

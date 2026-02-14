@@ -2,6 +2,9 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
+import queue
+import threading
+import time
 from urllib.parse import urlparse
 import config
 
@@ -140,6 +143,150 @@ class _MySQLConnectionAdapter:
 
 def _get_placeholders():
     return "%s" if _get_db_type() == "mysql" else "?"
+
+
+_mysql_pool = None
+_mysql_pool_lock = threading.Lock()
+
+
+def _mysql_pool_config() -> tuple[int, int]:
+    # Defaults are intentionally conservative to keep memory/connection pressure down.
+    size_raw = os.getenv("MYSQL_POOL_SIZE", "5").strip()
+    recycle_raw = os.getenv("MYSQL_POOL_RECYCLE_SECONDS", "1800").strip()  # 30 min
+
+    try:
+        size = max(1, int(size_raw))
+    except Exception:
+        size = 5
+
+    try:
+        recycle = max(0, int(recycle_raw))
+    except Exception:
+        recycle = 1800
+
+    return size, recycle
+
+
+def _get_mysql_pool():
+    global _mysql_pool
+    if _mysql_pool is not None:
+        return _mysql_pool
+    with _mysql_pool_lock:
+        if _mysql_pool is None:
+            size, _ = _mysql_pool_config()
+            _mysql_pool = queue.LifoQueue(maxsize=size)
+    return _mysql_pool
+
+
+def _create_mysql_connection():
+    # DATABASE_URL examples:
+    # - mysql://user:password@host:port/db
+    # - mysql+pymysql://user:password@host:port/db
+    from urllib.parse import unquote
+
+    mysql_client = _ensure_pymysql()
+    parsed_url = urlparse(config.DATABASE_URL)
+
+    # Keep timeouts low so "new connection per request" doesn't become catastrophic
+    # when a remote DB is slow/unreachable.
+    connect_timeout = float(os.getenv("MYSQL_CONNECT_TIMEOUT", "5") or "5")
+    read_timeout = float(os.getenv("MYSQL_READ_TIMEOUT", "30") or "30")
+    write_timeout = float(os.getenv("MYSQL_WRITE_TIMEOUT", "30") or "30")
+
+    return mysql_client.connect(
+        host=parsed_url.hostname,
+        port=parsed_url.port or 3306,
+        user=unquote(parsed_url.username or ""),
+        password=unquote(parsed_url.password or ""),
+        db=parsed_url.path.lstrip("/"),
+        autocommit=False,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        write_timeout=write_timeout,
+        charset="utf8mb4",
+    )
+
+
+def _acquire_mysql_connection():
+    pool = _get_mysql_pool()
+    _, recycle_seconds = _mysql_pool_config()
+    now = time.time()
+
+    try:
+        raw_conn, created_at = pool.get_nowait()
+    except queue.Empty:
+        return _create_mysql_connection(), now
+
+    if recycle_seconds and (now - float(created_at)) > float(recycle_seconds):
+        try:
+            raw_conn.close()
+        except Exception:
+            pass
+        return _create_mysql_connection(), now
+
+    try:
+        # ping(reconnect=True) keeps pooled connections from going stale (common with remote DBs).
+        raw_conn.ping(reconnect=True)
+    except Exception:
+        try:
+            raw_conn.close()
+        except Exception:
+            pass
+        return _create_mysql_connection(), now
+
+    return raw_conn, created_at
+
+
+def _release_mysql_connection(raw_conn, created_at: float) -> None:
+    pool = _get_mysql_pool()
+
+    try:
+        # Ensure we don't leak an open transaction into the next borrower.
+        raw_conn.rollback()
+    except Exception:
+        pass
+
+    try:
+        if hasattr(raw_conn, "open") and not raw_conn.open:
+            return
+    except Exception:
+        return
+
+    try:
+        pool.put_nowait((raw_conn, float(created_at)))
+    except queue.Full:
+        try:
+            raw_conn.close()
+        except Exception:
+            pass
+
+
+class _MySQLPooledConnection:
+    """Pooled connection wrapper that returns placeholder-normalizing cursors and releases on close()."""
+
+    def __init__(self, raw_conn, created_at: float):
+        self._raw_conn = raw_conn
+        self._created_at = float(created_at)
+        self._closed = False
+
+    def cursor(self, *args, **kwargs):
+        return _MySQLCursorAdapter(self._raw_conn.cursor(*args, **kwargs))
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        _release_mysql_connection(self._raw_conn, self._created_at)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __getattr__(self, item):
+        return getattr(self._raw_conn, item)
 
 def init_database():
     """Initialize database with base schema and run pending migrations"""
@@ -304,21 +451,8 @@ def get_db():
             pass
         return conn
     elif db_type == "mysql":
-        # DATABASE_URL examples:
-        # - mysql://user:password@host:port/db
-        # - mysql+pymysql://user:password@host:port/db
-        from urllib.parse import unquote
-        mysql_client = _ensure_pymysql()
-        parsed_url = urlparse(config.DATABASE_URL)
-        raw_conn = mysql_client.connect(
-            host=parsed_url.hostname,
-            port=parsed_url.port or 3306,
-            user=unquote(parsed_url.username or ""),
-            password=unquote(parsed_url.password or ""),
-            db=parsed_url.path.lstrip('/'),
-            autocommit=False
-        )
-        return _MySQLConnectionAdapter(raw_conn)
+        raw_conn, created_at = _acquire_mysql_connection()
+        return _MySQLPooledConnection(raw_conn, created_at)
     else:
         raise RuntimeError(f"Unsupported DB_TYPE: {db_type}")
 

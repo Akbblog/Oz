@@ -1546,14 +1546,37 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
-          SizedBox(
-            width: double.infinity,
-            child: _smallButton(
-              label: 'Manage Profile',
-              color: AppColors.elevatedCardDark,
-              textColor: Colors.white,
-              onTap: () => _showManageUserDialog(user),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: _smallButton(
+                  label: 'Manage Profile',
+                  color: AppColors.elevatedCardDark,
+                  textColor: Colors.white,
+                  onTap: () => _showManageUserDialog(user),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: _smallButton(
+                  label: 'Timeline',
+                  color: AppColors.elevatedCardDark,
+                  textColor: AppColors.brandPurple,
+                  onTap: () => _showUserTimeline(
+                      user['id'], user['username'] ?? 'User'),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: _smallButton(
+                  label: 'KPIs',
+                  color: AppColors.elevatedCardDark,
+                  textColor: AppColors.infoBlue,
+                  onTap: () =>
+                      _showUserKpis(user['id'], user['username'] ?? 'User'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1733,6 +1756,94 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   subtitle: Text(
                     'Sent when an admin denies a pending user.',
                     style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _buildSettingCard(
+            title: 'Payment Features',
+            child: Column(
+              children: [
+                SwitchListTile(
+                  value: _settingBool('enable_live_payments', fallback: false),
+                  onChanged: (v) =>
+                      _updateSetting('enable_live_payments', v ? 'true' : 'false'),
+                  activeThumbColor: AppColors.successGreen,
+                  title: Text(
+                    'Live Payment Methods',
+                    style: AppTypography.titleSmall.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Enable or disable live payment experiences for users.',
+                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Container(
+                  padding: AppSpacing.paddingSm,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    border: Border.all(
+                      color: AppColors.primaryBlue.withValues(alpha: 0.25),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _settingBool('enable_live_payments', fallback: false)
+                            ? Icons.check_circle_outline_rounded
+                            : Icons.info_outline_rounded,
+                        color: _settingBool('enable_live_payments', fallback: false)
+                            ? AppColors.successGreen
+                            : AppColors.warningYellow,
+                        size: 18,
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Text(
+                          _settingBool('enable_live_payments', fallback: false)
+                              ? 'Users can access payment methods and invoices.'
+                              : 'Users see Payments Coming Soon and can request credits from admins.',
+                          style: AppTypography.bodySmall.copyWith(
+                            color: Colors.white70,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Container(
+                  padding: AppSpacing.paddingSm,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryBlue.withValues(alpha: 0.10),
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    border: Border.all(
+                      color: AppColors.primaryBlue.withValues(alpha: 0.25),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.lightbulb_outline_rounded,
+                          color: AppColors.primaryBlue, size: 18),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Text(
+                          'Tip: When disabled, wallet loads faster and users are guided to request credits.',
+                          style: AppTypography.bodySmall.copyWith(
+                            color: AppColors.primaryBlue,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -2115,13 +2226,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       final userIdText = _filterUserIdController.text.trim();
       final userId = userIdText.isNotEmpty ? int.tryParse(userIdText) : null;
-      final response = await _apiService.exportActivityCSV(
+      final csvBody = await _apiService.exportActivityCSV(
         userId: userId,
         action: _filterAction,
         dateFrom: _filterDateFrom,
         dateTo: _filterDateTo,
       );
-      final bytes = utf8.encode(response.body);
+      final bytes = utf8.encode(csvBody);
       final blob = html.Blob([bytes], 'text/csv');
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.AnchorElement(href: url)

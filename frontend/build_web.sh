@@ -16,7 +16,9 @@ if [ -n "${API_URL:-}" ]; then
   EXTRA_DEFINES="--dart-define=API_URL=$API_URL"
 fi
 
-flutter build web --release --web-renderer canvaskit $EXTRA_DEFINES
+# NOTE: Flutter 3.29+ removed --web-renderer. Use the default renderer.
+# Disable PWA caching to avoid stale builds after deploys.
+flutter build web --release --pwa-strategy=none $EXTRA_DEFINES
 
 if [ $? -eq 0 ]; then
     echo ""

@@ -13,6 +13,8 @@ import 'screens/pricing_screen.dart';
 import 'screens/wallet_screen.dart';
 import 'screens/payment_methods_screen.dart';
 import 'screens/subscription_management_screen.dart';
+import 'screens/live_payments_gate_screen.dart';
+import 'screens/wallet_coming_soon_screen.dart';
 import 'providers/scraper_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
@@ -66,8 +68,23 @@ class MyApp extends StatelessWidget {
             ),
         '/forgot-password': (context) => const ForgotPasswordScreen(),
         '/pricing': (context) => const PricingScreen(),
-        '/wallet': (context) => const _ProtectedRoute(child: WalletScreen()),
-        '/payment-methods': (context) => const _ProtectedRoute(child: PaymentMethodsScreen()),
+        '/wallet': (context) => const _ProtectedRoute(
+              child: LivePaymentsGateScreen(
+                enabledChild: WalletScreen(enableLivePayments: true),
+                disabledChild: WalletComingSoonScreen(),
+              ),
+            ),
+        '/wallet-coming-soon': (context) =>
+            const _ProtectedRoute(child: WalletComingSoonScreen()),
+        '/wallet-request-credits': (context) => const _ProtectedRoute(
+              child: WalletScreen(enableLivePayments: false, initialTabIndex: 1),
+            ),
+        '/payment-methods': (context) => const _ProtectedRoute(
+              child: LivePaymentsGateScreen(
+                enabledChild: PaymentMethodsScreen(),
+                disabledChild: WalletComingSoonScreen(),
+              ),
+            ),
         '/subscription': (context) => const _ProtectedRoute(child: SubscriptionManagementScreen()),
       },
       onGenerateRoute: (settings) {

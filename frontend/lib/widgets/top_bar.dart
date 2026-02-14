@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
+import 'credit_pill.dart';
 
 class TopBar extends StatelessWidget {
   final String title;
@@ -125,61 +126,11 @@ class TopBar extends StatelessWidget {
   }
 
   Widget _buildCreditPill(BuildContext context) {
-    return GestureDetector(
+    return CreditPill(
+      balance: creditBalance,
+      loading: loadingCredits,
       onTap: () => Navigator.of(context).pushNamed('/wallet'),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: AppSpacing.xs,
-        ),
-        decoration: BoxDecoration(
-          color: AppColors.successGreen,
-          borderRadius: AppSpacing.borderRadiusRound,
-          border: Border.all(
-            color: AppColors.successGreen.withValues(alpha: 0.5),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.successGreen.withValues(alpha: 0.35),
-              blurRadius: 12,
-              spreadRadius: -6,
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.account_balance_wallet, size: 16, color: Colors.white),
-            const SizedBox(width: 6),
-            loadingCredits
-                ? const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  )
-                : Text(
-                    '$creditBalance Cr',
-                    style: AppTypography.labelSmall.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-            if (!loadingCredits) ...[
-              const SizedBox(width: 4),
-              GestureDetector(
-                onTap: onRefreshCredits,
-                child: const Icon(
-                  Icons.refresh_rounded,
-                  size: 14,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+      onRefresh: onRefreshCredits,
     );
   }
 

@@ -119,7 +119,7 @@ class SidebarNavigation extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [AppColors.primaryBlue, AppColors.primaryBlueLight]),
+              gradient: AppColors.primaryGradient,
               borderRadius: AppSpacing.borderRadiusMd,
               boxShadow: [
                 BoxShadow(
@@ -146,7 +146,7 @@ class SidebarNavigation extends StatelessWidget {
                 Text(
                   'Leads Pro',
                   style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.primaryBlueLight.withValues(alpha: 0.7),
+                    color: AppColors.primaryBlue.withValues(alpha: 0.7),
                     letterSpacing: 1.1,
                   ),
                 ),
@@ -178,7 +178,7 @@ class SidebarNavigation extends StatelessWidget {
             vertical: AppSpacing.sm,
           ),
           decoration: BoxDecoration(
-            gradient: isActive ? LinearGradient(colors: [AppColors.primaryBlue, AppColors.primaryBlueLight]) : null,
+            gradient: isActive ? AppColors.primaryGradient : null,
             borderRadius: AppSpacing.borderRadiusMd,
             border: isActive
                 ? Border(

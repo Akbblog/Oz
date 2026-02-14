@@ -27,6 +27,23 @@ class CoinbaseCommerceService:
         self.api_key = config.COINBASE_API_KEY
         self.webhook_secret = config.COINBASE_WEBHOOK_SECRET
 
+    @staticmethod
+    def _looks_placeholder(value: Optional[str]) -> bool:
+        v = (value or "").strip()
+        if not v:
+            return True
+        if v in ("...", "your_coinbase_api_key", "your_coinbase_webhook_secret"):
+            return True
+        if v.startswith("your_"):
+            return True
+        if "..." in v:
+            return True
+        return False
+
+    def _ensure_configured(self) -> None:
+        if self._looks_placeholder(self.api_key):
+            raise ValueError("Coinbase Commerce is not configured (missing COINBASE_API_KEY)")
+
     def _headers(self) -> Dict[str, str]:
         return {
             "X-CC-Api-Key": self.api_key,
@@ -44,6 +61,7 @@ class CoinbaseCommerceService:
         currency: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        self._ensure_configured()
         payload: Dict[str, Any] = {
             "name": name,
             "description": description,
@@ -63,6 +81,7 @@ class CoinbaseCommerceService:
         return resp.json()["data"]
 
     def get_charge(self, charge_id: str) -> Dict[str, Any]:
+        self._ensure_configured()
         resp = requests.get(
             f"{self.API_BASE}/charges/{charge_id}",
             headers=self._headers(),
@@ -76,7 +95,7 @@ class CoinbaseCommerceService:
         Verify Coinbase Commerce webhook signature (HMAC SHA256).
         Header: X-CC-Webhook-Signature
         """
-        if not self.webhook_secret:
+        if self._looks_placeholder(self.webhook_secret):
             return False
 
         expected = hmac.new(
@@ -85,4 +104,3 @@ class CoinbaseCommerceService:
             digestmod=hashlib.sha256,
         ).hexdigest()
         return hmac.compare_digest(expected, signature_header or "")
-

@@ -4,7 +4,7 @@
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0A1929",
-    "theme_color": "#6366F1",
+    "theme_color": "#2C5F6D",
     "description": "Global business lead discovery platform. Scrape Google Business listings from USA, UK, UAE, KSA, and Australia.",
     "categories": ["business", "productivity", "utilities"],
     "orientation": "portrait-primary",

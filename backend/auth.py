@@ -1,11 +1,16 @@
 """
 Authentication utilities
 """
+import logging
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 import os
+
+# passlib 1.7.x logs a noisy (but harmless) warning with bcrypt 4.x about version metadata.
+# Suppress it to keep production logs clean.
+logging.getLogger("passlib.handlers.bcrypt").setLevel(logging.ERROR)
 
 pwd_context = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
