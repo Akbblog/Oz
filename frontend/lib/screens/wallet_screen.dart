@@ -44,15 +44,17 @@ class _WalletScreenState extends State<WalletScreen>
   bool _loadingInvoices = false;
   bool _loadingCreditRequests = false;
 
-  late final List<String> _historyTabs =
-      widget.enableLivePayments ? const ['Credits', 'Payments', 'Invoices', 'Requests'] : const ['Credits', 'Requests'];
+  late final List<String> _historyTabs = widget.enableLivePayments
+      ? const ['Credits', 'Payments', 'Invoices', 'Requests']
+      : const ['Credits', 'Requests'];
 
   @override
   void initState() {
     super.initState();
     final tabCount = _historyTabs.length;
     final initialIndex = widget.initialTabIndex.clamp(0, tabCount - 1);
-    _tabController = TabController(length: tabCount, vsync: this, initialIndex: initialIndex);
+    _tabController = TabController(
+        length: tabCount, vsync: this, initialIndex: initialIndex);
     _tabController.addListener(_onTabChanged);
     _loadData();
   }
@@ -292,11 +294,12 @@ class _WalletScreenState extends State<WalletScreen>
                                                         .enableLivePayments
                                                     ? _navigateToPricing()
                                                     : _showCreditRequestDialog(),
-                                                onDismiss: () => setState(
-                                                    () => _alertDismissed = true),
+                                                onDismiss: () => setState(() =>
+                                                    _alertDismissed = true),
                                               ),
                                             _buildBalanceCard(),
-                                            const SizedBox(height: AppSpacing.md),
+                                            const SizedBox(
+                                                height: AppSpacing.md),
                                             SubscriptionStatusBanner(
                                               subscription: _subscription,
                                               onManage: () =>
@@ -311,11 +314,14 @@ class _WalletScreenState extends State<WalletScreen>
                                                   ? _navigateToPricing()
                                                   : _showCreditRequestDialog(),
                                             ),
-                                            const SizedBox(height: AppSpacing.lg),
+                                            const SizedBox(
+                                                height: AppSpacing.lg),
                                             _buildQuickActions(),
-                                            const SizedBox(height: AppSpacing.lg),
+                                            const SizedBox(
+                                                height: AppSpacing.lg),
                                             _buildHistoryHeader(),
-                                            const SizedBox(height: AppSpacing.md),
+                                            const SizedBox(
+                                                height: AppSpacing.md),
                                           ],
                                         ),
                                       ),
@@ -502,7 +508,9 @@ class _WalletScreenState extends State<WalletScreen>
           ),
           const SizedBox(height: AppSpacing.md),
           GestureDetector(
-            onTap: widget.enableLivePayments ? _navigateToPricing : _showCreditRequestDialog,
+            onTap: widget.enableLivePayments
+                ? _navigateToPricing
+                : _showCreditRequestDialog,
             child: Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.md,
@@ -522,7 +530,9 @@ class _WalletScreenState extends State<WalletScreen>
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    widget.enableLivePayments ? 'Buy Credits' : 'Request Credits',
+                    widget.enableLivePayments
+                        ? 'Buy Credits'
+                        : 'Request Credits',
                     style: AppTypography.labelLarge.copyWith(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
@@ -595,8 +605,7 @@ class _WalletScreenState extends State<WalletScreen>
             children: [
               for (int i = 0; i < cards.length; i++) ...[
                 Expanded(child: cards[i]),
-                if (i != cards.length - 1)
-                  const SizedBox(width: AppSpacing.sm),
+                if (i != cards.length - 1) const SizedBox(width: AppSpacing.sm),
               ],
             ],
           );
@@ -609,8 +618,7 @@ class _WalletScreenState extends State<WalletScreen>
             children: [
               for (int i = 0; i < cards.length; i++) ...[
                 SizedBox(width: cardWidth, child: cards[i]),
-                if (i != cards.length - 1)
-                  const SizedBox(width: AppSpacing.sm),
+                if (i != cards.length - 1) const SizedBox(width: AppSpacing.sm),
               ],
             ],
           ),
@@ -1208,193 +1216,388 @@ class _WalletScreenState extends State<WalletScreen>
 
     showDialog(
       context: context,
+      barrierColor: Colors.black54,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          backgroundColor: _WalletColors.surface,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+        builder: (context, setState) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xl,
+            vertical: AppSpacing.xxl,
           ),
-          title: Text(
-            'Request Credits',
-            style: AppTypography.titleMedium.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            decoration: BoxDecoration(
+              color: _WalletColors.surface,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 30,
+                  spreadRadius: -5,
+                ),
+              ],
             ),
-          ),
-          content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Amount (required)',
-                  style: AppTypography.labelMedium.copyWith(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
+                // Header with gradient accent
+                Container(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.xl,
+                    AppSpacing.lg,
+                    AppSpacing.xl,
+                    AppSpacing.md,
                   ),
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                TextField(
-                  controller: amountController,
-                  keyboardType: TextInputType.number,
-                  style: AppTypography.bodyMedium.copyWith(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Enter credits needed',
-                    hintStyle: AppTypography.bodyMedium
-                        .copyWith(color: Colors.white38),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        _WalletColors.primary.withValues(alpha: 0.12),
+                        Colors.transparent,
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                        color: _WalletColors.primary,
-                      ),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(20),
                     ),
                   ),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  'Reason (optional)',
-                  style: AppTypography.labelMedium.copyWith(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              _WalletColors.primary.withValues(alpha: 0.3),
+                              _WalletColors.primary.withValues(alpha: 0.15),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _WalletColors.primary.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.toll_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Request Credits',
+                              style: AppTypography.titleMedium.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'An admin will review your request',
+                              style: AppTypography.bodySmall.copyWith(
+                                color: Colors.white38,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: isSubmitting
+                            ? null
+                            : () => Navigator.pop(dialogContext),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.close_rounded,
+                            color: Colors.white38,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: AppSpacing.xs),
-                TextField(
-                  controller: reasonController,
-                  maxLines: 3,
-                  style: AppTypography.bodyMedium.copyWith(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Why do you need more credits?',
-                    hintStyle: AppTypography.bodyMedium
-                        .copyWith(color: Colors.white38),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
+                // Divider
+                Container(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.06),
+                ),
+                // Form content
+                Padding(
+                  padding: const EdgeInsets.all(AppSpacing.xl),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Amount',
+                        style: AppTypography.labelMedium.copyWith(
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
+                      const SizedBox(height: AppSpacing.xs),
+                      TextField(
+                        controller: amountController,
+                        keyboardType: TextInputType.number,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: Colors.white,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'How many credits do you need?',
+                          hintStyle: AppTypography.bodyMedium.copyWith(
+                            color: Colors.white24,
+                          ),
+                          prefixIcon: Padding(
+                            padding: const EdgeInsets.only(left: 12, right: 8),
+                            child: Icon(
+                              Icons.stars_rounded,
+                              color:
+                                  _WalletColors.primary.withValues(alpha: 0.7),
+                              size: 20,
+                            ),
+                          ),
+                          prefixIconConstraints: const BoxConstraints(
+                            minWidth: 40,
+                            minHeight: 0,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.04),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.1),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color:
+                                  _WalletColors.primary.withValues(alpha: 0.6),
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 14,
+                          ),
+                        ),
                       ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                        color: _WalletColors.primary,
+                      const SizedBox(height: AppSpacing.md),
+                      Text(
+                        'Reason (optional)',
+                        style: AppTypography.labelMedium.copyWith(
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
+                      const SizedBox(height: AppSpacing.xs),
+                      TextField(
+                        controller: reasonController,
+                        maxLines: 3,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: Colors.white,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'Tell us why you need more credits...',
+                          hintStyle: AppTypography.bodyMedium.copyWith(
+                            color: Colors.white24,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.04),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.1),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color:
+                                  _WalletColors.primary.withValues(alpha: 0.6),
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 14,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.xl),
+                      // Action buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 46,
+                              child: OutlinedButton(
+                                onPressed: isSubmitting
+                                    ? null
+                                    : () => Navigator.pop(dialogContext),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.1),
+                                  ),
+                                  foregroundColor: Colors.white54,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Cancel',
+                                  style: AppTypography.labelMedium.copyWith(
+                                    color: Colors.white54,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            flex: 2,
+                            child: SizedBox(
+                              height: 46,
+                              child: ElevatedButton.icon(
+                                onPressed: isSubmitting
+                                    ? null
+                                    : () async {
+                                        final amount =
+                                            int.tryParse(amountController.text);
+                                        if (amount == null || amount <= 0) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                  'Please enter a valid amount'),
+                                              backgroundColor:
+                                                  AppColors.dangerRed,
+                                            ),
+                                          );
+                                          return;
+                                        }
+
+                                        setState(() => isSubmitting = true);
+
+                                        try {
+                                          await _apiService.requestCredits(
+                                            amount: amount,
+                                            reason:
+                                                reasonController.text.isEmpty
+                                                    ? null
+                                                    : reasonController.text,
+                                          );
+
+                                          if (mounted) {
+                                            Navigator.pop(context);
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                    'Credit request submitted successfully'),
+                                                backgroundColor:
+                                                    AppColors.successGreen,
+                                              ),
+                                            );
+
+                                            await Future.delayed(const Duration(
+                                                milliseconds: 1500));
+                                            if (mounted) {
+                                              Navigator.of(context)
+                                                  .pushNamedAndRemoveUntil(
+                                                '/home',
+                                                (route) => false,
+                                              );
+                                            }
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            setState(
+                                                () => isSubmitting = false);
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                    'Failed to submit request: $e'),
+                                                backgroundColor:
+                                                    AppColors.dangerRed,
+                                              ),
+                                            );
+                                          }
+                                        }
+                                      },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _WalletColors.primary,
+                                  foregroundColor: Colors.white,
+                                  disabledBackgroundColor: _WalletColors.primary
+                                      .withValues(alpha: 0.4),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                icon: isSubmitting
+                                    ? SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              const AlwaysStoppedAnimation<
+                                                  Color>(Colors.white),
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.send_rounded,
+                                        size: 18,
+                                      ),
+                                label: Text(
+                                  isSubmitting
+                                      ? 'Submitting...'
+                                      : 'Submit Request',
+                                  style: AppTypography.labelLarge.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: isSubmitting ? null : () => Navigator.pop(context),
-              child: Text(
-                'Cancel',
-                style: AppTypography.labelMedium.copyWith(
-                  color: Colors.white70,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: isSubmitting
-                  ? null
-                  : () async {
-                      final amount = int.tryParse(amountController.text);
-                      if (amount == null || amount <= 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Please enter a valid amount'),
-                            backgroundColor: Color(0xFFEF4444),
-                          ),
-                        );
-                        return;
-                      }
-
-                      setState(() => isSubmitting = true);
-
-                      try {
-                        await _apiService.requestCredits(
-                          amount: amount,
-                          reason: reasonController.text.isEmpty
-                              ? null
-                              : reasonController.text,
-                        );
-
-                        if (mounted) {
-                          Navigator.pop(context);
-                          await _loadData();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content:
-                                  Text('Credit request submitted successfully'),
-                              backgroundColor: AppColors.successGreen,
-                            ),
-                          );
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          setState(() => isSubmitting = false);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Failed to submit request: $e'),
-                              backgroundColor: AppColors.dangerRed,
-                            ),
-                          );
-                        }
-                      }
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _WalletColors.primary,
-                disabledBackgroundColor:
-                    _WalletColors.primary.withValues(alpha: 0.5),
-              ),
-              child: isSubmitting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : Text(
-                      'Submit Request',
-                      style: AppTypography.labelMedium.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-            ),
-          ],
         ),
       ),
     );

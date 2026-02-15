@@ -351,8 +351,10 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       builder: (sheetContext) {
         return SafeArea(
           child: Container(
-            margin: const EdgeInsets.all(AppSpacing.md),
-            padding: const EdgeInsets.all(AppSpacing.lg),
+            margin: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.sm,
+            ),
             decoration: BoxDecoration(
               color: _ScrapeColors.card,
               borderRadius: AppSpacing.borderRadiusXl,
@@ -360,96 +362,201 @@ class _ScrapingScreenState extends State<ScrapingScreen>
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(AppSpacing.sm),
-                      decoration: BoxDecoration(
-                        color: _ScrapeColors.primary.withValues(alpha: 0.2),
-                        borderRadius: AppSpacing.borderRadiusMd,
-                      ),
-                      child:
-                          const Icon(Icons.lock_rounded, color: Colors.white),
+                // Top accent bar
+                Container(
+                  height: 4,
+                  margin: const EdgeInsets.symmetric(horizontal: 40),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        _ScrapeColors.primary.withValues(alpha: 0.0),
+                        _ScrapeColors.primary,
+                        _ScrapeColors.primary.withValues(alpha: 0.0),
+                      ],
                     ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: Text(
-                        'Sign in required',
-                        style: AppTypography.titleLarge.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(24),
                     ),
-                  ],
-                ),
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  'You can explore cities and search setup freely. To start a live scraping job and use credits, please sign in or create an account.',
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: Colors.white70,
-                    height: 1.4,
                   ),
                 ),
-                const SizedBox(height: AppSpacing.lg),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(sheetContext),
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.2),
-                          ),
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('Not now'),
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          Navigator.pop(sheetContext);
-                          await _saveSearchDraft(showFeedback: false);
-                          if (!mounted) return;
-                          await Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const RegisterScreen(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.xl,
+                    AppSpacing.lg,
+                    AppSpacing.xl,
+                    AppSpacing.xl,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Icon + Title
+                      Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  _ScrapeColors.primary.withValues(alpha: 0.3),
+                                  _ScrapeColors.primary.withValues(alpha: 0.15),
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: _ScrapeColors.primary
+                                    .withValues(alpha: 0.3),
+                              ),
                             ),
-                          );
-                        },
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(
-                            color:
-                                _ScrapeColors.primary.withValues(alpha: 0.55),
+                            child: const Icon(
+                              Icons.lock_outline_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
                           ),
-                          foregroundColor: Colors.white,
-                        ),
-                        icon: const Icon(Icons.person_add_rounded, size: 18),
-                        label: const Text('Sign up'),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Sign in required',
+                                  style: AppTypography.titleLarge.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Account needed to continue',
+                                  style: AppTypography.bodySmall.copyWith(
+                                    color: Colors.white38,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () async {
-                          Navigator.pop(sheetContext);
-                          await _saveSearchDraft(showFeedback: false);
-                          if (!mounted) return;
-                          Navigator.of(context).pushNamed('/login');
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _ScrapeColors.primary,
-                          foregroundColor: Colors.white,
-                        ),
-                        icon: const Icon(Icons.login_rounded, size: 18),
-                        label: const Text('Sign in'),
+                      const SizedBox(height: AppSpacing.md),
+                      // Divider
+                      Container(
+                        height: 1,
+                        color: Colors.white.withValues(alpha: 0.06),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: AppSpacing.md),
+                      // Description
+                      Text(
+                        'You can explore cities and search setup freely. To start a live scraping job and use credits, please sign in or create an account.',
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: Colors.white60,
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.xl),
+                      // Primary action - Sign in
+                      SizedBox(
+                        height: 48,
+                        child: ElevatedButton.icon(
+                          onPressed: () async {
+                            Navigator.pop(sheetContext);
+                            await _saveSearchDraft(showFeedback: false);
+                            if (!mounted) return;
+                            Navigator.of(context).pushNamed('/login');
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _ScrapeColors.primary,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          icon: const Icon(Icons.login_rounded, size: 18),
+                          label: Text(
+                            'Sign in to continue',
+                            style: AppTypography.labelLarge.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      // Secondary actions row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 44,
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.pop(sheetContext),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.12),
+                                  ),
+                                  foregroundColor: Colors.white60,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Not now',
+                                  style: AppTypography.labelMedium.copyWith(
+                                    color: Colors.white54,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: SizedBox(
+                              height: 44,
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  Navigator.pop(sheetContext);
+                                  await _saveSearchDraft(showFeedback: false);
+                                  if (!mounted) return;
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          const RegisterScreen(),
+                                    ),
+                                  );
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(
+                                    color: _ScrapeColors.primary
+                                        .withValues(alpha: 0.4),
+                                  ),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                icon: const Icon(
+                                  Icons.person_add_outlined,
+                                  size: 16,
+                                ),
+                                label: Text(
+                                  'Create account',
+                                  style: AppTypography.labelMedium.copyWith(
+                                    color: Colors.white70,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

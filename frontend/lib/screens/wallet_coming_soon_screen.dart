@@ -31,182 +31,388 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
 
     showDialog(
       context: context,
+      barrierColor: Colors.black54,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          backgroundColor: AppColors.surfaceDark,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+        builder: (context, setState) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xl,
+            vertical: AppSpacing.xxl,
           ),
-          title: Text(
-            'Request Credits',
-            style: AppTypography.titleMedium.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 30,
+                  spreadRadius: -5,
+                ),
+              ],
             ),
-          ),
-          content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Amount (required)',
-                  style: AppTypography.labelMedium.copyWith(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
+                // Header with gradient accent
+                Container(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.xl,
+                    AppSpacing.lg,
+                    AppSpacing.xl,
+                    AppSpacing.md,
                   ),
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                TextField(
-                  controller: amountController,
-                  keyboardType: TextInputType.number,
-                  style: AppTypography.bodyMedium.copyWith(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Enter credits needed',
-                    hintStyle: AppTypography.bodyMedium.copyWith(
-                      color: Colors.white38,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.primaryBlue.withValues(alpha: 0.12),
+                        Colors.transparent,
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
                     ),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                        color: AppColors.primaryBlue,
-                      ),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(20),
                     ),
                   ),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  'Reason (optional)',
-                  style: AppTypography.labelMedium.copyWith(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              AppColors.primaryBlue.withValues(alpha: 0.3),
+                              AppColors.primaryBlue.withValues(alpha: 0.15),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.toll_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Request Credits',
+                              style: AppTypography.titleMedium.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'An admin will review your request',
+                              style: AppTypography.bodySmall.copyWith(
+                                color: Colors.white38,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: isSubmitting
+                            ? null
+                            : () => Navigator.pop(dialogContext),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.close_rounded,
+                            color: Colors.white38,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: AppSpacing.xs),
-                TextField(
-                  controller: reasonController,
-                  maxLines: 3,
-                  style: AppTypography.bodyMedium.copyWith(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Why do you need more credits?',
-                    hintStyle: AppTypography.bodyMedium.copyWith(
-                      color: Colors.white38,
-                    ),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
+                // Divider
+                Container(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.06),
+                ),
+                // Form content
+                Padding(
+                  padding: const EdgeInsets.all(AppSpacing.xl),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Amount',
+                        style: AppTypography.labelMedium.copyWith(
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
+                      const SizedBox(height: AppSpacing.xs),
+                      TextField(
+                        controller: amountController,
+                        keyboardType: TextInputType.number,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: Colors.white,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'How many credits do you need?',
+                          hintStyle: AppTypography.bodyMedium.copyWith(
+                            color: Colors.white24,
+                          ),
+                          prefixIcon: Padding(
+                            padding: const EdgeInsets.only(left: 12, right: 8),
+                            child: Icon(
+                              Icons.stars_rounded,
+                              color:
+                                  AppColors.primaryBlue.withValues(alpha: 0.7),
+                              size: 20,
+                            ),
+                          ),
+                          prefixIconConstraints: const BoxConstraints(
+                            minWidth: 40,
+                            minHeight: 0,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.04),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.1),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color:
+                                  AppColors.primaryBlue.withValues(alpha: 0.6),
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 14,
+                          ),
+                        ),
                       ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                        color: AppColors.primaryBlue,
+                      const SizedBox(height: AppSpacing.md),
+                      Text(
+                        'Reason (optional)',
+                        style: AppTypography.labelMedium.copyWith(
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
+                      const SizedBox(height: AppSpacing.xs),
+                      TextField(
+                        controller: reasonController,
+                        maxLines: 3,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: Colors.white,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'Tell us why you need more credits...',
+                          hintStyle: AppTypography.bodyMedium.copyWith(
+                            color: Colors.white24,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.04),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.1),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color:
+                                  AppColors.primaryBlue.withValues(alpha: 0.6),
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 14,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.xl),
+                      // Action buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 46,
+                              child: OutlinedButton(
+                                onPressed: isSubmitting
+                                    ? null
+                                    : () => Navigator.pop(dialogContext),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.1),
+                                  ),
+                                  foregroundColor: Colors.white54,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Cancel',
+                                  style: AppTypography.labelMedium.copyWith(
+                                    color: Colors.white54,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            flex: 2,
+                            child: SizedBox(
+                              height: 46,
+                              child: ElevatedButton.icon(
+                                onPressed: isSubmitting
+                                    ? null
+                                    : () async {
+                                        final amount =
+                                            int.tryParse(amountController.text);
+                                        if (amount == null || amount <= 0) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                  'Please enter a valid amount'),
+                                              backgroundColor:
+                                                  AppColors.dangerRed,
+                                            ),
+                                          );
+                                          return;
+                                        }
+
+                                        setState(() => isSubmitting = true);
+                                        final messenger =
+                                            ScaffoldMessenger.of(this.context);
+                                        final navigator =
+                                            Navigator.of(dialogContext);
+
+                                        try {
+                                          await _apiService.requestCredits(
+                                            amount: amount,
+                                            reason: reasonController.text
+                                                    .trim()
+                                                    .isEmpty
+                                                ? null
+                                                : reasonController.text.trim(),
+                                          );
+
+                                          if (!mounted) return;
+                                          navigator.pop();
+
+                                          messenger.showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                  'Credit request submitted successfully'),
+                                              backgroundColor:
+                                                  AppColors.successGreen,
+                                            ),
+                                          );
+
+                                          await Future.delayed(const Duration(
+                                              milliseconds: 1500));
+                                          if (!mounted) return;
+                                          Navigator.of(this.context)
+                                              .pushNamedAndRemoveUntil(
+                                            '/home',
+                                            (route) => false,
+                                          );
+                                        } catch (e) {
+                                          if (!mounted) return;
+                                          setState(() => isSubmitting = false);
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                  'Failed to submit request: $e'),
+                                              backgroundColor:
+                                                  AppColors.dangerRed,
+                                            ),
+                                          );
+                                        }
+                                      },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primaryBlue,
+                                  foregroundColor: Colors.white,
+                                  disabledBackgroundColor: AppColors.primaryBlue
+                                      .withValues(alpha: 0.4),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                icon: isSubmitting
+                                    ? SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              const AlwaysStoppedAnimation<
+                                                  Color>(Colors.white),
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.send_rounded,
+                                        size: 18,
+                                      ),
+                                label: Text(
+                                  isSubmitting
+                                      ? 'Submitting...'
+                                      : 'Submit Request',
+                                  style: AppTypography.labelLarge.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed:
-                  isSubmitting ? null : () => Navigator.pop(dialogContext),
-              child: Text(
-                'Cancel',
-                style: AppTypography.labelMedium.copyWith(
-                  color: Colors.white70,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: isSubmitting
-                  ? null
-                  : () async {
-                      final amount = int.tryParse(amountController.text);
-                      if (amount == null || amount <= 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Please enter a valid amount'),
-                            backgroundColor: AppColors.dangerRed,
-                          ),
-                        );
-                        return;
-                      }
-
-                      setState(() => isSubmitting = true);
-                      final messenger = ScaffoldMessenger.of(this.context);
-                      final navigator = Navigator.of(dialogContext);
-
-                      try {
-                        await _apiService.requestCredits(
-                          amount: amount,
-                          reason: reasonController.text.trim().isEmpty
-                              ? null
-                              : reasonController.text.trim(),
-                        );
-
-                        if (!mounted) return;
-                        navigator.pop();
-                        await _load();
-                        if (!mounted) return;
-
-                        messenger.showSnackBar(
-                          const SnackBar(
-                            content:
-                                Text('Credit request submitted successfully'),
-                            backgroundColor: AppColors.successGreen,
-                          ),
-                        );
-                      } catch (e) {
-                        if (!mounted) return;
-                        setState(() => isSubmitting = false);
-                        messenger.showSnackBar(
-                          SnackBar(
-                            content: Text('Failed to submit request: $e'),
-                            backgroundColor: AppColors.dangerRed,
-                          ),
-                        );
-                      }
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryBlue,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Submit'),
-            ),
-          ],
         ),
       ),
     );
@@ -267,116 +473,192 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
       body: SafeArea(
-        child: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: AppColors.primaryBlue),
-              )
-            : RefreshIndicator(
-                onRefresh: _load,
-                color: AppColors.primaryBlue,
-                child: SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: EdgeInsets.all(padding),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildHeader(),
-                      const SizedBox(height: AppSpacing.lg),
-                      _buildBalanceCard(),
-                      const SizedBox(height: AppSpacing.lg),
-                      _buildComingSoonBanner(),
-                      const SizedBox(height: AppSpacing.lg),
-                      _buildPaymentMethodsGrid(layoutType),
-                      const SizedBox(height: AppSpacing.lg),
-                      _buildRequestCreditsCard(),
-                      const SizedBox(height: AppSpacing.xl),
+        child: Stack(
+          children: [
+            // Background gradient
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    colors: [
+                      AppColors.primaryBlue.withValues(alpha: 0.15),
+                      Colors.transparent,
                     ],
+                    radius: 1.5,
+                    center: const Alignment(0, -1.5),
                   ),
                 ),
               ),
+            ),
+            Column(
+              children: [
+                _buildHeader(),
+                Expanded(
+                  child: _loading
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.primaryBlue,
+                          ),
+                        )
+                      : RefreshIndicator(
+                          onRefresh: _load,
+                          color: AppColors.primaryBlue,
+                          child: SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: EdgeInsets.all(padding),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _buildBalanceCard(),
+                                const SizedBox(height: AppSpacing.md),
+                                _buildComingSoonBanner(),
+                                const SizedBox(height: AppSpacing.lg),
+                                _buildPaymentMethodsSection(layoutType),
+                                const SizedBox(height: AppSpacing.lg),
+                                _buildRequestCreditsCard(),
+                                const SizedBox(height: AppSpacing.xl),
+                              ],
+                            ),
+                          ),
+                        ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildHeader() {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: () {
-            if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-          },
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundDark.withValues(alpha: 0.8),
+        border: Border(
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
         ),
-        Expanded(
-          child: Text(
-            'Billing & Payments',
-            textAlign: TextAlign.center,
-            style: AppTypography.titleMedium.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () {
+              if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+            },
+            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          ),
+          Expanded(
+            child: Text(
+              'Billing & Payments',
+              textAlign: TextAlign.center,
+              style: AppTypography.titleMedium.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
-        ),
-        IconButton(
-          tooltip: 'Refresh',
-          onPressed: _load,
-          icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-        ),
-      ],
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildBalanceCard() {
     return Container(
-      padding: AppSpacing.paddingLg,
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
-        gradient: AppColors.primaryGradient,
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primaryBlue.withValues(alpha: 0.35),
+            AppColors.primaryBlueDark.withValues(alpha: 0.2),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(
+          color: AppColors.primaryBlue.withValues(alpha: 0.4),
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primaryBlue.withValues(alpha: 0.28),
-            blurRadius: 22,
-            spreadRadius: -10,
+            color: AppColors.primaryBlue.withValues(alpha: 0.2),
+            blurRadius: 24,
+            spreadRadius: -8,
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'CURRENT BALANCE',
-            style: AppTypography.labelSmall.copyWith(
-              color: Colors.white70,
-              letterSpacing: 1.2,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              const Icon(Icons.account_balance_wallet_rounded,
-                  color: Colors.white, size: 22),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.account_balance_wallet_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ),
               const SizedBox(width: AppSpacing.sm),
+              Text(
+                'CURRENT BALANCE',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white60,
+                  letterSpacing: 1.2,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
               Text(
                 '$_creditBalance',
                 style: AppTypography.displaySmall.copyWith(
                   color: Colors.white,
                   fontWeight: FontWeight.w800,
+                  fontSize: 40,
                 ),
               ),
-              const SizedBox(width: AppSpacing.xs),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'credits',
-                  style: AppTypography.bodyMedium.copyWith(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w700,
-                  ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                'credits',
+                style: AppTypography.bodyLarge.copyWith(
+                  color: Colors.white54,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // Balance indicator bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              minHeight: 4,
+              value: _creditBalance > 0
+                  ? (_creditBalance / 500).clamp(0.0, 1.0)
+                  : 0.0,
+              backgroundColor: Colors.white.withValues(alpha: 0.1),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white70),
+            ),
           ),
         ],
       ),
@@ -398,34 +680,219 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
         _enableLivePayments ? AppColors.successGreen : AppColors.warningYellow;
 
     return Container(
-      padding: AppSpacing.paddingMd,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        color: color.withValues(alpha: 0.08),
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 22),
+          Icon(icon, color: color, size: 18),
           const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              '$title - $subtitle',
+              style: AppTypography.bodySmall.copyWith(
+                color: Colors.white70,
+                height: 1.4,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaymentMethodsSection(LayoutType layoutType) {
+    final methods = _methods.isEmpty
+        ? const <String>['stripe', 'paypal', 'coinbase']
+        : _methods;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.credit_card_rounded,
+              color: Colors.white54,
+              size: 18,
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              'Payment Methods',
+              style: AppTypography.titleSmall.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.warningYellow.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: AppColors.warningYellow.withValues(alpha: 0.3),
+                ),
+              ),
+              child: Text(
+                'Coming soon',
+                style: AppTypography.labelSmall.copyWith(
+                  color: AppColors.warningYellow,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        ...methods.map((method) {
+          final spec = _methodSpec(method);
+          return _methodListTile(spec);
+        }),
+      ],
+    );
+  }
+
+  _MethodSpec _methodSpec(String method) {
+    final m = method.trim().toLowerCase();
+    switch (m) {
+      case 'stripe':
+        return _MethodSpec(
+          name: 'Stripe',
+          description: 'Credit & debit cards',
+          assetPath: 'assets/icons/stripe.svg',
+          icon: Icons.credit_card_rounded,
+          color: const Color(0xFF635BFF),
+        );
+      case 'paypal':
+        return _MethodSpec(
+          name: 'PayPal',
+          description: 'PayPal account',
+          assetPath: 'assets/icons/paypal.svg',
+          icon: Icons.account_balance_wallet_outlined,
+          color: const Color(0xFF0070BA),
+        );
+      case 'coinbase':
+        return _MethodSpec(
+          name: 'Coinbase',
+          description: 'Cryptocurrency',
+          assetPath: 'assets/icons/coinbase.svg',
+          icon: Icons.currency_bitcoin_rounded,
+          color: const Color(0xFF0052FF),
+        );
+      case 'bank':
+      case 'bank_transfer':
+        return _MethodSpec(
+          name: 'Bank Transfer',
+          description: 'Direct bank payment',
+          icon: Icons.account_balance_rounded,
+          color: const Color(0xFF4CAF50),
+        );
+      default:
+        return _MethodSpec(
+          name: method.trim().isEmpty ? 'Payment' : method.trim(),
+          description: 'Payment method',
+          icon: Icons.lock_clock_rounded,
+          color: AppColors.primaryBlue,
+        );
+    }
+  }
+
+  Widget _methodListTile(_MethodSpec spec) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.elevatedCardDark.withValues(alpha: 0.6),
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Row(
+        children: [
+          // Icon container with brand color accent
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: spec.color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: spec.color.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Center(
+              child: spec.assetPath != null
+                  ? SvgPicture.asset(
+                      spec.assetPath!,
+                      width: 22,
+                      height: 22,
+                      colorFilter: ColorFilter.mode(
+                        spec.color,
+                        BlendMode.srcIn,
+                      ),
+                    )
+                  : Icon(spec.icon, color: spec.color, size: 22),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          // Name and description
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
-                  style: AppTypography.titleSmall.copyWith(
+                  spec.name,
+                  style: AppTypography.labelLarge.copyWith(
                     color: Colors.white,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
-                  subtitle,
+                  spec.description,
                   style: AppTypography.bodySmall.copyWith(
-                    color: Colors.white70,
-                    height: 1.4,
+                    color: Colors.white38,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Status chip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: AppColors.warningYellow.withValues(alpha: 0.7),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Soon',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white38,
+                    fontSize: 10,
                   ),
                 ),
               ],
@@ -436,140 +903,41 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     );
   }
 
-  Widget _buildPaymentMethodsGrid(LayoutType layoutType) {
-    final methods = _methods.isEmpty
-        ? const <String>['stripe', 'paypal', 'coinbase']
-        : _methods;
-
-    final crossAxisCount = layoutType == LayoutType.mobile ? 2 : 4;
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: methods.length,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        crossAxisSpacing: AppSpacing.sm,
-        mainAxisSpacing: AppSpacing.sm,
-        childAspectRatio: 1.05,
-      ),
-      itemBuilder: (context, index) {
-        final method = methods[index];
-        final spec = _methodSpec(method);
-        return _methodCard(spec);
-      },
-    );
-  }
-
-  _MethodSpec _methodSpec(String method) {
-    final m = method.trim().toLowerCase();
-    switch (m) {
-      case 'stripe':
-        return const _MethodSpec(
-          name: 'Stripe',
-          assetPath: 'assets/icons/stripe.svg',
-          icon: Icons.payment_rounded,
-          color: Color(0xFF635BFF),
-        );
-      case 'paypal':
-        return const _MethodSpec(
-          name: 'PayPal',
-          assetPath: 'assets/icons/paypal.svg',
-          icon: Icons.payments_rounded,
-          color: Color(0xFF003087),
-        );
-      case 'coinbase':
-        return const _MethodSpec(
-          name: 'Coinbase',
-          assetPath: 'assets/icons/coinbase.svg',
-          icon: Icons.currency_bitcoin_rounded,
-          color: Color(0xFF1652F0),
-        );
-      case 'bank':
-      case 'bank_transfer':
-        return const _MethodSpec(
-          name: 'Bank Transfer',
-          icon: Icons.account_balance_rounded,
-          color: Color(0xFF4CAF50),
-        );
-      default:
-        return _MethodSpec(
-          name: method.trim().isEmpty ? 'Payment' : method.trim(),
-          icon: Icons.lock_clock_rounded,
-          color: AppColors.primaryBlue,
-        );
-    }
-  }
-
-  Widget _methodCard(_MethodSpec spec) {
-    return Container(
-      padding: AppSpacing.paddingMd,
-      decoration: BoxDecoration(
-        color: spec.color.withValues(alpha: 0.10),
-        borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: spec.color.withValues(alpha: 0.30)),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: spec.color.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: spec.color.withValues(alpha: 0.28)),
-            ),
-            child: Center(
-              child: spec.assetPath != null
-                  ? SvgPicture.asset(
-                      spec.assetPath!,
-                      width: 22,
-                      height: 22,
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
-                      ),
-                    )
-                  : Icon(spec.icon, color: Colors.white, size: 22),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            spec.name,
-            style: AppTypography.labelMedium.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Coming soon',
-            style: AppTypography.labelSmall.copyWith(color: Colors.white54),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildRequestCreditsCard() {
     return Container(
-      padding: AppSpacing.paddingLg,
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        color: AppColors.elevatedCardDark,
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primaryBlue.withValues(alpha: 0.1),
+            AppColors.primaryBlueDark.withValues(alpha: 0.05),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        border: Border.all(
+          color: AppColors.primaryBlue.withValues(alpha: 0.2),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(Icons.trending_up_rounded,
-                  color: AppColors.successGreen, size: 20),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.bolt_rounded,
+                  color: AppColors.primaryBlueLight,
+                  size: 22,
+                ),
+              ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
@@ -582,11 +950,11 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
                       'Request credits from admins while live payments are rolling out.',
                       style: AppTypography.bodySmall.copyWith(
-                        color: Colors.white70,
+                        color: Colors.white54,
                         height: 1.4,
                       ),
                     ),
@@ -598,9 +966,9 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
           const SizedBox(height: AppSpacing.md),
           GradientButton(
             text: 'Request Credits',
-            icon: Icons.arrow_forward_rounded,
+            icon: Icons.send_rounded,
             expanded: true,
-            height: 52,
+            height: 48,
             onPressed: _showCreditRequestDialog,
           ),
         ],
@@ -611,12 +979,14 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
 
 class _MethodSpec {
   final String name;
+  final String description;
   final String? assetPath;
   final IconData icon;
   final Color color;
 
   const _MethodSpec({
     required this.name,
+    this.description = '',
     this.assetPath,
     required this.icon,
     required this.color,
