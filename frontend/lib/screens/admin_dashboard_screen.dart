@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -11,6 +10,7 @@ import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_breakpoints.dart';
+import '../widgets/brand_mark.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -214,8 +214,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
               child: Text(
                 'Deny',
-                style:
-                    AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+                style: AppTypography.labelLarge
+                    .copyWith(fontWeight: FontWeight.w800),
               ),
             ),
           ],
@@ -328,7 +328,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   'User #${user['id']}',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white60),
                 ),
                 const SizedBox(height: AppSpacing.md),
                 TextField(
@@ -381,7 +382,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   onChanged: (value) => setDialogState(() => isAdmin = value),
                   title: Text(
                     'Admin Access',
-                    style: AppTypography.bodyMedium.copyWith(color: Colors.white),
+                    style:
+                        AppTypography.bodyMedium.copyWith(color: Colors.white),
                   ),
                   activeThumbColor: AppColors.brandPurple,
                   contentPadding: EdgeInsets.zero,
@@ -523,7 +525,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       builder: (context) {
         return AlertDialog(
           backgroundColor: AppColors.surfaceDark,
-          shape: RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
+          shape:
+              RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
           title: Text(
             'Deny selected requests?',
             style: AppTypography.titleMedium.copyWith(
@@ -549,11 +552,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   fillColor: AppColors.elevatedCardDark,
                   border: OutlineInputBorder(
                     borderRadius: AppSpacing.borderRadiusMd,
-                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                    borderSide:
+                        BorderSide(color: Colors.white.withValues(alpha: 0.08)),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: AppSpacing.borderRadiusMd,
-                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                    borderSide:
+                        BorderSide(color: Colors.white.withValues(alpha: 0.08)),
                   ),
                 ),
               ),
@@ -575,7 +580,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
               child: Text(
                 'Deny',
-                style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+                style: AppTypography.labelLarge
+                    .copyWith(fontWeight: FontWeight.w800),
               ),
             ),
           ],
@@ -591,8 +597,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     setState(() => _bulkActionInProgress = true);
     try {
       final ids = _selectedCreditRequestIds.toList()..sort();
-      final note = noteController.text.trim().isEmpty ? null : noteController.text.trim();
-      final result = await _apiService.bulkDenyCreditRequests(ids, adminNote: note);
+      final note = noteController.text.trim().isEmpty
+          ? null
+          : noteController.text.trim();
+      final result =
+          await _apiService.bulkDenyCreditRequests(ids, adminNote: note);
       final denied = result['denied'] ?? 0;
       final skipped = result['skipped'] ?? 0;
       _showSnackBar(
@@ -668,6 +677,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       ),
     );
   }
+
   Widget _buildBackgroundPattern() {
     return Positioned.fill(
       child: CustomPaint(
@@ -696,19 +706,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppColors.brandPurple, AppColors.discoveryPurpleDark],
-              ),
+              gradient: AppColors.primaryGradient,
               borderRadius: AppSpacing.borderRadiusMd,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.brandPurple.withValues(alpha: 0.2),
+                  color: AppColors.primaryBlue.withValues(alpha: 0.2),
                   blurRadius: 12,
                   spreadRadius: -6,
                 ),
               ],
             ),
-            child: const Icon(Icons.all_inclusive, color: Colors.white),
+            child: const Center(
+              child: BrandMark(
+                tiled: false,
+                size: 22,
+                hoverGlow: true,
+              ),
+            ),
           ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
@@ -891,7 +905,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         ),
         child: Column(
           children: [
-            Icon(icon, size: 18, color: isSelected ? Colors.white : Colors.white54),
+            Icon(icon,
+                size: 18, color: isSelected ? Colors.white : Colors.white54),
             const SizedBox(height: 4),
             Text(
               label,
@@ -905,6 +920,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       ),
     );
   }
+
   Widget _buildStatsView(LayoutType layoutType) {
     if (_stats == null) {
       return Center(
@@ -936,9 +952,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             physics: const NeverScrollableScrollPhysics(),
             crossAxisSpacing: AppSpacing.sm,
             mainAxisSpacing: AppSpacing.sm,
-            childAspectRatio: layoutType.index >= LayoutType.desktopSmall.index
-                ? 1.5
-                : 1.15,
+            childAspectRatio:
+                layoutType.index >= LayoutType.desktopSmall.index ? 1.5 : 1.15,
             children: [
               _buildStatCard(
                 'Total Users',
@@ -1021,10 +1036,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       if (_creditRequests.isEmpty)
                         _buildEmptyCard('No credit requests')
                       else
-                        ..._creditRequests
-                            .take(3)
-                            .map(_buildCreditRequestCard)
-                            ,
+                        ..._creditRequests.take(3).map(_buildCreditRequestCard),
                     ],
                   ),
                 ),
@@ -1080,7 +1092,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color accent) {
+  Widget _buildStatCard(
+      String title, String value, IconData icon, Color accent) {
     return Container(
       padding: AppSpacing.paddingMd,
       decoration: BoxDecoration(
@@ -1104,7 +1117,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
               if (title == 'Pending')
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: accent.withValues(alpha: 0.15),
                     borderRadius: AppSpacing.borderRadiusSm,
@@ -1139,6 +1153,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       ),
     );
   }
+
   Widget _buildUserPreview(Map<String, dynamic> user) {
     final approvalState = _getApprovalState(user);
     final isApproved = approvalState == 'approved';
@@ -1269,8 +1284,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       );
     }
 
-    final pendingUsers =
-        _users.where((u) => _getApprovalState(u) == 'pending').toList(growable: false);
+    final pendingUsers = _users
+        .where((u) => _getApprovalState(u) == 'pending')
+        .toList(growable: false);
 
     return Column(
       children: [
@@ -1297,8 +1313,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         .map((u) => (u['id'] as num?)?.toInt())
         .whereType<int>()
         .toList();
-    final allSelected =
-        pendingIds.isNotEmpty && _selectedPendingUserIds.length == pendingIds.length;
+    final allSelected = pendingIds.isNotEmpty &&
+        _selectedPendingUserIds.length == pendingIds.length;
     final selectedCount = _selectedPendingUserIds.length;
 
     return Container(
@@ -1337,7 +1353,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           const SizedBox(width: AppSpacing.xs),
           Expanded(
             child: Text(
-              selectedCount == 0 ? '${pendingUsers.length} pending' : '$selectedCount selected',
+              selectedCount == 0
+                  ? '${pendingUsers.length} pending'
+                  : '$selectedCount selected',
               style: AppTypography.labelLarge.copyWith(
                 color: Colors.white70,
                 fontWeight: FontWeight.w800,
@@ -1349,7 +1367,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ? null
                 : _bulkApproveSelectedUsers,
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: AppColors.brandPurple.withValues(alpha: 0.5)),
+              side: BorderSide(
+                  color: AppColors.brandPurple.withValues(alpha: 0.5)),
               foregroundColor: Colors.white,
             ),
             icon: _bulkActionInProgress
@@ -1361,7 +1380,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 : const Icon(Icons.done_all_rounded, size: 18),
             label: Text(
               'Approve',
-              style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+              style: AppTypography.labelLarge
+                  .copyWith(fontWeight: FontWeight.w800),
             ),
           ),
           const SizedBox(width: AppSpacing.xs),
@@ -1435,7 +1455,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                               vertical: 2,
                             ),
                             decoration: BoxDecoration(
-                              color: AppColors.brandPurple.withValues(alpha: 0.2),
+                              color:
+                                  AppColors.brandPurple.withValues(alpha: 0.2),
                               borderRadius: AppSpacing.borderRadiusSm,
                             ),
                             child: Text(
@@ -1562,8 +1583,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   label: 'Timeline',
                   color: AppColors.elevatedCardDark,
                   textColor: AppColors.brandPurple,
-                  onTap: () => _showUserTimeline(
-                      user['id'], user['username'] ?? 'User'),
+                  onTap: () =>
+                      _showUserTimeline(user['id'], user['username'] ?? 'User'),
                 ),
               ),
               const SizedBox(width: AppSpacing.xs),
@@ -1582,6 +1603,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       ),
     );
   }
+
   Widget _buildCreditsView() {
     final selectedCount = _selectedCreditRequestIds.length;
     return SingleChildScrollView(
@@ -1591,7 +1613,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         children: [
           _buildSectionHeader('Credit Requests', '${_creditRequests.length}'),
           const SizedBox(height: AppSpacing.sm),
-          if (_creditRequests.isNotEmpty) _buildBulkCreditRequestsBar(selectedCount),
+          if (_creditRequests.isNotEmpty)
+            _buildBulkCreditRequestsBar(selectedCount),
           if (_creditRequests.isEmpty)
             _buildEmptyCard('No pending requests')
           else
@@ -1616,8 +1639,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               children: [
                 SwitchListTile(
                   value: _settingBool('auto_approve_users', fallback: false),
-                  onChanged: (v) =>
-                      _updateSetting('auto_approve_users', v ? 'true' : 'false'),
+                  onChanged: (v) => _updateSetting(
+                      'auto_approve_users', v ? 'true' : 'false'),
                   activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Auto-approve new users',
@@ -1628,7 +1651,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   subtitle: Text(
                     'When OFF, new users must be approved by an admin before they can log in.',
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                    style:
+                        AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.xs),
@@ -1646,13 +1670,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           fillColor: AppColors.elevatedCardDark,
                           border: OutlineInputBorder(
                             borderRadius: AppSpacing.borderRadiusMd,
-                            borderSide:
-                                BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.08)),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: AppSpacing.borderRadiusMd,
-                            borderSide:
-                                BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.08)),
                           ),
                         ),
                       ),
@@ -1691,7 +1715,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             child: Column(
               children: [
                 SwitchListTile(
-                  value: _settingBool('admin_notification_on_signup', fallback: true),
+                  value: _settingBool('admin_notification_on_signup',
+                      fallback: true),
                   onChanged: (v) => _updateSetting(
                       'admin_notification_on_signup', v ? 'true' : 'false'),
                   activeThumbColor: AppColors.brandPurple,
@@ -1704,13 +1729,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   subtitle: Text(
                     'Sends an email to admin(s) when a new user registers and is pending approval.',
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                    style:
+                        AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
                 ),
                 SwitchListTile(
                   value: _settingBool('send_welcome_email', fallback: true),
-                  onChanged: (v) =>
-                      _updateSetting('send_welcome_email', v ? 'true' : 'false'),
+                  onChanged: (v) => _updateSetting(
+                      'send_welcome_email', v ? 'true' : 'false'),
                   activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Send welcome email',
@@ -1721,13 +1747,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   subtitle: Text(
                     'Sent when users are auto-approved at registration.',
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                    style:
+                        AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
                 ),
                 SwitchListTile(
                   value: _settingBool('send_approval_email', fallback: true),
-                  onChanged: (v) =>
-                      _updateSetting('send_approval_email', v ? 'true' : 'false'),
+                  onChanged: (v) => _updateSetting(
+                      'send_approval_email', v ? 'true' : 'false'),
                   activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Send approval email',
@@ -1738,13 +1765,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   subtitle: Text(
                     'Sent when an admin approves a pending user.',
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                    style:
+                        AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
                 ),
                 SwitchListTile(
                   value: _settingBool('send_rejection_email', fallback: true),
-                  onChanged: (v) =>
-                      _updateSetting('send_rejection_email', v ? 'true' : 'false'),
+                  onChanged: (v) => _updateSetting(
+                      'send_rejection_email', v ? 'true' : 'false'),
                   activeThumbColor: AppColors.brandPurple,
                   title: Text(
                     'Send rejection email',
@@ -1755,7 +1783,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   subtitle: Text(
                     'Sent when an admin denies a pending user.',
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                    style:
+                        AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
                 ),
               ],
@@ -1768,8 +1797,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               children: [
                 SwitchListTile(
                   value: _settingBool('enable_live_payments', fallback: false),
-                  onChanged: (v) =>
-                      _updateSetting('enable_live_payments', v ? 'true' : 'false'),
+                  onChanged: (v) => _updateSetting(
+                      'enable_live_payments', v ? 'true' : 'false'),
                   activeThumbColor: AppColors.successGreen,
                   title: Text(
                     'Live Payment Methods',
@@ -1780,7 +1809,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                   subtitle: Text(
                     'Enable or disable live payment experiences for users.',
-                    style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                    style:
+                        AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.xs),
@@ -1799,7 +1829,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         _settingBool('enable_live_payments', fallback: false)
                             ? Icons.check_circle_outline_rounded
                             : Icons.info_outline_rounded,
-                        color: _settingBool('enable_live_payments', fallback: false)
+                        color: _settingBool('enable_live_payments',
+                                fallback: false)
                             ? AppColors.successGreen
                             : AppColors.warningYellow,
                         size: 18,
@@ -1935,13 +1966,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ? null
                 : _bulkApproveSelectedCreditRequests,
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: AppColors.successGreen.withValues(alpha: 0.5)),
+              side: BorderSide(
+                  color: AppColors.successGreen.withValues(alpha: 0.5)),
               foregroundColor: Colors.white,
             ),
             icon: const Icon(Icons.done_all_rounded, size: 18),
             label: Text(
               'Approve',
-              style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800),
+              style: AppTypography.labelLarge
+                  .copyWith(fontWeight: FontWeight.w800),
             ),
           ),
           const SizedBox(width: AppSpacing.xs),
@@ -1950,13 +1983,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ? null
                 : _bulkDenySelectedCreditRequests,
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: AppColors.warningYellow.withValues(alpha: 0.55)),
+              side: BorderSide(
+                  color: AppColors.warningYellow.withValues(alpha: 0.55)),
               foregroundColor: Colors.white,
             ),
             icon: const Icon(Icons.block_rounded, size: 18),
-            label: Text(
-              'Deny',
-              style: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w800)),
+            label: Text('Deny',
+                style: AppTypography.labelLarge
+                    .copyWith(fontWeight: FontWeight.w800)),
           ),
           const SizedBox(width: AppSpacing.xs),
           TextButton(
@@ -2203,7 +2237,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         setState(() {
           _activityEvents =
               List<Map<String, dynamic>>.from(data['events'] ?? []);
-          _activityTotal = (data['total'] as num?)?.toInt() ?? _activityEvents.length;
+          _activityTotal =
+              (data['total'] as num?)?.toInt() ?? _activityEvents.length;
           _activityLoading = false;
         });
       }
@@ -2296,13 +2331,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   Widget _buildActivityView() {
     // Lazy-load on first visit
-    if (_activityEvents.isEmpty && !_activityLoading && _activityActions.isEmpty) {
+    if (_activityEvents.isEmpty &&
+        !_activityLoading &&
+        _activityActions.isEmpty) {
       _loadActivityFeed();
       _loadActivityActions();
     }
 
     final currentPage = (_activityOffset ~/ _activityPageSize) + 1;
-    final totalPages = (_activityTotal / _activityPageSize).ceil().clamp(1, 9999);
+    final totalPages =
+        (_activityTotal / _activityPageSize).ceil().clamp(1, 9999);
 
     return Column(
       children: [
@@ -2327,7 +2365,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   style: const TextStyle(color: Colors.white, fontSize: 13),
                   decoration: InputDecoration(
                     hintText: 'User ID',
-                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                    hintStyle:
+                        const TextStyle(color: Colors.white38, fontSize: 13),
                     filled: true,
                     fillColor: AppColors.elevatedCardDark,
                     contentPadding: const EdgeInsets.symmetric(
@@ -2390,8 +2429,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       ),
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.md),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: AppSpacing.md),
                       itemCount: _activityEvents.length,
                       itemBuilder: (context, index) {
                         final e = _activityEvents[index];
@@ -2409,8 +2448,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               IconButton(
                 onPressed: _activityOffset > 0
                     ? () {
-                        _activityOffset =
-                            (_activityOffset - _activityPageSize).clamp(0, _activityTotal);
+                        _activityOffset = (_activityOffset - _activityPageSize)
+                            .clamp(0, _activityTotal);
                         _loadActivityFeed();
                       }
                     : null,
@@ -2418,8 +2457,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
               Text(
                 'Page $currentPage of $totalPages',
-                style:
-                    AppTypography.labelSmall.copyWith(color: Colors.white54),
+                style: AppTypography.labelSmall.copyWith(color: Colors.white54),
               ),
               IconButton(
                 onPressed: _activityOffset + _activityPageSize < _activityTotal
@@ -2439,7 +2477,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   Widget _buildActivityRow(Map<String, dynamic> e) {
     final isSuccess = e['status'] == 'success';
-    final statusColor = isSuccess ? AppColors.successGreen : AppColors.dangerRed;
+    final statusColor =
+        isSuccess ? AppColors.successGreen : AppColors.dangerRed;
     final createdAt = e['created_at'] ?? '';
     String timeStr = '';
     try {
@@ -2706,8 +2745,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     borderRadius: AppSpacing.borderRadiusMd,
                     borderSide: BorderSide.none,
                   ),
-                  prefixIcon:
-                      const Icon(Icons.monetization_on, color: AppColors.successGreen),
+                  prefixIcon: const Icon(Icons.monetization_on,
+                      color: AppColors.successGreen),
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
@@ -2723,8 +2762,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     borderRadius: AppSpacing.borderRadiusMd,
                     borderSide: BorderSide.none,
                   ),
-                  prefixIcon:
-                      const Icon(Icons.note, color: Colors.white54),
+                  prefixIcon: const Icon(Icons.note, color: Colors.white54),
                 ),
               ),
               const SizedBox(height: AppSpacing.md),
@@ -2746,7 +2784,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       onTap: () async {
                         final amount = int.tryParse(amountController.text);
                         if (amount == null || amount <= 0) {
-                          _showSnackBar('Please enter a valid amount', AppColors.dangerRed);
+                          _showSnackBar('Please enter a valid amount',
+                              AppColors.dangerRed);
                           return;
                         }
                         try {
@@ -2759,7 +2798,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           );
                           if (context.mounted) Navigator.pop(context, true);
                         } catch (e) {
-                          _showSnackBar('Error granting credits: $e', AppColors.dangerRed);
+                          _showSnackBar('Error granting credits: $e',
+                              AppColors.dangerRed);
                         }
                       },
                     ),
@@ -2858,8 +2898,8 @@ class _UserTimelineDialogState extends State<_UserTimelineDialog> {
       backgroundColor: Colors.transparent,
       child: Container(
         width: 560,
-        constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.8),
+        constraints:
+            BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
         padding: AppSpacing.paddingMd,
         decoration: BoxDecoration(
           color: AppColors.surfaceDark,
@@ -2884,7 +2924,8 @@ class _UserTimelineDialogState extends State<_UserTimelineDialog> {
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+                  icon:
+                      const Icon(Icons.close, color: Colors.white54, size: 20),
                 ),
               ],
             ),
@@ -2914,8 +2955,9 @@ class _UserTimelineDialogState extends State<_UserTimelineDialog> {
                   itemBuilder: (context, i) {
                     final e = _events[i];
                     final isSuccess = e['status'] == 'success';
-                    final statusColor =
-                        isSuccess ? AppColors.successGreen : AppColors.dangerRed;
+                    final statusColor = isSuccess
+                        ? AppColors.successGreen
+                        : AppColors.dangerRed;
                     String timeStr = '';
                     try {
                       final dt = DateTime.parse(e['created_at'] ?? '');
@@ -3023,7 +3065,11 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
   Future<void> _load() async {
     try {
       final data = await widget.apiService.getUserKpis(widget.userId);
-      if (mounted) setState(() { _kpis = data; _loading = false; });
+      if (mounted)
+        setState(() {
+          _kpis = data;
+          _loading = false;
+        });
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
@@ -3059,7 +3105,8 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+                  icon:
+                      const Icon(Icons.close, color: Colors.white54, size: 20),
                 ),
               ],
             ),
@@ -3077,14 +3124,20 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
                   style:
                       AppTypography.bodyMedium.copyWith(color: Colors.white60))
             else ...[
-              _kpiRow('Jobs Run', '${_kpis!['jobs_run'] ?? 0}',
-                  Icons.work, AppColors.blue),
-              _kpiRow('Results Generated', '${_kpis!['results_generated'] ?? 0}',
-                  Icons.checklist, AppColors.successGreen),
+              _kpiRow('Jobs Run', '${_kpis!['jobs_run'] ?? 0}', Icons.work,
+                  AppColors.blue),
+              _kpiRow(
+                  'Results Generated',
+                  '${_kpis!['results_generated'] ?? 0}',
+                  Icons.checklist,
+                  AppColors.successGreen),
               _kpiRow('Credits Used', '${_kpis!['credits_used'] ?? 0}',
                   Icons.payments, AppColors.warningYellow),
-              _kpiRow('Credits Purchased', '${_kpis!['credits_purchased'] ?? 0}',
-                  Icons.add_card, AppColors.brandPurple),
+              _kpiRow(
+                  'Credits Purchased',
+                  '${_kpis!['credits_purchased'] ?? 0}',
+                  Icons.add_card,
+                  AppColors.brandPurple),
               _kpiRow(
                   'Cost / Result',
                   _kpis!['cost_per_result'] != null
@@ -3092,16 +3145,10 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
                       : '-',
                   Icons.trending_down,
                   AppColors.brandOrange),
-              _kpiRow(
-                  'Last Activity',
-                  _formatKpiDate(_kpis!['last_activity']),
-                  Icons.access_time,
-                  Colors.white54),
-              _kpiRow(
-                  'Last Login',
-                  _formatKpiDate(_kpis!['last_login']),
-                  Icons.login,
-                  Colors.white54),
+              _kpiRow('Last Activity', _formatKpiDate(_kpis!['last_activity']),
+                  Icons.access_time, Colors.white54),
+              _kpiRow('Last Login', _formatKpiDate(_kpis!['last_login']),
+                  Icons.login, Colors.white54),
             ],
           ],
         ),

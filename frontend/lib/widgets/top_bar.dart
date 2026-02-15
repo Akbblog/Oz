@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
+import 'brand_mark.dart';
 import 'credit_pill.dart';
 
 class TopBar extends StatelessWidget {
@@ -63,19 +64,7 @@ class TopBar extends StatelessWidget {
               else
                 Row(
                   children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryBlue,
-                        borderRadius: AppSpacing.borderRadiusMd,
-                      ),
-                      child: const Icon(
-                        Icons.all_inclusive,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
+                    const BrandMark(size: 32, hoverGlow: true),
                     const SizedBox(width: AppSpacing.sm),
                     Text(
                       'Infinity Leads Pro',
@@ -177,7 +166,8 @@ class TopBar extends StatelessWidget {
           value: 'profile',
           child: Row(
             children: [
-              const Icon(Icons.person_outline_rounded, size: 18, color: Colors.white),
+              const Icon(Icons.person_outline_rounded,
+                  size: 18, color: Colors.white),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 'Profile',
@@ -191,11 +181,13 @@ class TopBar extends StatelessWidget {
           value: 'logout',
           child: Row(
             children: [
-              const Icon(Icons.logout_rounded, size: 18, color: AppColors.dangerRed),
+              const Icon(Icons.logout_rounded,
+                  size: 18, color: AppColors.dangerRed),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 'Logout',
-                style: AppTypography.bodyMedium.copyWith(color: AppColors.dangerRed),
+                style: AppTypography.bodyMedium
+                    .copyWith(color: AppColors.dangerRed),
               ),
             ],
           ),

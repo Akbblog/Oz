@@ -3,6 +3,7 @@ import '../core/theme/app_breakpoints.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
+import 'brand_mark.dart';
 
 class SidebarNavigation extends StatelessWidget {
   final int currentIndex;
@@ -129,7 +130,13 @@ class SidebarNavigation extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Icon(Icons.all_inclusive, color: Colors.white),
+            child: const Center(
+              child: BrandMark(
+                tiled: false,
+                size: 22,
+                hoverGlow: true,
+              ),
+            ),
           ),
           if (!collapsed) ...[
             const SizedBox(width: AppSpacing.sm),
@@ -294,7 +301,8 @@ class SidebarNavigation extends StatelessWidget {
                 ),
               ),
               child: const Center(
-                child: Icon(Icons.visibility_rounded, color: Colors.white70, size: 18),
+                child: Icon(Icons.visibility_rounded,
+                    color: Colors.white70, size: 18),
               ),
             ),
             if (!collapsed) ...[

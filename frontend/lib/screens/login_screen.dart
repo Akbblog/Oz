@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/auth_provider.dart';
 import '../core/theme/app_theme.dart';
+import '../widgets/brand_mark.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -153,7 +154,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.surfaceDark,
+      backgroundColor: AppColors.backgroundDark,
       body: Stack(
         children: [
           // Background Blobs
@@ -209,8 +210,7 @@ class _LoginScreenState extends State<LoginScreen>
               color: Colors.transparent,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF334155)
-                      .withValues(alpha: 0.2), // Slate 700
+                  color: AppColors.primaryBlue.withValues(alpha: 0.18),
                   blurRadius: 120,
                   spreadRadius: 0,
                 ),
@@ -230,8 +230,7 @@ class _LoginScreenState extends State<LoginScreen>
               color: Colors.transparent,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF1e293b)
-                      .withValues(alpha: 0.3), // Slate 800
+                  color: AppColors.primaryBlueDark.withValues(alpha: 0.22),
                   blurRadius: 120,
                   spreadRadius: 0,
                 ),
@@ -251,8 +250,7 @@ class _LoginScreenState extends State<LoginScreen>
               color: Colors.transparent,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF312e81)
-                      .withValues(alpha: 0.1), // Indigo 900
+                  color: AppColors.primaryBlue.withValues(alpha: 0.10),
                   blurRadius: 80,
                   spreadRadius: 0,
                 ),
@@ -267,34 +265,12 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildLogoSection() {
     return Column(
       children: [
-        Container(
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                Color(0xFF6366f1),
-                Color(0xFF9333ea)
-              ], // Indigo to Purple
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF6366f1).withValues(alpha: 0.2),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: const Center(
-            child: Icon(
-              Icons.all_inclusive_rounded,
-              color: Colors.white,
-              size: 48,
-            ),
-          ),
+        const BrandMark(
+          tiled: true,
+          tileSize: 80,
+          size: 44,
+          tileColor: Color(0xFF2C5F6D),
+          hoverGlow: true,
         ),
         const SizedBox(height: AppSpacing.md),
         Text(
@@ -309,7 +285,7 @@ class _LoginScreenState extends State<LoginScreen>
         Text(
           'Global lead discovery platform',
           style: AppTypography.bodySmall.copyWith(
-            color: AppColors.textSecondaryLight,
+            color: Colors.white.withValues(alpha: 0.7),
           ),
         ),
       ],
@@ -353,7 +329,7 @@ class _LoginScreenState extends State<LoginScreen>
               'Sign in to continue lead discovery',
               textAlign: TextAlign.center,
               style: AppTypography.bodySmall.copyWith(
-                color: AppColors.textSecondaryLight,
+                color: Colors.white.withValues(alpha: 0.7),
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
@@ -363,7 +339,7 @@ class _LoginScreenState extends State<LoginScreen>
             const SizedBox(height: 6),
             TextFormField(
               controller: _usernameController,
-              style: const TextStyle(color: AppColors.textPrimaryLight),
+              style: const TextStyle(color: Colors.white),
               decoration: _inputDecoration(
                 hint: 'Enter your username',
                 icon: Icons.person_outline_rounded,
@@ -382,7 +358,7 @@ class _LoginScreenState extends State<LoginScreen>
                 return TextFormField(
                   controller: _passwordController,
                   obscureText: !visible,
-                  style: const TextStyle(color: AppColors.textPrimaryLight),
+                  style: const TextStyle(color: Colors.white),
                   decoration: _inputDecoration(
                     hint: 'Enter your password',
                     icon: Icons.lock_outline_rounded,
@@ -498,11 +474,11 @@ class _LoginScreenState extends State<LoginScreen>
             // Login Button
             Container(
               decoration: BoxDecoration(
-                color: AppColors.primaryBlue,
-                borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                gradient: AppColors.primaryButtonGradient,
+                borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                    color: AppColors.primaryBlue.withValues(alpha: 0.30),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -515,7 +491,7 @@ class _LoginScreenState extends State<LoginScreen>
                   shadowColor: Colors.transparent,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
                 child: _isLoading
@@ -571,26 +547,30 @@ class _LoginScreenState extends State<LoginScreen>
   }) {
     return InputDecoration(
       filled: true,
-      fillColor: Colors.white,
+      fillColor: Colors.white.withValues(alpha: 0.06),
       hintText: hint,
-      hintStyle: const TextStyle(color: Color(0xFF94a3b8), fontSize: 14),
-      prefixIcon: Icon(icon, color: const Color(0xFF94a3b8), size: 20),
+      hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
+      prefixIcon: Icon(icon, color: Colors.white54, size: 20),
       suffixIcon: suffixIcon,
       contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(
+          color: Colors.white.withValues(alpha: 0.10),
+        ),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-        borderSide: BorderSide.none,
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(
+          color: Colors.white.withValues(alpha: 0.10),
+        ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+        borderRadius: BorderRadius.circular(12),
         borderSide: const BorderSide(color: AppColors.primaryBlue, width: 2),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+        borderRadius: BorderRadius.circular(12),
         borderSide: const BorderSide(color: AppColors.dangerRed, width: 1),
       ),
     );
@@ -605,7 +585,7 @@ class _LoginScreenState extends State<LoginScreen>
             child: Text(
               "Don't have an account?",
               style: AppTypography.bodyMedium.copyWith(
-                color: AppColors.textSecondaryLight,
+                color: Colors.white60,
               ),
             ),
           ),

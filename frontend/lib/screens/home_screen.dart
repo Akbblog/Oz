@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
@@ -17,6 +16,7 @@ import '../widgets/sidebar_navigation.dart';
 import '../widgets/top_bar.dart';
 import '../widgets/responsive_shell.dart';
 import '../widgets/credit_pill.dart';
+import '../widgets/brand_mark.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -343,12 +343,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
               color: AppColors.surfaceDark,
               borderRadius: AppSpacing.borderRadiusMd,
-              border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.3)),
+              border: Border.all(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.3)),
               boxShadow: [
                 BoxShadow(
                   color: AppColors.primaryBlue.withValues(alpha: 0.25),
@@ -357,13 +358,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ],
             ),
-            child: SvgPicture.asset(
-              'assets/logo_mark.svg',
-              width: 22,
-              height: 22,
-              colorFilter: const ColorFilter.mode(
-                Colors.white,
-                BlendMode.srcIn,
+            child: const Center(
+              child: BrandMark(
+                size: 32,
+                hoverGlow: true,
               ),
             ),
           ),
@@ -441,8 +439,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-
-
   Widget _iconButton({
     required IconData icon,
     required VoidCallback onTap,
@@ -519,9 +515,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           value: 'profile',
           child: Row(
             children: [
-              const Icon(Icons.person_outline_rounded, size: 18, color: Colors.white),
+              const Icon(Icons.person_outline_rounded,
+                  size: 18, color: Colors.white),
               const SizedBox(width: AppSpacing.sm),
-              Text('Profile', style: AppTypography.bodyMedium.copyWith(color: Colors.white)),
+              Text('Profile',
+                  style:
+                      AppTypography.bodyMedium.copyWith(color: Colors.white)),
             ],
           ),
         ),
@@ -530,11 +529,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           value: 'logout',
           child: Row(
             children: [
-              const Icon(Icons.logout_rounded, size: 18, color: AppColors.dangerRed),
+              const Icon(Icons.logout_rounded,
+                  size: 18, color: AppColors.dangerRed),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 'Logout',
-                style: AppTypography.bodyMedium.copyWith(color: AppColors.dangerRed),
+                style: AppTypography.bodyMedium
+                    .copyWith(color: AppColors.dangerRed),
               ),
             ],
           ),
@@ -568,7 +569,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             const Text('Logout', style: TextStyle(color: Colors.white)),
           ],
         ),
-        content: const Text('Are you sure you want to logout?', style: TextStyle(color: Colors.white70)),
+        content: const Text('Are you sure you want to logout?',
+            style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -592,7 +594,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildBottomNav() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
       decoration: BoxDecoration(
         color: AppColors.backgroundDark.withValues(alpha: 0.9),
         border: Border(
@@ -631,7 +634,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     borderRadius: AppSpacing.borderRadiusMd,
                     border: isSelected
                         ? Border.all(
-                            color: AppColors.primaryBlue.withValues(alpha: 0.35),
+                            color:
+                                AppColors.primaryBlue.withValues(alpha: 0.35),
                           )
                         : null,
                   ),
@@ -640,15 +644,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     children: [
                       Icon(
                         item.icon,
-                        color: isSelected ? AppColors.primaryBlueLight : Colors.white54,
+                        color: isSelected
+                            ? AppColors.primaryBlueLight
+                            : Colors.white54,
                         size: 24,
                       ),
                       const SizedBox(height: AppSpacing.xxs),
                       Text(
                         item.label,
                         style: AppTypography.labelSmall.copyWith(
-                          color: isSelected ? AppColors.primaryBlueLight : Colors.white54,
-                          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                          color: isSelected
+                              ? AppColors.primaryBlueLight
+                              : Colors.white54,
+                          fontWeight:
+                              isSelected ? FontWeight.w700 : FontWeight.w500,
                         ),
                       ),
                     ],
@@ -842,9 +851,8 @@ class _CreditPillState extends State<_CreditPill>
           animation: Listenable.merge([_pulseCtrl, _breatheCtrl]),
           builder: (context, _) {
             // --- glow intensity ---
-            final glowAlpha = isHigh
-                ? _pulseAnim.value
-                : (_isHovered ? 0.45 : 0.30);
+            final glowAlpha =
+                isHigh ? _pulseAnim.value : (_isHovered ? 0.45 : 0.30);
             final glowSpread = isHigh
                 ? -6.0 + (_pulseAnim.value * 8)
                 : (_isHovered ? -2.0 : -6.0);

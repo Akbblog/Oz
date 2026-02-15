@@ -593,7 +593,7 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
                   });
                 },
                 itemBuilder: (context) => [
-                  _buildMenuItem('All', Icons.all_inclusive_rounded),
+                  _buildMenuItem('All', Icons.layers_rounded),
                   _buildMenuItem('Today', Icons.today_rounded),
                   _buildMenuItem('This Week', Icons.date_range_rounded),
                   _buildMenuItem('This Month', Icons.calendar_month_rounded),
