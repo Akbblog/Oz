@@ -1,11 +1,14 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
 import '../services/api_service.dart';
+import '../services/stripe_js_interop.dart';
 import '../widgets/payment_form.dart';
 import '../widgets/promo_code_input.dart';
 import '../widgets/crypto_payment_widget.dart';
+import '../widgets/google_pay_payment_widget.dart';
 import '../widgets/paypal_payment_widget.dart';
 import 'payment_success_screen.dart';
 
@@ -33,13 +36,53 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Map<String, dynamic>? _paypalOrder;
   bool _isCryptoLoading = false;
   bool _isPayPalLoading = false;
-  int _paymentMethod = 0; // 0 = card, 1 = paypal, 2 = crypto
+  bool _isGooglePayLoading = false;
+  int _paymentMethod = 3; // 0 = card, 1 = paypal, 2 = crypto, 3 = googlepay
+
+  // Google Pay state
+  String? _stripePublishableKey;
+  String _googlePayMerchantName = 'Infinity Leads Pro';
+  String _googlePayEnvironment = 'TEST';
+  String? _googlePayClientSecret;
+  String? _googlePayTransactionId;
+  bool _googlePayEnabled = false;
 
   @override
   void initState() {
     super.initState();
     if (!widget.isSubscription) {
       _calculatePrice();
+    }
+    _loadPaymentConfig();
+  }
+
+  String get _displayAmount {
+    final totalCents = _priceBreakdown?['total_cents'] ??
+        (widget.isSubscription
+            ? widget.item['base_price_cents']
+            : widget.item['display_price_cents'] ??
+                widget.item['base_price_cents']) ??
+        0;
+    return (totalCents / 100).toStringAsFixed(2);
+  }
+
+  Future<void> _loadPaymentConfig() async {
+    try {
+      final flags = await _apiService.getFeatureFlags();
+      if (!mounted) return;
+      final methods = flags['payment_methods_enabled'];
+      final gpayEnabled = methods is List &&
+          methods.map((m) => m.toString().toLowerCase()).contains('googlepay');
+      setState(() {
+        _stripePublishableKey = flags['stripe_publishable_key'] as String?;
+        _googlePayMerchantName =
+            (flags['google_pay_merchant_name'] as String?) ?? 'Infinity Leads Pro';
+        _googlePayEnvironment =
+            (flags['google_pay_environment'] as String?) ?? 'TEST';
+        _googlePayEnabled = gpayEnabled && (_stripePublishableKey?.isNotEmpty ?? false);
+      });
+    } catch (_) {
+      // Non-critical: Google Pay tab just won't show.
     }
   }
 
@@ -167,6 +210,94 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
   }
 
+  Future<void> _initiateGooglePay() async {
+    setState(() {
+      _isGooglePayLoading = true;
+      _paymentError = null;
+    });
+
+    try {
+      final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
+      final result = await _apiService.purchaseCredits(
+        packageId: widget.item['id'],
+        paymentProvider: 'googlepay',
+        promoCode: _promo?['code'],
+        idempotencyKey: idempotencyKey,
+      );
+      if (mounted) {
+        setState(() {
+          _googlePayClientSecret = result['client_secret'] as String?;
+          _googlePayTransactionId = result['transaction_id'] as String?;
+          _isGooglePayLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _paymentError = e.toString().replaceFirst('Exception: ', '');
+          _isGooglePayLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _onGooglePayToken(String stripeToken) async {
+    if (_googlePayClientSecret == null || _stripePublishableKey == null) {
+      setState(() => _paymentError = 'Payment not ready. Please try again.');
+      return;
+    }
+
+    setState(() {
+      _isGooglePayLoading = true;
+      _paymentError = null;
+    });
+
+    try {
+      if (!kIsWeb) {
+        setState(() {
+          _paymentError = 'Google Pay is only supported on web.';
+          _isGooglePayLoading = false;
+        });
+        return;
+      }
+
+      final stripe = StripeJs(_stripePublishableKey!);
+      final confirmResult = await stripe.confirmCardPayment(
+        _googlePayClientSecret!,
+        googlePayToken: stripeToken,
+      );
+
+      if (!mounted) return;
+
+      if (confirmResult.success) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => PaymentSuccessScreen(
+              transaction: {
+                'transaction_id': _googlePayTransactionId,
+                'payment_provider': 'stripe',
+                'status': confirmResult.status,
+              },
+              isSubscription: false,
+            ),
+          ),
+        );
+      } else {
+        setState(() {
+          _paymentError = confirmResult.errorMessage ?? 'Payment failed';
+          _isGooglePayLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _paymentError = e.toString().replaceFirst('Exception: ', '');
+          _isGooglePayLoading = false;
+        });
+      }
+    }
+  }
+
   Future<void> _capturePayPalOrder() async {
     final txnId = (_paypalOrder?['transaction_id'] ?? '').toString();
     if (txnId.isEmpty) {
@@ -234,28 +365,41 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           _buildPriceBreakdown(),
                           const SizedBox(height: AppSpacing.lg),
                         ],
-                        if (!widget.isSubscription) _buildPaymentMethodToggle(),
+                        // Google Pay only (other methods hidden)
                         const SizedBox(height: AppSpacing.lg),
-                        if (_paymentMethod == 0)
-                          PaymentForm(
-                            onSubmit: _processCardPayment,
-                            isLoading: _isProcessing,
+                        if (_stripePublishableKey != null)
+                          GooglePayPaymentWidget(
+                            stripePublishableKey: _stripePublishableKey!,
+                            amount: _displayAmount,
+                            currencyCode: 'USD',
+                            countryCode: 'US',
+                            merchantName: _googlePayMerchantName,
+                            environment: _googlePayEnvironment,
+                            isLoading: _isGooglePayLoading,
                             error: _paymentError,
-                          )
-                        else if (_paymentMethod == 1)
-                          PayPalPaymentWidget(
-                            orderData: _paypalOrder,
-                            isLoading: _isPayPalLoading,
-                            onCreateOrder: _createPayPalOrder,
-                            onCapture: _capturePayPalOrder,
-                            error: _paymentError,
+                            isReady: _googlePayClientSecret != null,
+                            onInitiatePayment: _initiateGooglePay,
+                            onPaymentResult: _onGooglePayToken,
                           )
                         else
-                          CryptoPaymentWidget(
-                            chargeData: _cryptoCharge,
-                            isLoading: _isCryptoLoading,
-                            onCreateCharge: _createCryptoCharge,
-                            error: _paymentError,
+                          Center(
+                            child: Padding(
+                              padding: AppSpacing.paddingLg,
+                              child: Column(
+                                children: [
+                                  const CircularProgressIndicator(
+                                    color: AppColors.primaryBlue,
+                                  ),
+                                  const SizedBox(height: AppSpacing.md),
+                                  Text(
+                                    'Loading payment method...',
+                                    style: AppTypography.bodySmall.copyWith(
+                                      color: Colors.white54,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         const SizedBox(height: AppSpacing.xl),
                       ],
@@ -540,6 +684,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 onTap: () => setState(() => _paymentMethod = 2),
               ),
             ),
+            if (_googlePayEnabled) ...[
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: _methodTab(
+                  icon: Icons.account_balance_wallet_rounded,
+                  label: 'GPay',
+                  isSelected: _paymentMethod == 3,
+                  onTap: () => setState(() => _paymentMethod = 3),
+                ),
+              ),
+            ],
           ],
         ),
       ],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
@@ -15,12 +16,15 @@ import 'screens/payment_methods_screen.dart';
 import 'screens/subscription_management_screen.dart';
 import 'screens/live_payments_gate_screen.dart';
 import 'screens/wallet_coming_soon_screen.dart';
+import 'screens/privacy_policy_screen.dart';
 import 'providers/scraper_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
 import 'core/theme/app_theme.dart';
 
 void main() {
+  // Enable clean URLs on web (e.g., /privacy-policy instead of /#/privacy-policy).
+  usePathUrlStrategy();
   runApp(
     MultiProvider(
       providers: [
@@ -46,10 +50,12 @@ class MyApp extends StatelessWidget {
       darkTheme: AppTheme.darkTheme,
       themeMode: themeProvider.themeMode,
       debugShowCheckedModeBanner: false,
-      home: const AuthWrapper(),
       routes: {
+        '/': (context) => const AuthWrapper(),
         '/home': (context) => const HomeScreen(),
         '/login': (context) => LoginScreen(),
+        '/privacy-policy': (context) => const PrivacyPolicyScreen(),
+        '/privacy': (context) => const PrivacyPolicyScreen(),
         '/admin': (context) => const _ProtectedRoute(
               requireAdmin: true,
               child: AdminDashboardScreen(),
@@ -77,7 +83,8 @@ class MyApp extends StatelessWidget {
         '/wallet-coming-soon': (context) =>
             const _ProtectedRoute(child: WalletComingSoonScreen()),
         '/wallet-request-credits': (context) => const _ProtectedRoute(
-              child: WalletScreen(enableLivePayments: false, initialTabIndex: 1),
+              child:
+                  WalletScreen(enableLivePayments: false, initialTabIndex: 1),
             ),
         '/payment-methods': (context) => const _ProtectedRoute(
               child: LivePaymentsGateScreen(
@@ -85,11 +92,13 @@ class MyApp extends StatelessWidget {
                 disabledChild: WalletComingSoonScreen(),
               ),
             ),
-        '/subscription': (context) => const _ProtectedRoute(child: SubscriptionManagementScreen()),
+        '/subscription': (context) =>
+            const _ProtectedRoute(child: SubscriptionManagementScreen()),
       },
       onGenerateRoute: (settings) {
         // Handle reset password route with token parameter
-        if (settings.name != null && settings.name!.startsWith('/reset-password/')) {
+        if (settings.name != null &&
+            settings.name!.startsWith('/reset-password/')) {
           final token = settings.name!.substring('/reset-password/'.length);
           return MaterialPageRoute(
             builder: (context) => ResetPasswordScreen(token: token),
@@ -122,7 +131,8 @@ class AuthWrapper extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: AppColors.primaryBlue,
                   borderRadius: AppSpacing.borderRadiusXl,
-                  boxShadow: AtlassianShadows.getCard(Theme.of(context).brightness),
+                  boxShadow:
+                      AtlassianShadows.getCard(Theme.of(context).brightness),
                 ),
                 child: SvgPicture.asset(
                   'assets/logo_mark.svg',
@@ -143,7 +153,8 @@ class AuthWrapper extends StatelessWidget {
               SizedBox(
                 width: 200,
                 child: LinearProgressIndicator(
-                  backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.surfaceContainerHighest,
                   valueColor: AlwaysStoppedAnimation<Color>(
                     Theme.of(context).colorScheme.primary,
                   ),
@@ -199,7 +210,8 @@ class _FullScreenLoading extends StatelessWidget {
         child: SizedBox(
           width: 200,
           child: LinearProgressIndicator(
-            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            backgroundColor:
+                Theme.of(context).colorScheme.surfaceContainerHighest,
             valueColor: AlwaysStoppedAnimation<Color>(
               Theme.of(context).colorScheme.primary,
             ),
@@ -246,7 +258,8 @@ class _AccessDeniedScreen extends StatelessWidget {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () => Navigator.of(context).pushReplacementNamed('/home'),
+                    onPressed: () =>
+                        Navigator.of(context).pushReplacementNamed('/home'),
                     child: const Text('Go to Home'),
                   ),
                 ),

@@ -109,6 +109,11 @@ PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "").strip()
 PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
 PAYPAL_ENV = os.getenv("PAYPAL_ENV", "sandbox").strip().lower()
 
+# Google Pay Settings (used by frontend Google Pay configuration)
+GOOGLE_PAY_MERCHANT_ID = os.getenv("GOOGLE_PAY_MERCHANT_ID", "").strip()
+GOOGLE_PAY_MERCHANT_NAME = os.getenv("GOOGLE_PAY_MERCHANT_NAME", "Infinity Leads Pro").strip()
+GOOGLE_PAY_ENVIRONMENT = os.getenv("GOOGLE_PAY_ENVIRONMENT", "TEST").strip().upper()
+
 # Coinbase Commerce Settings
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY", "your_coinbase_api_key")
 COINBASE_WEBHOOK_SECRET = os.getenv("COINBASE_WEBHOOK_SECRET", "your_coinbase_webhook_secret")

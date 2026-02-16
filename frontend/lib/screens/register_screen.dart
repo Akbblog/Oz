@@ -118,8 +118,8 @@ class _RegisterScreenState extends State<RegisterScreen>
       _showSnackBar(message);
       Navigator.of(context).pop();
     } else if (mounted) {
-      final error = authProvider.errorMessage ??
-          'Registration failed. Please try again.';
+      final error =
+          authProvider.errorMessage ?? 'Registration failed. Please try again.';
       _showSnackBar(error, isError: true);
     }
   }
@@ -139,16 +139,19 @@ class _RegisterScreenState extends State<RegisterScreen>
               children: [
                 // Header (Back Button)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md, vertical: AppSpacing.sm),
                   child: Row(
                     children: [
                       Container(
                         decoration: BoxDecoration(
                           color: AppColors.surfaceDark,
-                          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                          borderRadius:
+                              BorderRadius.circular(AppSpacing.radiusMd),
                         ),
                         child: IconButton(
-                          icon: const Icon(Icons.chevron_left, color: AppColors.textSecondaryLight),
+                          icon: const Icon(Icons.chevron_left,
+                              color: AppColors.textSecondaryLight),
                           onPressed: () => Navigator.of(context).pop(),
                         ),
                       ),
@@ -201,7 +204,8 @@ class _RegisterScreenState extends State<RegisterScreen>
             height: 500,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF312e81).withValues(alpha: 0.2), // Indigo 900
+              color:
+                  const Color(0xFF312e81).withValues(alpha: 0.2), // Indigo 900
             ),
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
@@ -238,7 +242,10 @@ class _RegisterScreenState extends State<RegisterScreen>
           height: 70,
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFF4ade80), Color(0xFF16a34a)], // Green 400 to 600
+              colors: [
+                Color(0xFF4ade80),
+                Color(0xFF16a34a)
+              ], // Green 400 to 600
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -400,9 +407,8 @@ class _RegisterScreenState extends State<RegisterScreen>
                       onPressed: () => _passwordVisible.value = !visible,
                     ),
                   ),
-                  validator: (value) => value?.isEmpty ?? true
-                      ? 'Please enter a password'
-                      : null,
+                  validator: (value) =>
+                      value?.isEmpty ?? true ? 'Please enter a password' : null,
                 );
               },
             ),
@@ -444,7 +450,8 @@ class _RegisterScreenState extends State<RegisterScreen>
             Container(
               padding: const EdgeInsets.all(AppSpacing.md),
               decoration: BoxDecoration(
-                color: const Color(0xFF0c4a6e).withValues(alpha: 0.3), // Sky 900
+                color:
+                    const Color(0xFF0c4a6e).withValues(alpha: 0.3), // Sky 900
                 borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
                 border: Border.all(
                   color: const Color(0xFF075985).withValues(alpha: 0.5),
@@ -561,7 +568,8 @@ class _RegisterScreenState extends State<RegisterScreen>
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide: const BorderSide(color: Color(0xFFe2e8f0), width: 1), // Slate 200
+        borderSide:
+            const BorderSide(color: Color(0xFFe2e8f0), width: 1), // Slate 200
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
@@ -575,24 +583,51 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   Widget _buildFooter() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          "Already have an account?",
-          style: AppTypography.bodyMedium.copyWith(
-            color: AppColors.textSecondaryLight,
-          ),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(
-            'Sign In',
-            style: AppTypography.bodyMedium.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              "Already have an account?",
+              style: AppTypography.bodyMedium.copyWith(
+                color: AppColors.textSecondaryLight,
+              ),
             ),
-          ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Sign In',
+                style: AppTypography.bodyMedium.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'Privacy Policy',
+              style: AppTypography.bodySmall.copyWith(
+                color: AppColors.textSecondaryLight,
+              ),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pushNamed('/privacy-policy'),
+              child: Text(
+                'View',
+                style: AppTypography.bodySmall.copyWith(
+                  color: Colors.white,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );

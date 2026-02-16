@@ -578,32 +578,58 @@ class _LoginScreenState extends State<LoginScreen>
 
   Widget _buildFooter() {
     return Flexible(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(
-            child: Text(
-              "Don't have an account?",
-              style: AppTypography.bodyMedium.copyWith(
-                color: Colors.white60,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  "Don't have an account?",
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: Colors.white60,
+                  ),
+                ),
               ),
-            ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (context) => const RegisterScreen()),
+                  );
+                },
+                child: Text(
+                  'Sign Up',
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.underline,
+                    decorationColor: AppColors.primaryBlue,
+                  ),
+                ),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const RegisterScreen()),
-              );
-            },
-            child: Text(
-              'Sign Up',
-              style: AppTypography.bodyMedium.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.underline,
-                decorationColor: AppColors.primaryBlue,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'Privacy Policy',
+                style: AppTypography.bodySmall.copyWith(color: Colors.white60),
               ),
-            ),
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pushNamed('/privacy-policy'),
+                child: Text(
+                  'View',
+                  style: AppTypography.bodySmall.copyWith(
+                    color: AppColors.primaryBlueLight,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

@@ -51,11 +51,8 @@ class _ResultsScreenState extends State<ResultsScreen>
   String _cityFilter = 'All Cities';
   bool _contactMatchAll = false; // Any vs All selected contact filters
   bool _requireWebsite = false;
-  Set<String> _contactFilters = {
-    'Phone',
-    'Website',
-    'Maps'
-  }; // Contact type filters
+  Set<String> _contactFilters = {'Phone', 'Email', 'Website', 'Maps'};
+  // Contact type filters
 
   // Table view state (bulk actions)
   Set<int> _selectedTableRows = {};
@@ -186,7 +183,8 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   Future<void> _loadMostRecentResults() async {
     // If we have live results (current job), don't replace the UI with a loader.
-    final scraperProvider = Provider.of<ScraperProvider>(context, listen: false);
+    final scraperProvider =
+        Provider.of<ScraperProvider>(context, listen: false);
     final liveResults = scraperProvider.currentJob?.results;
     if (liveResults != null && liveResults.isNotEmpty) {
       return;
@@ -263,18 +261,19 @@ class _ResultsScreenState extends State<ResultsScreen>
     var filtered = results.where((business) {
       // Apply search filter
       if (_searchQuery.isNotEmpty) {
-        final name =
-            (business['business_name'] ?? business['name'] ?? '')
-                .toString()
-                .toLowerCase();
+        final name = (business['business_name'] ?? business['name'] ?? '')
+            .toString()
+            .toLowerCase();
         final category = (business['category'] ?? '').toString().toLowerCase();
         final city = (business['city'] ?? '').toString().toLowerCase();
         final address = (business['address'] ?? '').toString().toLowerCase();
+        final email = (business['email'] ?? '').toString().toLowerCase();
         final query = _searchQuery.toLowerCase();
 
         if (!name.contains(query) &&
             !category.contains(query) &&
             !city.contains(query) &&
+            !email.contains(query) &&
             !address.contains(query)) {
           return false;
         }
@@ -294,6 +293,9 @@ class _ResultsScreenState extends State<ResultsScreen>
       final hasPhone = business['phone'] != null &&
           (business['phone'] ?? '').toString().isNotEmpty &&
           business['phone'] != 'N/A';
+      final hasEmail = business['email'] != null &&
+          (business['email'] ?? '').toString().isNotEmpty &&
+          business['email'] != 'N/A';
       final hasWebsite = business['website'] != null &&
           (business['website'] ?? '').toString().isNotEmpty &&
           business['website'] != 'N/A';
@@ -308,6 +310,7 @@ class _ResultsScreenState extends State<ResultsScreen>
 
       if (_contactMatchAll) {
         if (_contactFilters.contains('Phone') && !hasPhone) return false;
+        if (_contactFilters.contains('Email') && !hasEmail) return false;
         if (_contactFilters.contains('Website') && !hasWebsite) return false;
         if (_contactFilters.contains('Maps') && !hasAddress) return false;
         return true;
@@ -315,6 +318,7 @@ class _ResultsScreenState extends State<ResultsScreen>
 
       // Match ANY selected filter (OR logic)
       if (_contactFilters.contains('Phone') && hasPhone) return true;
+      if (_contactFilters.contains('Email') && hasEmail) return true;
       if (_contactFilters.contains('Website') && hasWebsite) return true;
       if (_contactFilters.contains('Maps') && hasAddress) return true;
       return false;
@@ -323,12 +327,10 @@ class _ResultsScreenState extends State<ResultsScreen>
     // Apply sorting
     if (_sortOption == 'Name A-Z') {
       filtered.sort((a, b) {
-        final nameA = (a['business_name'] ?? a['name'] ?? '')
-            .toString()
-            .toLowerCase();
-        final nameB = (b['business_name'] ?? b['name'] ?? '')
-            .toString()
-            .toLowerCase();
+        final nameA =
+            (a['business_name'] ?? a['name'] ?? '').toString().toLowerCase();
+        final nameB =
+            (b['business_name'] ?? b['name'] ?? '').toString().toLowerCase();
         return nameA.compareTo(nameB);
       });
     } else if (_sortOption == 'Category') {
@@ -342,12 +344,10 @@ class _ResultsScreenState extends State<ResultsScreen>
         final cityA = (a['city'] ?? '').toString().toLowerCase();
         final cityB = (b['city'] ?? '').toString().toLowerCase();
         if (cityA != cityB) return cityA.compareTo(cityB);
-        final nameA = (a['business_name'] ?? a['name'] ?? '')
-            .toString()
-            .toLowerCase();
-        final nameB = (b['business_name'] ?? b['name'] ?? '')
-            .toString()
-            .toLowerCase();
+        final nameA =
+            (a['business_name'] ?? a['name'] ?? '').toString().toLowerCase();
+        final nameB =
+            (b['business_name'] ?? b['name'] ?? '').toString().toLowerCase();
         return nameA.compareTo(nameB);
       });
     }
@@ -419,8 +419,22 @@ class _ResultsScreenState extends State<ResultsScreen>
     }
   }
 
+  Future<void> _launchEmail(String email) async {
+    if (email.isEmpty || email == 'N/A') return;
+    final cleanEmail = email.trim();
+    final uri = Uri.parse('mailto:$cleanEmail');
+
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      }
+    } catch (e) {
+      debugPrint('Error launching email: $e');
+    }
+  }
+
   List<Widget> _buildContactFilterChips() {
-    const filters = ['Phone', 'Website', 'Maps'];
+    const filters = ['Phone', 'Email', 'Website', 'Maps'];
     return filters.map((filter) {
       final isActive = _contactFilters.contains(filter);
       return Padding(
@@ -460,9 +474,11 @@ class _ResultsScreenState extends State<ResultsScreen>
                 Icon(
                   filter == 'Phone'
                       ? Icons.phone_rounded
-                      : filter == 'Website'
-                          ? Icons.language_rounded
-                          : Icons.location_on_rounded,
+                      : filter == 'Email'
+                          ? Icons.email_outlined
+                          : filter == 'Website'
+                              ? Icons.language_rounded
+                              : Icons.location_on_rounded,
                   size: 14,
                   color: isActive ? Colors.white : Colors.white70,
                 ),
@@ -553,9 +569,9 @@ class _ResultsScreenState extends State<ResultsScreen>
     final layoutType =
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
 
-      return Scaffold(
-        backgroundColor: AppColors.backgroundDark,
-        body: SafeArea(
+    return Scaffold(
+      backgroundColor: AppColors.backgroundDark,
+      body: SafeArea(
         top: widget.showHeader,
         bottom: false,
         child: FadeTransition(
@@ -745,13 +761,13 @@ class _ResultsScreenState extends State<ResultsScreen>
                           color: Colors.white54,
                           size: 20,
                         ),
-                         onPressed: () {
-                           setState(() {
-                             _searchController.clear();
-                             _searchQuery = '';
-                             _selectedTableRows = {};
-                           });
-                         },
+                        onPressed: () {
+                          setState(() {
+                            _searchController.clear();
+                            _searchQuery = '';
+                            _selectedTableRows = {};
+                          });
+                        },
                       )
                     : null,
                 border: InputBorder.none,
@@ -760,12 +776,12 @@ class _ResultsScreenState extends State<ResultsScreen>
                   vertical: AppSpacing.sm,
                 ),
               ),
-               onChanged: (value) {
-                 setState(() {
-                   _searchQuery = value;
-                   _selectedTableRows = {};
-                 });
-               },
+              onChanged: (value) {
+                setState(() {
+                  _searchQuery = value;
+                  _selectedTableRows = {};
+                });
+              },
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -864,11 +880,11 @@ class _ResultsScreenState extends State<ResultsScreen>
                     child: Checkbox(
                       value: _requireWebsite,
                       onChanged: (value) {
-                    setState(() {
-                      _requireWebsite = value ?? false;
-                      _selectedTableRows = {};
-                    });
-                  },
+                        setState(() {
+                          _requireWebsite = value ?? false;
+                          _selectedTableRows = {};
+                        });
+                      },
                       activeColor: AppColors.primaryBlue,
                       checkColor: Colors.white,
                       side: BorderSide(
@@ -897,14 +913,14 @@ class _ResultsScreenState extends State<ResultsScreen>
               if (_searchQuery.isNotEmpty ||
                   _cityFilter != 'All Cities' ||
                   _requireWebsite ||
-                  _contactFilters.length < 3)
+                  _contactFilters.length < 4)
                 TextButton(
                   onPressed: () {
                     setState(() {
                       _searchController.clear();
                       _searchQuery = '';
                       _cityFilter = 'All Cities';
-                      _contactFilters = {'Phone', 'Website', 'Maps'};
+                      _contactFilters = {'Phone', 'Email', 'Website', 'Maps'};
                       _contactMatchAll = false;
                       _requireWebsite = false;
                       _sortOption = 'Newest';
@@ -962,12 +978,12 @@ class _ResultsScreenState extends State<ResultsScreen>
                     ],
                   ),
                 ),
-                 onSelected: (value) {
-                   setState(() {
-                     _sortOption = value;
-                     _selectedTableRows = {};
-                   });
-                 },
+                onSelected: (value) {
+                  setState(() {
+                    _sortOption = value;
+                    _selectedTableRows = {};
+                  });
+                },
                 itemBuilder: (context) => [
                   _buildSortMenuItem('Newest', Icons.access_time_rounded),
                   _buildSortMenuItem('Name A-Z', Icons.sort_by_alpha_rounded),
@@ -1162,6 +1178,8 @@ class _ResultsScreenState extends State<ResultsScreen>
       case 3:
         return 'phone';
       case 4:
+        return 'email';
+      case 5:
         return 'website';
       default:
         return null;
@@ -1206,8 +1224,7 @@ class _ResultsScreenState extends State<ResultsScreen>
           ),
           const Spacer(),
           OutlinedButton.icon(
-            onPressed:
-                count > 0 ? () => _exportSelectedCsv(tableRows) : null,
+            onPressed: count > 0 ? () => _exportSelectedCsv(tableRows) : null,
             style: OutlinedButton.styleFrom(
               side: BorderSide(
                 color: AppColors.successGreen.withValues(alpha: 0.5),
@@ -1228,8 +1245,7 @@ class _ResultsScreenState extends State<ResultsScreen>
           ),
           const SizedBox(width: AppSpacing.xs),
           OutlinedButton.icon(
-            onPressed:
-                count > 0 ? () => _exportSelectedJson(tableRows) : null,
+            onPressed: count > 0 ? () => _exportSelectedJson(tableRows) : null,
             style: OutlinedButton.styleFrom(
               side: BorderSide(
                 color: AppColors.infoBlue.withValues(alpha: 0.5),
@@ -1303,6 +1319,7 @@ class _ResultsScreenState extends State<ResultsScreen>
       'city',
       'state',
       'phone',
+      'email',
       'website',
       'address',
       'google_maps_url',
@@ -1351,6 +1368,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                 'city': r['city'] ?? 'N/A',
                 'state': r['state'] ?? '',
                 'phone': r['phone'] ?? 'N/A',
+                'email': r['email'] ?? 'N/A',
                 'website': r['website'] ?? 'N/A',
                 'address': r['address'] ?? 'N/A',
                 'google_maps_url': r['google_maps_url'] ?? '',
@@ -1384,16 +1402,17 @@ class _ResultsScreenState extends State<ResultsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_selectedTableRows.isNotEmpty)
-              _buildBulkActionsBar(rows),
+            if (_selectedTableRows.isNotEmpty) _buildBulkActionsBar(rows),
             InfinityDataTable(
               layoutType: layoutType,
               columns: [
                 const InfinityDataColumn(
                     label: 'Business Name', keyName: 'business_name'),
-                const InfinityDataColumn(label: 'Category', keyName: 'category'),
+                const InfinityDataColumn(
+                    label: 'Category', keyName: 'category'),
                 const InfinityDataColumn(label: 'City', keyName: 'city'),
                 const InfinityDataColumn(label: 'Phone', keyName: 'phone'),
+                const InfinityDataColumn(label: 'Email', keyName: 'email'),
                 const InfinityDataColumn(label: 'Website', keyName: 'website'),
                 InfinityDataColumn(
                   label: 'Actions',
@@ -1404,6 +1423,11 @@ class _ResultsScreenState extends State<ResultsScreen>
                         icon: Icons.call,
                         tooltip: 'Call',
                         onTap: () => _launchPhone(row['phone'] ?? ''),
+                      ),
+                      _tableActionButton(
+                        icon: Icons.email_outlined,
+                        tooltip: 'Email',
+                        onTap: () => _launchEmail(row['email'] ?? ''),
                       ),
                       _tableActionButton(
                         icon: Icons.language,
@@ -1460,6 +1484,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                   padding: const EdgeInsets.only(bottom: AppSpacing.md),
                   child: _LeadCard(
                     business: business,
+                    onEmailTap: () => _launchEmail(business['email'] ?? ''),
                     onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
                     onAddressTap: () => _launchMaps(business['address'] ?? ''),
                   ),
@@ -1488,6 +1513,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                 final business = results[index];
                 return _LeadCard(
                   business: business,
+                  onEmailTap: () => _launchEmail(business['email'] ?? ''),
                   onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
                   onAddressTap: () => _launchMaps(business['address'] ?? ''),
                 );
@@ -1506,8 +1532,7 @@ class _ResultsScreenState extends State<ResultsScreen>
             height: 48,
             child: CircularProgressIndicator(
               strokeWidth: 3,
-              valueColor:
-                  AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -1647,7 +1672,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                   height: 1.5,
                 ),
               ),
-              if (_searchQuery.isNotEmpty || _contactFilters.length < 3) ...[
+              if (_searchQuery.isNotEmpty || _contactFilters.length < 4) ...[
                 const SizedBox(height: AppSpacing.md),
                 Text(
                   'No results match your current filters.\nTry adjusting your search criteria.',
@@ -1663,14 +1688,15 @@ class _ResultsScreenState extends State<ResultsScreen>
                     setState(() {
                       _searchController.clear();
                       _searchQuery = '';
-                      _contactFilters = {'Phone', 'Website', 'Maps'};
+                      _contactFilters = {'Phone', 'Email', 'Website', 'Maps'};
                     });
                   },
                   icon: const Icon(Icons.clear_all_rounded, size: 18),
                   label: const Text('Clear Filters'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.primaryBlueLight,
-                    side: BorderSide(color: AppColors.primaryBlue.withValues(alpha: 0.35)),
+                    side: BorderSide(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.35)),
                   ),
                 ),
               ],
@@ -1683,8 +1709,7 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   Future<void> _downloadResults(BuildContext ctx) async {
     final scaffoldMessenger = ScaffoldMessenger.of(ctx);
-    final scraperProvider =
-        Provider.of<ScraperProvider>(ctx, listen: false);
+    final scraperProvider = Provider.of<ScraperProvider>(ctx, listen: false);
 
     setState(() => _isDownloading = true);
 
@@ -1717,11 +1742,13 @@ class _ResultsScreenState extends State<ResultsScreen>
 
 class _LeadCard extends StatefulWidget {
   final Map<String, dynamic> business;
+  final VoidCallback? onEmailTap;
   final VoidCallback? onWebsiteTap;
   final VoidCallback? onAddressTap;
 
   const _LeadCard({
     required this.business,
+    this.onEmailTap,
     this.onWebsiteTap,
     this.onAddressTap,
   });
@@ -1741,9 +1768,11 @@ class _LeadCardState extends State<_LeadCard> {
     final category = (business['category'] ?? '').toString().trim();
     final address = (business['address'] ?? '').toString().trim();
     final phone = (business['phone'] ?? '').toString().trim();
+    final email = (business['email'] ?? '').toString().trim();
     final website = (business['website'] ?? '').toString().trim();
 
     final hasPhone = phone.isNotEmpty && phone != 'N/A';
+    final hasEmail = email.isNotEmpty && email != 'N/A';
     final hasWebsite = website.isNotEmpty && website != 'N/A';
     final hasAddress = address.isNotEmpty && address != 'N/A';
     final hasCategory = category.isNotEmpty && category != 'N/A';
@@ -1794,6 +1823,13 @@ class _LeadCardState extends State<_LeadCard> {
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (hasEmail)
+                          _iconButton(
+                            icon: Icons.email_outlined,
+                            color: AppColors.primaryBlueLight,
+                            tooltip: 'Send Email',
+                            onTap: widget.onEmailTap,
+                          ),
                         if (hasWebsite)
                           _iconButton(
                             icon: Icons.language_rounded,

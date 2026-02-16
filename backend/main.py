@@ -130,12 +130,19 @@ def ensure_default_admin_settings() -> None:
         # When false, users see Payments Coming Soon instead of live payment screens.
         ("enable_live_payments", "false"),
         # Future-proof: comma-separated list of payment methods surfaced in the UI.
-        ("payment_methods_enabled", "stripe,paypal,coinbase"),
+        ("payment_methods_enabled", "stripe,paypal,coinbase,googlepay"),
     ]
     for key, value in defaults:
         if not admin_setting_exists(key):
             # System bootstrap: attribute to the first admin user (id=1) by convention.
             set_admin_setting(key, value, admin_id=1)
+
+    # Ensure googlepay is in payment_methods_enabled (for existing databases).
+    current = get_admin_setting("payment_methods_enabled", "")
+    methods = [m.strip().lower() for m in str(current).split(",") if m.strip()]
+    if "googlepay" not in methods:
+        methods.append("googlepay")
+        set_admin_setting("payment_methods_enabled", ",".join(methods), admin_id=1)
 
 
 def get_all_admin_settings() -> dict:
@@ -1932,6 +1939,10 @@ async def get_feature_flags(current_user: dict = Depends(get_current_user)):
     return {
         "enable_live_payments": enable_live_payments,
         "payment_methods_enabled": methods,
+        "stripe_publishable_key": config.STRIPE_PUBLISHABLE_KEY or None,
+        "google_pay_merchant_id": config.GOOGLE_PAY_MERCHANT_ID or None,
+        "google_pay_merchant_name": config.GOOGLE_PAY_MERCHANT_NAME or "Infinity Leads Pro",
+        "google_pay_environment": config.GOOGLE_PAY_ENVIRONMENT or "TEST",
     }
 
 
@@ -3678,8 +3689,11 @@ async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail="quantity must be > 0")
 
     provider = (req.provider or req.payment_provider or "stripe").lower()
+    # Google Pay is processed through Stripe, so treat it as a Stripe payment.
+    if provider == "googlepay":
+        provider = "stripe"
     if provider not in ("stripe", "coinbase", "paypal"):
-        raise HTTPException(status_code=400, detail="provider must be 'stripe', 'coinbase', or 'paypal'")
+        raise HTTPException(status_code=400, detail="provider must be 'stripe', 'coinbase', 'paypal', or 'googlepay'")
 
     try:
         if provider == "stripe":
