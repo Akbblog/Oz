@@ -249,7 +249,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
   Widget _buildEmpty() {
     return ListView(
       children: [
-        SizedBox(height: MediaQuery.of(context).size.height * 0.2),
+        SizedBox(height: MediaQuery.of(context).size.height * 0.15),
         Center(
           child: Column(
             children: [
@@ -260,14 +260,14 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
-                  Icons.credit_card_off,
+                  Icons.account_balance_wallet_rounded,
                   color: Colors.white38,
                   size: 48,
                 ),
               ),
               const SizedBox(height: AppSpacing.lg),
               Text(
-                'No Payment Methods',
+                'Payment Methods',
                 style: AppTypography.titleMedium.copyWith(
                   color: Colors.white,
                   fontWeight: FontWeight.w700,
@@ -275,13 +275,13 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
-                'Cards saved during checkout will appear here.',
+                'Use Google Pay for fast, secure checkout.',
                 style: AppTypography.bodySmall.copyWith(color: Colors.white54),
               ),
               const SizedBox(height: AppSpacing.xl),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                child: _buildPayPalCard(),
+                child: _buildGooglePayCard(),
               ),
             ],
           ),
@@ -290,7 +290,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
     );
   }
 
-  Widget _buildPayPalCard() {
+  Widget _buildGooglePayCard() {
     return Container(
       padding: AppSpacing.paddingLg,
       decoration: BoxDecoration(
@@ -304,15 +304,15 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFF009CDE).withValues(alpha: 0.15),
+              color: Colors.white.withValues(alpha: 0.1),
               shape: BoxShape.circle,
               border: Border.all(
-                color: const Color(0xFF009CDE).withValues(alpha: 0.35),
+                color: Colors.white.withValues(alpha: 0.2),
               ),
             ),
             child: const Icon(
-              Icons.payments_rounded,
-              color: Color(0xFF009CDE),
+              Icons.account_balance_wallet_rounded,
+              color: Colors.white,
               size: 22,
             ),
           ),
@@ -322,7 +322,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'PayPal',
+                  'Google Pay',
                   style: AppTypography.labelLarge.copyWith(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
@@ -330,7 +330,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Available at checkout (not saved as a card).',
+                  'Available at checkout. Fast and secure.',
                   style: AppTypography.bodySmall.copyWith(color: Colors.white54),
                 ),
               ],

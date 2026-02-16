@@ -5,11 +5,12 @@ import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
 import '../services/api_service.dart';
 import '../services/stripe_js_interop.dart';
-import '../widgets/payment_form.dart';
+// TODO(payments): Uncomment when re-enabling other payment methods.
+// import '../widgets/payment_form.dart';
+// import '../widgets/crypto_payment_widget.dart';
+// import '../widgets/paypal_payment_widget.dart';
 import '../widgets/promo_code_input.dart';
-import '../widgets/crypto_payment_widget.dart';
 import '../widgets/google_pay_payment_widget.dart';
-import '../widgets/paypal_payment_widget.dart';
 import 'payment_success_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -28,16 +29,10 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   final ApiService _apiService = ApiService();
-  bool _isProcessing = false;
   String? _paymentError;
   Map<String, dynamic>? _promo;
   Map<String, dynamic>? _priceBreakdown;
-  Map<String, dynamic>? _cryptoCharge;
-  Map<String, dynamic>? _paypalOrder;
-  bool _isCryptoLoading = false;
-  bool _isPayPalLoading = false;
   bool _isGooglePayLoading = false;
-  int _paymentMethod = 3; // 0 = card, 1 = paypal, 2 = crypto, 3 = googlepay
 
   // Google Pay state
   String? _stripePublishableKey;
@@ -45,7 +40,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String _googlePayEnvironment = 'TEST';
   String? _googlePayClientSecret;
   String? _googlePayTransactionId;
-  bool _googlePayEnabled = false;
 
   @override
   void initState() {
@@ -70,16 +64,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     try {
       final flags = await _apiService.getFeatureFlags();
       if (!mounted) return;
-      final methods = flags['payment_methods_enabled'];
-      final gpayEnabled = methods is List &&
-          methods.map((m) => m.toString().toLowerCase()).contains('googlepay');
       setState(() {
         _stripePublishableKey = flags['stripe_publishable_key'] as String?;
         _googlePayMerchantName =
             (flags['google_pay_merchant_name'] as String?) ?? 'Infinity Leads Pro';
         _googlePayEnvironment =
             (flags['google_pay_environment'] as String?) ?? 'TEST';
-        _googlePayEnabled = gpayEnabled && (_stripePublishableKey?.isNotEmpty ?? false);
       });
     } catch (_) {
       // Non-critical: Google Pay tab just won't show.
@@ -98,117 +88,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     } catch (_) {}
   }
 
-  Future<void> _processCardPayment(Map<String, String> cardDetails) async {
-    setState(() {
-      _isProcessing = true;
-      _paymentError = null;
-    });
-
-    try {
-      final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
-
-      if (widget.isSubscription) {
-        final result = await _apiService.createSubscription(
-          planId: widget.item['id'],
-          promoCode: _promo?['code'],
-        );
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => PaymentSuccessScreen(
-                transaction: result,
-                isSubscription: true,
-              ),
-            ),
-          );
-        }
-      } else {
-        final result = await _apiService.purchaseCredits(
-          packageId: widget.item['id'],
-          paymentProvider: 'stripe',
-          promoCode: _promo?['code'],
-          idempotencyKey: idempotencyKey,
-        );
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => PaymentSuccessScreen(
-                transaction: result,
-                isSubscription: false,
-              ),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isProcessing = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _createCryptoCharge() async {
-    setState(() {
-      _isCryptoLoading = true;
-      _paymentError = null;
-    });
-
-    try {
-      final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
-      final result = await _apiService.purchaseCredits(
-        packageId: widget.item['id'],
-        paymentProvider: 'coinbase',
-        promoCode: _promo?['code'],
-        idempotencyKey: idempotencyKey,
-      );
-      if (mounted) {
-        setState(() {
-          _cryptoCharge = result;
-          _isCryptoLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isCryptoLoading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _createPayPalOrder() async {
-    setState(() {
-      _isPayPalLoading = true;
-      _paymentError = null;
-    });
-
-    try {
-      final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
-      final result = await _apiService.purchaseCredits(
-        packageId: widget.item['id'],
-        paymentProvider: 'paypal',
-        promoCode: _promo?['code'],
-        idempotencyKey: idempotencyKey,
-      );
-      if (mounted) {
-        setState(() {
-          _paypalOrder = result;
-          _isPayPalLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isPayPalLoading = false;
-        });
-      }
-    }
-  }
+  // TODO(payments): Restore _processCardPayment, _createCryptoCharge,
+  // _createPayPalOrder, _capturePayPalOrder when re-enabling other methods.
 
   Future<void> _initiateGooglePay() async {
     setState(() {
@@ -293,39 +174,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         setState(() {
           _paymentError = e.toString().replaceFirst('Exception: ', '');
           _isGooglePayLoading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _capturePayPalOrder() async {
-    final txnId = (_paypalOrder?['transaction_id'] ?? '').toString();
-    if (txnId.isEmpty) {
-      setState(() => _paymentError = 'Missing PayPal transaction id');
-      return;
-    }
-
-    setState(() {
-      _isPayPalLoading = true;
-      _paymentError = null;
-    });
-
-    try {
-      final result = await _apiService.capturePayPalPayment(transactionId: txnId);
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => PaymentSuccessScreen(
-            transaction: result,
-            isSubscription: false,
-          ),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isPayPalLoading = false;
         });
       }
     }
@@ -644,110 +492,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Widget _buildPaymentMethodToggle() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Payment Method',
-          style: AppTypography.titleMedium.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Row(
-          children: [
-            Expanded(
-              child: _methodTab(
-                icon: Icons.credit_card,
-                label: 'Card',
-                isSelected: _paymentMethod == 0,
-                onTap: () => setState(() => _paymentMethod = 0),
-              ),
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: _methodTab(
-                icon: Icons.payments_rounded,
-                label: 'PayPal',
-                isSelected: _paymentMethod == 1,
-                onTap: () => setState(() => _paymentMethod = 1),
-              ),
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: _methodTab(
-                icon: Icons.currency_bitcoin,
-                label: 'Crypto',
-                isSelected: _paymentMethod == 2,
-                onTap: () => setState(() => _paymentMethod = 2),
-              ),
-            ),
-            if (_googlePayEnabled) ...[
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: _methodTab(
-                  icon: Icons.account_balance_wallet_rounded,
-                  label: 'GPay',
-                  isSelected: _paymentMethod == 3,
-                  onTap: () => setState(() => _paymentMethod = 3),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _methodTab({
-    required IconData icon,
-    required String label,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: AppSpacing.durationMedium,
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: AppSpacing.sm,
-        ),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? _CheckoutColors.primary.withValues(alpha: 0.12)
-              : _CheckoutColors.surface.withValues(alpha: 0.3),
-          borderRadius: AppSpacing.borderRadiusMd,
-          border: Border.all(
-            color: isSelected
-                ? _CheckoutColors.primary
-                : AppColors.borderDarkAlt,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? _CheckoutColors.primary : Colors.white54,
-              size: 20,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: AppTypography.labelLarge.copyWith(
-                color: isSelected ? Colors.white : Colors.white54,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  // TODO(payments): Restore _buildPaymentMethodToggle and _methodTab
+  // when re-enabling Card, PayPal, and Crypto payment methods.
 }
 
 class _CheckoutColors {
