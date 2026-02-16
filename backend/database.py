@@ -334,6 +334,10 @@ def init_database():
         except Exception as e:
             logger.warning(f"Users.phone ensure step skipped/failed: {e}")
         try:
+            _ensure_results_email_column(logger=logger)
+        except Exception as e:
+            logger.warning(f"Results.email ensure step skipped/failed: {e}")
+        try:
             _ensure_default_admin_user(logger=logger)
         except Exception as e:
             logger.warning(f"Default admin bootstrap skipped/failed: {e}")
@@ -374,6 +378,40 @@ def _ensure_users_phone_column(logger=None) -> None:
                 logger.info("✓ Added missing users.phone column (SQLite).")
     finally:
         conn.close()
+
+
+def _ensure_results_email_column(logger=None) -> None:
+    """Ensure results.email exists across supported databases."""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        if _get_db_type() == "mysql":
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'results'
+                  AND COLUMN_NAME = 'email'
+                """
+            )
+            exists = int((cursor.fetchone() or [0])[0] or 0) > 0
+            if not exists:
+                cursor.execute("ALTER TABLE results ADD COLUMN email TEXT NULL")
+                conn.commit()
+                if logger:
+                    logger.info("Added missing results.email column (MySQL).")
+            return
+
+        cursor.execute("PRAGMA table_info(results)")
+        columns = [str(row[1]).lower() for row in (cursor.fetchall() or []) if row and len(row) > 1]
+        if "email" not in columns:
+            cursor.execute("ALTER TABLE results ADD COLUMN email TEXT")
+            conn.commit()
+            if logger:
+                logger.info("Added missing results.email column (SQLite).")
+    finally:
+        conn.close()
+
 
 def _ensure_default_admin_user(logger=None) -> None:
     """

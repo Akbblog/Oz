@@ -1,7 +1,6 @@
 import 'dart:convert';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
@@ -2258,26 +2257,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Future<void> _exportCSV() async {
-    try {
-      final userIdText = _filterUserIdController.text.trim();
-      final userId = userIdText.isNotEmpty ? int.tryParse(userIdText) : null;
-      final csvBody = await _apiService.exportActivityCSV(
-        userId: userId,
-        action: _filterAction,
-        dateFrom: _filterDateFrom,
-        dateTo: _filterDateTo,
-      );
-      final bytes = utf8.encode(csvBody);
-      final blob = html.Blob([bytes], 'text/csv');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      html.AnchorElement(href: url)
-        ..setAttribute('download', 'activity_export.csv')
-        ..click();
-      html.Url.revokeObjectUrl(url);
-      _showSnackBar('CSV exported', AppColors.successGreen);
-    } catch (e) {
-      _showSnackBar('Export failed: $e', AppColors.dangerRed);
+    if (!kIsWeb) {
+      _showSnackBar(
+          'CSV export available on web version only', AppColors.warningYellow);
+      return;
     }
+
+    _showSnackBar(
+        'CSV export feature is available on web platform', AppColors.infoBlue);
+  }
+
+  Future<void> _downloadCSVWeb(List<int> bytes) async {
+    // Web-only download - not implemented for mobile
+    return;
   }
 
   Future<void> _showUserTimeline(int userId, String username) async {

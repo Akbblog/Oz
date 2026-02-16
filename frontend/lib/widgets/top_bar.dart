@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
-import 'brand_mark.dart';
 import 'credit_pill.dart';
 
 class TopBar extends StatelessWidget {
@@ -60,22 +59,8 @@ class TopBar extends StatelessWidget {
                 IconButton(
                   onPressed: onMenuToggle,
                   icon: const Icon(Icons.menu_rounded, color: Colors.white),
-                )
-              else
-                Row(
-                  children: [
-                    const BrandMark(size: 32, hoverGlow: true),
-                    const SizedBox(width: AppSpacing.sm),
-                    Text(
-                      'Infinity Leads Pro',
-                      style: AppTypography.titleMedium.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
                 ),
-              const SizedBox(width: AppSpacing.lg),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   title,

@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-
 import '../core/theme/app_breakpoints.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
@@ -766,43 +764,40 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     final m = method.trim().toLowerCase();
     switch (m) {
       case 'stripe':
-        return _MethodSpec(
+        return const _MethodSpec(
           name: 'Stripe',
           description: 'Credit & debit cards',
-          assetPath: 'assets/icons/stripe.svg',
           icon: Icons.credit_card_rounded,
-          color: const Color(0xFF635BFF),
+          color: Color(0xFF9B8FFF),
         );
       case 'paypal':
-        return _MethodSpec(
+        return const _MethodSpec(
           name: 'PayPal',
           description: 'PayPal account',
-          assetPath: 'assets/icons/paypal.svg',
-          icon: Icons.account_balance_wallet_outlined,
-          color: const Color(0xFF0070BA),
+          icon: Icons.account_balance_wallet_rounded,
+          color: Color(0xFF4DA6E8),
         );
       case 'coinbase':
-        return _MethodSpec(
+        return const _MethodSpec(
           name: 'Coinbase',
           description: 'Cryptocurrency',
-          assetPath: 'assets/icons/coinbase.svg',
           icon: Icons.currency_bitcoin_rounded,
-          color: const Color(0xFF0052FF),
+          color: Color(0xFF5B8DEF),
         );
       case 'bank':
       case 'bank_transfer':
-        return _MethodSpec(
+        return const _MethodSpec(
           name: 'Bank Transfer',
           description: 'Direct bank payment',
           icon: Icons.account_balance_rounded,
-          color: const Color(0xFF4CAF50),
+          color: Color(0xFF66BB6A),
         );
       default:
         return _MethodSpec(
           name: method.trim().isEmpty ? 'Payment' : method.trim(),
           description: 'Payment method',
           icon: Icons.lock_clock_rounded,
-          color: AppColors.primaryBlue,
+          color: AppColors.primaryBlueLight,
         );
     }
   }
@@ -821,30 +816,17 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
       ),
       child: Row(
         children: [
-          // Icon container with brand color accent
           Container(
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: spec.color.withValues(alpha: 0.12),
+              color: spec.color.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: spec.color.withValues(alpha: 0.2),
+                color: spec.color.withValues(alpha: 0.25),
               ),
             ),
-            child: Center(
-              child: spec.assetPath != null
-                  ? SvgPicture.asset(
-                      spec.assetPath!,
-                      width: 22,
-                      height: 22,
-                      colorFilter: ColorFilter.mode(
-                        spec.color,
-                        BlendMode.srcIn,
-                      ),
-                    )
-                  : Icon(spec.icon, color: spec.color, size: 22),
-            ),
+            child: Icon(spec.icon, color: spec.color, size: 22),
           ),
           const SizedBox(width: AppSpacing.sm),
           // Name and description
@@ -980,14 +962,12 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
 class _MethodSpec {
   final String name;
   final String description;
-  final String? assetPath;
   final IconData icon;
   final Color color;
 
   const _MethodSpec({
     required this.name,
     this.description = '',
-    this.assetPath,
     required this.icon,
     required this.color,
   });

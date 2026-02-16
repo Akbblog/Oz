@@ -19,7 +19,8 @@ import asyncio
 import sys
 import secrets
 import hashlib
-from urllib.parse import quote_plus
+import re
+from urllib.parse import quote_plus, urlparse, parse_qs, unquote, urljoin
 import base64
 from io import BytesIO
 import config
@@ -2438,6 +2439,8 @@ async def get_user_credits_admin(user_id: int, admin: dict = Depends(get_admin_u
 # ==================== SCRAPER ====================
 
 class GoogleBusinessScraper:
+    _EMAIL_REGEX = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
+
     def __init__(self, headless: bool = None):
         """Create scraper instance. headless defaults to env PLAYWRIGHT_HEADLESS (True)"""
         self.playwright = None
@@ -2496,6 +2499,114 @@ class GoogleBusinessScraper:
         except Exception as e:
             logger.exception(f'Failed to initialize Playwright browser: {e}')
             raise
+
+    @staticmethod
+    def _normalize_website_url(website: str) -> str:
+        """Normalize website links, including Google redirect URLs."""
+        if not website:
+            return ""
+
+        normalized = website.strip()
+        try:
+            parsed = urlparse(normalized)
+            host = (parsed.netloc or "").lower()
+            if host.startswith("www.google.") or host == "google.com":
+                query = parse_qs(parsed.query)
+                target = (query.get("q") or query.get("url") or [""])[0]
+                if target:
+                    normalized = unquote(target)
+        except Exception:
+            return website.strip()
+
+        return normalized
+
+    @classmethod
+    def _extract_first_email(cls, raw_text: str) -> str:
+        if not raw_text:
+            return ""
+
+        for match in cls._EMAIL_REGEX.finditer(raw_text):
+            candidate = match.group(0).strip(".,;:()[]{}<>\"'")
+            candidate_lower = candidate.lower()
+            if candidate_lower.endswith((
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".svg",
+                ".ico",
+                ".css",
+                ".js",
+                ".woff",
+                ".woff2",
+                ".ttf",
+                ".pdf",
+            )):
+                continue
+            return candidate
+        return ""
+
+    async def _extract_email_from_website(self, website: str) -> str:
+        """
+        Best-effort email extraction from a business website.
+        Tries homepage first, then at most one contact/about/support page.
+        """
+        if not self.page:
+            return ""
+
+        target_url = self._normalize_website_url(website)
+        if not target_url.lower().startswith(("http://", "https://")):
+            return ""
+
+        try:
+            await self.page.goto(target_url, wait_until="domcontentloaded", timeout=6000)
+            page_html = await self.page.content()
+            email = self._extract_first_email(page_html)
+            if email:
+                return email
+
+            hrefs = await self.page.eval_on_selector_all(
+                "a[href]",
+                "els => els.map(el => el.getAttribute('href')).filter(Boolean)",
+            )
+
+            if not hrefs:
+                return ""
+
+            for href in hrefs:
+                href_str = str(href).strip()
+                href_lower = href_str.lower()
+
+                if href_lower.startswith("mailto:"):
+                    mailto_email = self._extract_first_email(href_str)
+                    if mailto_email:
+                        return mailto_email
+                    continue
+
+                if not any(token in href_lower for token in ("contact", "about", "support")):
+                    continue
+
+                candidate_url = urljoin(target_url, href_str)
+                if not candidate_url.lower().startswith(("http://", "https://")):
+                    continue
+
+                try:
+                    await self.page.goto(candidate_url, wait_until="domcontentloaded", timeout=5000)
+                    candidate_html = await self.page.content()
+                    contact_email = self._extract_first_email(candidate_html)
+                    if contact_email:
+                        return contact_email
+                except Exception:
+                    continue
+
+                # Only sample one likely contact page for performance.
+                break
+
+        except Exception:
+            return ""
+
+        return ""
 
 
     async def scrape_location(self, category: str, city: str, state: str, max_results: int = 10) -> List[Dict]:
@@ -2584,7 +2695,6 @@ class GoogleBusinessScraper:
                             phone_text = await phone_button.get_attribute('aria-label')
                             if phone_text:
                                 # Extract just the number from aria-label
-                                import re
                                 phone_match = re.search(r'[\d\s\-\(\)\+]+', phone_text)
                                 if phone_match:
                                     phone = phone_match.group(0).strip()
@@ -2599,6 +2709,7 @@ class GoogleBusinessScraper:
                             website = await website_link.get_attribute('href')
                     except Exception:
                         pass
+                    website = self._normalize_website_url(website)
 
                     # Extract address
                     address = ""
@@ -2612,10 +2723,17 @@ class GoogleBusinessScraper:
                     except Exception:
                         pass
 
+                    # Extract email by visiting business website (best effort).
+                    # Run this last because it navigates away from Google Maps detail page.
+                    email = ""
+                    if website:
+                        email = await self._extract_email_from_website(website)
+
                     business_data = {
                         'business_name': business_name,
                         'phone': phone,
                         'website': website,
+                        'email': email,
                         'address': address,
                         'category': category,
                         'city': city,
@@ -2799,6 +2917,7 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                                 r.get("business_name"),
                                 r.get("phone"),
                                 r.get("website"),
+                                r.get("email"),
                                 r.get("address"),
                                 r.get("category"),
                                 r.get("city"),
@@ -2808,8 +2927,8 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                         )
                     cursor.executemany(
                         """
-                        INSERT INTO results (job_id, business_name, phone, website, address, category, city, state, google_maps_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO results (job_id, business_name, phone, website, email, address, category, city, state, google_maps_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         rows,
                     )
@@ -2864,6 +2983,7 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                 "business_name",
                 "phone",
                 "website",
+                "email",
                 "address",
                 "category",
                 "city",
@@ -3142,7 +3262,7 @@ async def get_job_status(job_id: str, current_user: dict = Depends(get_current_u
     
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, website, address, category, city, state, google_maps_url
+        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     
@@ -3152,11 +3272,12 @@ async def get_job_status(job_id: str, current_user: dict = Depends(get_current_u
             "business_name": row[0],
             "phone": row[1],
             "website": row[2],
-            "address": row[3],
-            "category": row[4],
-            "city": row[5],
-            "state": row[6],
-            "google_maps_url": row[7]
+            "email": row[3],
+            "address": row[4],
+            "category": row[5],
+            "city": row[6],
+            "state": row[7],
+            "google_maps_url": row[8]
         })
     
     conn.close()
@@ -3219,7 +3340,7 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
     
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, website, address, category, city, state, google_maps_url
+        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     
@@ -3229,11 +3350,12 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
             "business_name": row[0],
             "phone": row[1],
             "website": row[2],
-            "address": row[3],
-            "category": row[4],
-            "city": row[5],
-            "state": row[6],
-            "google_maps_url": row[7]
+            "email": row[3],
+            "address": row[4],
+            "category": row[5],
+            "city": row[6],
+            "state": row[7],
+            "google_maps_url": row[8]
         })
     
     conn.close()
@@ -3274,8 +3396,8 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
     )
 
     # Define column headers and widths
-    headers = ['#', 'Business Name', 'Phone', 'Website', 'Address', 'City', 'State', 'Google Maps']
-    col_widths = [5, 35, 18, 40, 50, 20, 15, 45]
+    headers = ['#', 'Business Name', 'Phone', 'Website', 'Email', 'Address', 'City', 'State', 'Google Maps']
+    col_widths = [5, 35, 18, 40, 34, 50, 20, 15, 45]
 
     # Write headers
     for col, (header, width) in enumerate(zip(headers, col_widths), 1):
@@ -3323,28 +3445,41 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         cell.alignment = cell_alignment
         cell.border = thin_border
 
+        # Email
+        email = result.get('email', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=5)
+        if email and email != 'N/A':
+            cell.value = email
+            cell.hyperlink = f"mailto:{email}"
+            cell.font = link_font
+        else:
+            cell.value = email
+            cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
         # Address
         address = result.get('address', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=5, value=address)
+        cell = ws.cell(row=row_idx, column=6, value=address)
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # City
-        cell = ws.cell(row=row_idx, column=6, value=result.get('city', 'N/A'))
+        cell = ws.cell(row=row_idx, column=7, value=result.get('city', 'N/A'))
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # State
-        cell = ws.cell(row=row_idx, column=7, value=result.get('state', 'N/A'))
+        cell = ws.cell(row=row_idx, column=8, value=result.get('state', 'N/A'))
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # Google Maps URL (as hyperlink)
         maps_url = result.get('google_maps_url', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=8)
+        cell = ws.cell(row=row_idx, column=9)
         if maps_url and maps_url != 'N/A' and maps_url.startswith('http'):
             cell.value = 'View on Maps'
             cell.hyperlink = maps_url
@@ -3358,14 +3493,14 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         # Alternate row coloring
         if row_idx % 2 == 0:
             alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
-            for col in range(1, 9):
+            for col in range(1, 10):
                 ws.cell(row=row_idx, column=col).fill = alt_fill
 
     # Freeze the header row
     ws.freeze_panes = 'A2'
 
     # Add auto-filter
-    ws.auto_filter.ref = f"A1:H{len(results) + 1}"
+    ws.auto_filter.ref = f"A1:I{len(results) + 1}"
 
     # Save to bytes
     output = BytesIO()
@@ -3395,7 +3530,7 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
 
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, website, address, category, city, state, google_maps_url
+        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
 
@@ -3406,14 +3541,15 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
             "business_name": row[0],
             "phone": row[1],
             "website": row[2],
-            "address": row[3],
-            "category": row[4],
-            "city": row[5],
-            "state": row[6],
-            "google_maps_url": row[7]
+            "email": row[3],
+            "address": row[4],
+            "category": row[5],
+            "city": row[6],
+            "state": row[7],
+            "google_maps_url": row[8]
         })
-        if row[5]:
-            cities_set.add(row[5])
+        if row[6]:
+            cities_set.add(row[6])
 
     conn.close()
 
@@ -4781,14 +4917,14 @@ async def get_job_results_admin(
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, business_name, phone, website, address, category, city, state, google_maps_url
+        SELECT id, business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     results = [
         {
             "id": r[0], "business_name": r[1], "phone": r[2], "website": r[3],
-            "address": r[4], "category": r[5], "city": r[6], "state": r[7],
-            "google_maps_url": r[8],
+            "email": r[4], "address": r[5], "category": r[6], "city": r[7], "state": r[8],
+            "google_maps_url": r[9],
         }
         for r in cursor.fetchall()
     ]

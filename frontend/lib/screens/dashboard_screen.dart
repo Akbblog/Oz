@@ -529,7 +529,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   icon: Icons.add_rounded,
                   expanded: false,
                   height: 52,
-                  onPressed: () => widget.onNavigateToTab?.call(2),
+                  onPressed: () => widget.onNavigateToTab?.call(1),
                 ),
               ],
             ),
