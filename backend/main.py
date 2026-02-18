@@ -32,6 +32,13 @@ from payments.webhook_handler import WebhookHandler
 from promotions.promo_service import PromoService
 from subscriptions.subscription_manager import SubscriptionManager
 from audit import record_audit_event
+from job_activity import (
+    record_job_activity_event,
+    get_job_activity_feed,
+    get_job_activity_count,
+    get_job_activity_event,
+    get_job_activity_filters,
+)
 
 # Fix for Windows asyncio event loop
 if sys.platform == 'win32':
@@ -2788,6 +2795,7 @@ class GoogleBusinessScraper:
 async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
     """Background task for running scraping jobs"""
     scraper = GoogleBusinessScraper()
+    all_results = []
     
     try:
         def _is_transient_db_disconnect(exc: Exception) -> bool:
@@ -2853,8 +2861,25 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
             conn.commit()
 
         _run_db_block("job startup", _startup)
-        
-        all_results = []
+
+        record_job_activity_event(
+            job_id=job_id,
+            user_id=user_id,
+            event_type="job_started",
+            job_status="running",
+            job_type=request.category,
+            metadata={
+                "total_cities": len(request.cities_data),
+                "max_results_per_city": request.max_results_per_city,
+            },
+        )
+        record_audit_event(
+            "job.start",
+            actor_user_id=user_id,
+            target_type="job",
+            target_id=job_id,
+            after={"status": "running"},
+        )
         
         for idx, city_state in enumerate(request.cities_data):
             # Parse city and state (no DB required).
@@ -3026,6 +3051,25 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
             conn.commit()
 
         _run_db_block("mark completed", _mark_completed)
+        record_job_activity_event(
+            job_id=job_id,
+            user_id=user_id,
+            event_type="job_completed",
+            job_status="completed",
+            job_type=request.category,
+            result_count=len(all_results),
+            metadata={
+                "total_cities": len(request.cities_data),
+                "max_results_per_city": request.max_results_per_city,
+            },
+        )
+        record_audit_event(
+            "job.complete",
+            actor_user_id=user_id,
+            target_type="job",
+            target_id=job_id,
+            after={"status": "completed", "results": len(all_results)},
+        )
         logger.info(f"Job {job_id} completed successfully. Total businesses found: {len(all_results)}")
         
     except Exception as e:
@@ -3050,6 +3094,29 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                 error_conn.close()
         except Exception as db_error:
             logger.error(f"Failed to record job error to database: {repr(db_error)}")
+
+        record_job_activity_event(
+            job_id=job_id,
+            user_id=user_id,
+            event_type="job_failed",
+            job_status="failed",
+            job_type=request.category,
+            result_count=len(all_results),
+            error_message=repr(e),
+            metadata={
+                "total_cities": len(request.cities_data),
+                "max_results_per_city": request.max_results_per_city,
+            },
+        )
+        record_audit_event(
+            "job.failed",
+            actor_user_id=user_id,
+            target_type="job",
+            target_id=job_id,
+            status="failure",
+            failure_reason=repr(e),
+            after={"status": "failed"},
+        )
     
     finally:
         await scraper.close()
@@ -3112,6 +3179,21 @@ async def create_scraping_job(
     conn.commit()
     conn.close()
 
+    record_job_activity_event(
+        job_id=job_id,
+        user_id=user_id,
+        event_type="job_created",
+        job_status="pending",
+        job_type=job_request.category,
+        result_count=0,
+        metadata={
+            "cities": num_cities,
+            "max_results_per_city": job_request.max_results_per_city,
+            "credit_cost": credit_cost,
+            "credit_balance_after": new_balance,
+        },
+    )
+
     # Increment rate limit counter
     increment_rate_limit(user_id)
 
@@ -3150,13 +3232,13 @@ async def cancel_scraping_job(
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT user_id, status FROM jobs WHERE job_id = ?", (job_id,))
+    cursor.execute("SELECT user_id, status, category FROM jobs WHERE job_id = ?", (job_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job_user_id, status_value = row[0], row[1]
+    job_user_id, status_value, job_category = row[0], row[1], (row[2] or "unknown")
     if job_user_id != current_user["id"] and current_user.get("is_admin") is not True:
         conn.close()
         raise HTTPException(status_code=403, detail="Not authorized to cancel this job")
@@ -3194,6 +3276,18 @@ async def cancel_scraping_job(
         after={"status": "cancelled"},
         ip_address=request.state.client_ip,
         user_agent=request.state.user_agent,
+    )
+    record_job_activity_event(
+        job_id=job_id,
+        user_id=job_user_id,
+        event_type="job_cancelled",
+        job_status="cancelled",
+        job_type=str(job_category),
+        error_message="Cancelled by user",
+        metadata={
+            "cancelled_by_user_id": current_user["id"],
+            "cancelled_by_username": current_user.get("username"),
+        },
     )
 
     return {"message": "Cancellation requested"}
@@ -4846,6 +4940,65 @@ async def get_activity_actions(admin: dict = Depends(get_admin_user)):
     return {"actions": get_distinct_actions()}
 
 
+@app.get("/api/admin/job-activity")
+async def get_job_activity_feed_endpoint(
+    user_id: Optional[int] = None,
+    event_type: Optional[str] = None,
+    job_status: Optional[str] = None,
+    job_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    """Job lifecycle activity feed with server-side filters for admin dashboard."""
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    events = get_job_activity_feed(
+        user_id=user_id,
+        event_type=event_type,
+        job_status=job_status,
+        job_type=job_type,
+        date_from=date_from,
+        date_to=date_to,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    total = get_job_activity_count(
+        user_id=user_id,
+        event_type=event_type,
+        job_status=job_status,
+        job_type=job_type,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return {
+        "events": events,
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+    }
+
+
+@app.get("/api/admin/job-activity/filters")
+async def get_job_activity_filters_endpoint(admin: dict = Depends(get_admin_user)):
+    """Filter options for job activity queries."""
+    return get_job_activity_filters()
+
+
+@app.get("/api/admin/job-activity/{event_id}")
+async def get_job_activity_event_endpoint(
+    event_id: int,
+    admin: dict = Depends(get_admin_user),
+):
+    """Single job activity event by id."""
+    event = get_job_activity_event(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Job activity event not found")
+    return event
+
+
 @app.get("/api/admin/activity/export")
 async def export_activity_csv_endpoint(
     user_id: Optional[int] = None,
@@ -4925,15 +5078,48 @@ async def get_user_jobs_admin(
 @app.get("/api/admin/jobs/{job_id}/results")
 async def get_job_results_admin(
     job_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    search: Optional[str] = None,
     admin: dict = Depends(get_admin_user),
 ):
-    """View job results (admin view, no ownership check)."""
+    """View job results (admin view, no ownership check) with pagination/search."""
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
+    where_clause = "WHERE job_id = ?"
+    params: List[object] = [job_id]
+
+    if search:
+        search_term = f"%{search.strip().lower()}%"
+        if search_term != "%%":
+            where_clause += """
+                AND (
+                    LOWER(COALESCE(business_name, '')) LIKE ?
+                    OR LOWER(COALESCE(phone, '')) LIKE ?
+                    OR LOWER(COALESCE(website, '')) LIKE ?
+                    OR LOWER(COALESCE(email, '')) LIKE ?
+                    OR LOWER(COALESCE(address, '')) LIKE ?
+                    OR LOWER(COALESCE(city, '')) LIKE ?
+                    OR LOWER(COALESCE(state, '')) LIKE ?
+                )
+            """
+            params.extend([search_term] * 7)
+
+    cursor.execute(f"SELECT COUNT(*) FROM results {where_clause}", tuple(params))
+    total = int(cursor.fetchone()[0] or 0)
+
+    cursor.execute(
+        f"""
         SELECT id, business_name, phone, website, email, address, category, city, state, google_maps_url
-        FROM results WHERE job_id = ?
-    """, (job_id,))
+        FROM results
+        {where_clause}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        tuple(params + [safe_limit, safe_offset]),
+    )
     results = [
         {
             "id": r[0], "business_name": r[1], "phone": r[2], "website": r[3],
@@ -4943,7 +5129,13 @@ async def get_job_results_admin(
         for r in cursor.fetchall()
     ]
     conn.close()
-    return {"results": results, "job_id": job_id}
+    return {
+        "results": results,
+        "job_id": job_id,
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+    }
 
 
 @app.get("/api/admin/audit/integrity")
