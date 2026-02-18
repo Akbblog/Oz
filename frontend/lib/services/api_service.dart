@@ -1916,6 +1916,31 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getAdminAllJobs({
+    String? status,
+    int page = 1,
+    int limit = 50,
+  }) async {
+    final headers = await _getHeaders();
+    final query = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    if (status != null && status.trim().isNotEmpty) {
+      query['status'] = status.trim().toLowerCase();
+    }
+
+    final uri = Uri.parse('$baseUrl/api/admin/jobs')
+        .replace(queryParameters: query);
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load admin jobs');
+    }
+  }
+
   Future<Map<String, dynamic>> getAdminJobActivity({
     int? userId,
     String? eventType,

@@ -10,6 +10,7 @@ import '../core/theme/app_typography.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../widgets/brand_mark.dart';
+import 'admin_jobs_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -49,6 +50,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   String? _filterStatus;
   String? _filterDateFrom;
   String? _filterDateTo;
+  bool _activityInitialized = false;
   final TextEditingController _filterUserIdController = TextEditingController();
 
   // User KPIs cache
@@ -888,7 +890,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Widget _buildTab(int index, String label, IconData icon) {
     final isSelected = _selectedTab == index;
     return GestureDetector(
-      onTap: () => setState(() => _selectedTab = index),
+      onTap: () => _selectTab(index),
       child: AnimatedContainer(
         duration: AppSpacing.durationFast,
         padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
@@ -921,6 +923,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         ),
       ),
     );
+  }
+
+  void _selectTab(int index) {
+    if (_selectedTab == index) return;
+    setState(() => _selectedTab = index);
+    if (index == 3) {
+      _ensureActivityLoaded();
+    }
+  }
+
+  void _ensureActivityLoaded({bool force = false}) {
+    if (_activityInitialized && !force) return;
+    _activityInitialized = true;
+    _loadActivityFeed(resetOffset: true);
+    _loadActivityActions();
   }
 
   Widget _buildStatsView(LayoutType layoutType) {
@@ -974,6 +991,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 _stats!['total_jobs'].toString(),
                 Icons.work,
                 AppColors.blue,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const AdminJobsScreen(),
+                    ),
+                  );
+                },
               ),
               _buildStatCard(
                 'Credits',
@@ -1095,64 +1119,103 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Widget _buildStatCard(
-      String title, String value, IconData icon, Color accent) {
-    return Container(
-      padding: AppSpacing.paddingMd,
-      decoration: BoxDecoration(
-        color: AppColors.surfaceDark,
-        borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.elevatedCardDark),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
+    String title,
+    String value,
+    IconData icon,
+    Color accent, {
+    VoidCallback? onTap,
+  }) {
+    final decoration = BoxDecoration(
+      color: AppColors.surfaceDark,
+      borderRadius: AppSpacing.borderRadiusLg,
+      border: Border.all(color: AppColors.elevatedCardDark),
+    );
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.15),
+                borderRadius: AppSpacing.borderRadiusSm,
+              ),
+              child: Icon(icon, color: accent, size: 18),
+            ),
+            if (title == 'Pending')
               Container(
-                padding: const EdgeInsets.all(6),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: accent.withValues(alpha: 0.15),
                   borderRadius: AppSpacing.borderRadiusSm,
                 ),
-                child: Icon(icon, color: accent, size: 18),
-              ),
-              if (title == 'Pending')
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.15),
-                    borderRadius: AppSpacing.borderRadiusSm,
-                  ),
-                  child: Text(
-                    'Action',
-                    style: AppTypography.labelSmall.copyWith(
-                      color: accent,
-                      fontWeight: FontWeight.w700,
-                    ),
+                child: Text(
+                  'Action',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: accent,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-            ],
+              ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          title.toUpperCase(),
+          style: AppTypography.labelSmall.copyWith(
+            color: Colors.white54,
+            letterSpacing: 1.1,
           ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            title.toUpperCase(),
-            style: AppTypography.labelSmall.copyWith(
-              color: Colors.white54,
-              letterSpacing: 1.1,
+        ),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: AppTypography.headlineSmall.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+
+    if (onTap == null) {
+      return Container(
+        padding: AppSpacing.paddingMd,
+        decoration: decoration,
+        child: content,
+      );
+    }
+
+    bool pressed = false;
+    return StatefulBuilder(
+      builder: (context, setInnerState) {
+        return AnimatedScale(
+          duration: AppSpacing.durationFast,
+          curve: Curves.easeOut,
+          scale: pressed ? 0.985 : 1,
+          child: Material(
+            color: Colors.transparent,
+            child: Ink(
+              decoration: decoration,
+              child: InkWell(
+                borderRadius: AppSpacing.borderRadiusLg,
+                splashColor: accent.withValues(alpha: 0.2),
+                highlightColor: accent.withValues(alpha: 0.1),
+                onHighlightChanged: (isPressed) {
+                  setInnerState(() => pressed = isPressed);
+                },
+                onTap: onTap,
+                child: Padding(
+                  padding: AppSpacing.paddingMd,
+                  child: content,
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: AppTypography.headlineSmall.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -2404,16 +2467,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Widget _buildActivityView() {
-    // Lazy-load on first visit
-    if (_activityEvents.isEmpty &&
-        !_activityLoading &&
-        _activityActions.isEmpty &&
-        _activityJobTypes.isEmpty &&
-        _activityStatuses.isEmpty) {
-      _loadActivityFeed();
-      _loadActivityActions();
-    }
-
     final currentPage = (_activityOffset ~/ _activityPageSize) + 1;
     final totalPages =
         (_activityTotal / _activityPageSize).ceil().clamp(1, 9999);

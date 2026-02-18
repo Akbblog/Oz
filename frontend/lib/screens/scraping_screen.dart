@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -12,6 +13,18 @@ import '../core/utils/responsive_utils.dart';
 import '../widgets/progress_stepper.dart';
 import 'register_screen.dart';
 import 'results_screen.dart';
+
+class _RepeatJobPreset {
+  final String category;
+  final List<String> cities;
+  final int maxResults;
+
+  const _RepeatJobPreset({
+    required this.category,
+    required this.cities,
+    required this.maxResults,
+  });
+}
 
 class ScrapingScreen extends StatefulWidget {
   final String initialCategory;
@@ -39,6 +52,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   bool get wantKeepAlive => true;
   final TextEditingController _categoryController = TextEditingController();
   final TextEditingController _citiesController = TextEditingController();
+  final TextEditingController _logSearchController = TextEditingController();
+  final FocusNode _categoryFocusNode = FocusNode();
+  final ScrollController _logScrollController = ScrollController();
   final ApiService _apiService = ApiService();
 
   int _maxResults = 50;
@@ -47,9 +63,27 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   bool _loadingCredits = true;
   bool _canCreateJob = true;
   String? _lastCompletedJobId; // Track job completion for auto-navigation
-  String _logFilter = 'All'; // All, Errors
+  String _logFilter = 'All'; // All, Errors, Warnings, Info
+  String _logSearchQuery = '';
+  bool _logExpanded = false;
+  bool _logAutoScroll = true;
+  int _lastObservedLogCount = 0;
+  bool _showCategorySuggestions = true;
+  _RepeatJobPreset? _activeJobPreset;
+  _RepeatJobPreset? _lastCompletedPreset;
   bool _attemptedStart = false;
   bool _draftLoaded = false;
+
+  static const List<String> _categorySuggestions = [
+    'Restaurants',
+    'Plumbers',
+    'Dentists',
+    'Real Estate Agents',
+    'Lawyers',
+    'Gyms',
+    'Coffee Shops',
+    'Auto Repair',
+  ];
 
   static const String _searchDraftKey = 'wizard_search_draft_v1';
 
@@ -61,6 +95,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     super.initState();
     _categoryController.text = widget.initialCategory;
     _citiesController.text = widget.initialCities;
+    _showCategorySuggestions = _categoryController.text.trim().isEmpty;
     _maxResults = int.tryParse(widget.initialMaxResults) ?? 50;
     _loadSearchDraftIfNeeded();
 
@@ -80,6 +115,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     } else {
       _loadingCredits = false;
     }
+    _categoryController.addListener(_syncCategorySuggestionVisibility);
+    _categoryFocusNode.addListener(_syncCategorySuggestionVisibility);
+    _logSearchController.addListener(_onLogSearchChanged);
     _citiesController.addListener(_updateCostEstimate);
 
     // Listen for job completion to auto-navigate
@@ -114,6 +152,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         _maxResults = int.tryParse(widget.initialMaxResults) ?? _maxResults;
       }
       _attemptedStart = false;
+      _showCategorySuggestions = _categoryController.text.trim().isEmpty;
     });
     _updateCostEstimate();
   }
@@ -126,6 +165,13 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           job.status == ScrapingStatus.completed &&
           _lastCompletedJobId != job.jobId) {
         _lastCompletedJobId = job.jobId;
+        _lastCompletedPreset = _activeJobPreset ??
+            _RepeatJobPreset(
+              category: job.category,
+              cities: List<String>.from(job.cities),
+              maxResults: _maxResults,
+            );
+        _activeJobPreset = null;
         _navigateToResults(job.jobId);
       }
     });
@@ -180,9 +226,15 @@ class _ScrapingScreenState extends State<ScrapingScreen>
 
   @override
   void dispose() {
+    _categoryController.removeListener(_syncCategorySuggestionVisibility);
+    _categoryFocusNode.removeListener(_syncCategorySuggestionVisibility);
+    _logSearchController.removeListener(_onLogSearchChanged);
     _citiesController.removeListener(_updateCostEstimate);
     _categoryController.dispose();
     _citiesController.dispose();
+    _logSearchController.dispose();
+    _categoryFocusNode.dispose();
+    _logScrollController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
@@ -213,6 +265,62 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
         .toList();
+  }
+
+  void _onLogSearchChanged() {
+    final query = _logSearchController.text;
+    if (_logSearchQuery == query || !mounted) return;
+    setState(() => _logSearchQuery = query);
+  }
+
+  void _syncCategorySuggestionVisibility() {
+    final shouldShow = _categoryController.text.trim().isEmpty;
+    if (shouldShow == _showCategorySuggestions || !mounted) return;
+    setState(() => _showCategorySuggestions = shouldShow);
+  }
+
+  void _removeCity(String city) {
+    final cities = _parseCities();
+    final index = cities.indexWhere(
+      (value) => value.toLowerCase() == city.toLowerCase(),
+    );
+    if (index == -1) return;
+    cities.removeAt(index);
+    _citiesController.text = cities.join('; ');
+    _citiesController.selection = TextSelection.collapsed(
+      offset: _citiesController.text.length,
+    );
+    setState(() {});
+  }
+
+  void _clearAllCities() {
+    if (_citiesController.text.trim().isEmpty) return;
+    _citiesController.clear();
+    setState(() {});
+  }
+
+  _RepeatJobPreset? _resolveRepeatPreset(ScraperProvider provider) {
+    if (_lastCompletedPreset != null) return _lastCompletedPreset;
+    final job = provider.currentJob;
+    if (job == null || job.status != ScrapingStatus.completed) return null;
+    return _RepeatJobPreset(
+      category: job.category,
+      cities: List<String>.from(job.cities),
+      maxResults: _maxResults,
+    );
+  }
+
+  void _repeatLastJob(ScraperProvider provider) {
+    final preset = _resolveRepeatPreset(provider);
+    if (preset == null) return;
+    setState(() {
+      _categoryController.text = preset.category;
+      _citiesController.text = preset.cities.join('; ');
+      _maxResults = preset.maxResults;
+      _attemptedStart = false;
+      _showCategorySuggestions = _categoryController.text.trim().isEmpty;
+    });
+    _updateCostEstimate();
   }
 
   Future<void> _updateCostEstimate() async {
@@ -649,6 +757,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       return;
     }
 
+    _activeJobPreset = _RepeatJobPreset(
+      category: category,
+      cities: List<String>.from(cities),
+      maxResults: _maxResults,
+    );
+
     await provider.startScraping(
       category: category,
       citiesData: cities,
@@ -692,7 +806,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                           children: [
                             _buildStatsRow(scraperProvider, layoutType),
                             const SizedBox(height: AppSpacing.lg),
-                            _buildConfigSection(),
+                            _buildConfigSection(scraperProvider),
                             const SizedBox(height: AppSpacing.lg),
                             _buildWizardActions(
                               scraperProvider,
@@ -734,7 +848,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                                       : 40,
                                   child: Column(
                                     children: [
-                                      _buildConfigSection(),
+                                      _buildConfigSection(scraperProvider),
                                       const SizedBox(height: AppSpacing.lg),
                                       _buildWizardActions(
                                         scraperProvider,
@@ -955,11 +1069,37 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildConfigSection() {
+  Widget _buildConfigSection(ScraperProvider scraperProvider) {
     final cities = _parseCities();
+    final repeatPreset = _resolveRepeatPreset(scraperProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (repeatPreset != null) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ActionChip(
+              avatar: const Icon(
+                Icons.refresh_rounded,
+                size: 16,
+                color: Colors.white70,
+              ),
+              label: Text(
+                'Repeat last job',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              backgroundColor: _ScrapeColors.primary.withValues(alpha: 0.2),
+              side: BorderSide(
+                color: _ScrapeColors.primary.withValues(alpha: 0.35),
+              ),
+              onPressed: () => _repeatLastJob(scraperProvider),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+        ],
         Row(
           children: [
             Icon(Icons.tune_rounded, color: _ScrapeColors.primary, size: 20),
@@ -980,7 +1120,41 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           controller: _categoryController,
           hint: 'Software Companies',
           icon: Icons.business_center_rounded,
+          focusNode: _categoryFocusNode,
+          onChanged: (_) => _syncCategorySuggestionVisibility(),
         ),
+        if (_showCategorySuggestions &&
+            (_categoryController.text.trim().isEmpty ||
+                _categoryFocusNode.hasFocus)) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xs,
+            children: _categorySuggestions
+                .map(
+                  (suggestion) => ActionChip(
+                    label: Text(
+                      suggestion,
+                      style: AppTypography.labelSmall.copyWith(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    backgroundColor: Colors.white.withValues(alpha: 0.06),
+                    side: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.12),
+                    ),
+                    onPressed: () {
+                      _categoryController.text = suggestion;
+                      _categoryController.selection =
+                          TextSelection.collapsed(offset: suggestion.length);
+                      _syncCategorySuggestionVisibility();
+                    },
+                  ),
+                )
+                .toList(),
+          ),
+        ],
         const SizedBox(height: AppSpacing.md),
         _buildInputField(
           label: 'Target Cities',
@@ -990,10 +1164,59 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         ),
         if (cities.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
-          Wrap(
-            spacing: AppSpacing.xs,
-            runSpacing: AppSpacing.xs,
-            children: cities.map((city) => _cityChip(city)).toList(),
+          Row(
+            children: [
+              Text(
+                'Selected Cities',
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white60,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const Spacer(),
+              if (cities.length > 1)
+                TextButton(
+                  onPressed: _clearAllCities,
+                  child: Text(
+                    'Clear All',
+                    style: AppTypography.labelSmall.copyWith(
+                      color: _ScrapeColors.primaryLight,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          AnimatedSwitcher(
+            duration: AppSpacing.durationMedium,
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) {
+              return FadeTransition(
+                opacity: animation,
+                child: SizeTransition(
+                  axisAlignment: -1,
+                  sizeFactor: animation,
+                  child: child,
+                ),
+              );
+            },
+            child: Wrap(
+              key: ValueKey(cities.join('|')),
+              spacing: AppSpacing.xs,
+              runSpacing: AppSpacing.xs,
+              children: cities
+                  .asMap()
+                  .entries
+                  .map(
+                    (entry) => KeyedSubtree(
+                      key: ValueKey('${entry.value}_${entry.key}'),
+                      child: _cityChip(entry.value),
+                    ),
+                  )
+                  .toList(),
+            ),
           ),
         ],
         const SizedBox(height: AppSpacing.md),
@@ -1007,6 +1230,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     required TextEditingController controller,
     required String hint,
     required IconData icon,
+    FocusNode? focusNode,
+    ValueChanged<String>? onChanged,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1021,6 +1246,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         const SizedBox(height: 6),
         TextField(
           controller: controller,
+          focusNode: focusNode,
           style: AppTypography.bodyMedium.copyWith(color: Colors.white),
           decoration: InputDecoration(
             hintText: hint,
@@ -1053,7 +1279,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               vertical: AppSpacing.md,
             ),
           ),
-          onChanged: (_) => _updateCostEstimate(),
+          onChanged: onChanged ?? (_) => _updateCostEstimate(),
         ),
       ],
     );
@@ -1080,6 +1306,20 @@ class _ScrapingScreenState extends State<ScrapingScreen>
             style: AppTypography.labelSmall.copyWith(
               color: _ScrapeColors.primaryLight,
               fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Remove $city',
+            splashRadius: 14,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minHeight: 16, minWidth: 16),
+            onPressed: () => _removeCity(city),
+            icon: Icon(
+              Icons.close_rounded,
+              size: 14,
+              color: _ScrapeColors.primaryLight.withValues(alpha: 0.9),
             ),
           ),
         ],
@@ -1390,7 +1630,11 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               _buildProgressCircle(progress, isRunning),
               const SizedBox(width: AppSpacing.md),
               Expanded(
-                child: _buildLogBox(logs, jobId: job?.jobId),
+                child: _buildLogBox(
+                  logs,
+                  jobId: job?.jobId,
+                  isRunning: isRunning,
+                ),
               ),
             ],
           ),
@@ -1443,11 +1687,24 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     );
   }
 
-  Widget _buildLogBox(List<String> logs, {String? jobId}) {
+  Widget _buildLogBox(
+    List<String> logs, {
+    String? jobId,
+    required bool isRunning,
+  }) {
     final filtered = _filteredLogs(logs);
-    final displayLogs = filtered.isEmpty
-        ? ['> Waiting for logs...']
-        : filtered.take(10).toList();
+    final emptyMessage = _buildLogEmptyMessage(
+      logs: logs,
+      filtered: filtered,
+      isRunning: isRunning,
+    );
+    if (_logAutoScroll && logs.length != _lastObservedLogCount) {
+      _lastObservedLogCount = logs.length;
+      _scrollLogsToBottom();
+    } else if (logs.length != _lastObservedLogCount) {
+      _lastObservedLogCount = logs.length;
+    }
+    final logHeight = _logExpanded ? 300.0 : 110.0;
 
     return Container(
       padding: AppSpacing.paddingSm,
@@ -1461,54 +1718,288 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              _logFilterChip('All'),
-              const SizedBox(width: AppSpacing.xs),
-              _logFilterChip('Errors'),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Export logs',
-                onPressed: (jobId == null || logs.isEmpty)
-                    ? null
-                    : () => _exportLogs(logs, jobId),
-                icon: Icon(
-                  Icons.download_rounded,
-                  color: (jobId == null || logs.isEmpty)
-                      ? Colors.white24
-                      : Colors.white60,
-                  size: 18,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggleLogExpanded,
+            child: Row(
+              children: [
+                Text(
+                  'Logs',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.9,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  _logCountLabel(filtered.length),
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white54,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: _logAutoScroll
+                      ? 'Disable auto-scroll'
+                      : 'Enable auto-scroll',
+                  onPressed: () {
+                    setState(() => _logAutoScroll = !_logAutoScroll);
+                    if (_logAutoScroll) {
+                      _scrollLogsToBottom();
+                    }
+                  },
+                  icon: Icon(
+                    _logAutoScroll
+                        ? Icons.push_pin_rounded
+                        : Icons.push_pin_outlined,
+                    color: _logAutoScroll
+                        ? _ScrapeColors.primaryLight
+                        : Colors.white60,
+                    size: 18,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Copy logs',
+                  onPressed: logs.isEmpty ? null : () => _copyLogs(logs),
+                  icon: Icon(
+                    Icons.copy_all_rounded,
+                    color: logs.isEmpty ? Colors.white24 : Colors.white60,
+                    size: 18,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Export logs',
+                  onPressed: (jobId == null || logs.isEmpty)
+                      ? null
+                      : () => _exportLogs(logs, jobId),
+                  icon: Icon(
+                    Icons.download_rounded,
+                    color: (jobId == null || logs.isEmpty)
+                        ? Colors.white24
+                        : Colors.white60,
+                    size: 18,
+                  ),
+                ),
+                IconButton(
+                  tooltip: _logExpanded ? 'Collapse logs' : 'Expand logs',
+                  onPressed: _toggleLogExpanded,
+                  icon: Icon(
+                    _logExpanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    color: Colors.white60,
+                    size: 20,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_logExpanded) ...[
+            const SizedBox(height: AppSpacing.xxs),
+            SizedBox(
+              height: 34,
+              child: TextField(
+                controller: _logSearchController,
+                style: AppTypography.labelSmall.copyWith(color: Colors.white70),
+                decoration: InputDecoration(
+                  hintText: 'Search logs',
+                  hintStyle: AppTypography.labelSmall.copyWith(
+                    color: Colors.white38,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search_rounded,
+                    size: 16,
+                    color: Colors.white54,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
+                  ),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.04),
+                  border: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide: BorderSide(color: _ScrapeColors.primaryLight),
+                  ),
                 ),
               ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xxs),
+          Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xxs,
+            children: [
+              _logFilterChip('All'),
+              _logFilterChip('Errors'),
+              _logFilterChip('Warnings'),
+              _logFilterChip('Info'),
             ],
           ),
           const SizedBox(height: AppSpacing.xxs),
-          SizedBox(
-            height: 110,
-            child: ListView.builder(
-              itemCount: displayLogs.length,
-              itemBuilder: (context, index) {
-                final line = displayLogs[index];
-                final color = _isErrorLogLine(line)
-                    ? _ScrapeColors.rose
-                    : line.toLowerCase().contains('starting')
-                        ? _ScrapeColors.primaryLight
-                        : Colors.white70;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text(
-                    line,
-                    style: AppTypography.labelSmall.copyWith(
-                      color: color,
-                      fontFamily: 'monospace',
-                      height: 1.2,
+          AnimatedContainer(
+            duration: AppSpacing.durationMedium,
+            curve: Curves.easeInOut,
+            height: logHeight,
+            child: emptyMessage != null
+                ? Center(
+                    child: Text(
+                      emptyMessage,
+                      style: AppTypography.labelSmall.copyWith(
+                        color: Colors.white38,
+                        fontStyle: FontStyle.italic,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : Scrollbar(
+                    thumbVisibility: _logExpanded,
+                    child: ListView.builder(
+                      controller: _logScrollController,
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) {
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: _buildTimestampAwareLogLine(filtered[index]),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
-            ),
           ),
         ],
+      ),
+    );
+  }
+
+  String? _buildLogEmptyMessage({
+    required List<String> logs,
+    required List<String> filtered,
+    required bool isRunning,
+  }) {
+    if (logs.isEmpty && !isRunning) {
+      return 'Logs will appear here when a job starts.';
+    }
+    if (filtered.isEmpty && _logSearchQuery.trim().isNotEmpty) {
+      return 'No logs match "${_logSearchQuery.trim()}".';
+    }
+    if (filtered.isEmpty && _logFilter != 'All') {
+      return 'No ${_logFilter.toLowerCase()} logs found.';
+    }
+    if (filtered.isEmpty) {
+      return '> Waiting for logs...';
+    }
+    return null;
+  }
+
+  void _toggleLogExpanded() {
+    setState(() => _logExpanded = !_logExpanded);
+    if (_logExpanded) {
+      _scrollLogsToBottom(animated: false);
+    }
+  }
+
+  void _scrollLogsToBottom({bool animated = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_logScrollController.hasClients) return;
+      final maxScroll = _logScrollController.position.maxScrollExtent;
+      if (animated) {
+        _logScrollController.animateTo(
+          maxScroll,
+          duration: AppSpacing.durationFast,
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _logScrollController.jumpTo(maxScroll);
+      }
+    });
+  }
+
+  String _logCountLabel(int count) {
+    switch (_logFilter) {
+      case 'Errors':
+        return '$count errors';
+      case 'Warnings':
+        return '$count warnings';
+      case 'Info':
+        return '$count info';
+      case 'All':
+      default:
+        return '$count entries';
+    }
+  }
+
+  Widget _buildTimestampAwareLogLine(String line) {
+    final severityColor = _lineSeverityColor(line);
+    final match = RegExp(
+      r'^\s*(\[[^\]]+\]|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s*(.*)$',
+    ).firstMatch(line);
+
+    if (match == null) {
+      return Text(
+        line,
+        style: AppTypography.labelSmall.copyWith(
+          color: severityColor,
+          fontFamily: 'monospace',
+          height: 1.2,
+        ),
+      );
+    }
+
+    final timestamp = match.group(1) ?? '';
+    final message = (match.group(2) ?? '').trim();
+    return RichText(
+      text: TextSpan(
+        style: AppTypography.labelSmall.copyWith(
+          fontFamily: 'monospace',
+          height: 1.2,
+        ),
+        children: [
+          TextSpan(
+            text: '$timestamp ',
+            style: const TextStyle(
+              color: _ScrapeColors.primaryLight,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          TextSpan(
+            text: message,
+            style: TextStyle(color: severityColor),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _lineSeverityColor(String line) {
+    if (_isErrorLogLine(line)) return _ScrapeColors.rose;
+    if (_isWarningLogLine(line)) return Colors.amber.shade300;
+    if (line.toLowerCase().contains('starting')) {
+      return _ScrapeColors.primaryLight;
+    }
+    return Colors.white70;
+  }
+
+  Future<void> _copyLogs(List<String> logs) async {
+    if (logs.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: logs.join('\n')));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${logs.length} log entries copied'),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
@@ -1516,7 +2007,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget _logFilterChip(String label) {
     final isActive = _logFilter == label;
     return GestureDetector(
-      onTap: () => setState(() => _logFilter = label),
+      onTap: () {
+        setState(() => _logFilter = label);
+        if (_logAutoScroll) {
+          _scrollLogsToBottom();
+        }
+      },
       child: AnimatedContainer(
         duration: AppSpacing.durationFast,
         padding: const EdgeInsets.symmetric(
@@ -1546,15 +2042,46 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   }
 
   List<String> _filteredLogs(List<String> logs) {
-    if (_logFilter == 'Errors') {
-      return logs.where(_isErrorLogLine).toList();
+    Iterable<String> filtered = logs;
+
+    switch (_logFilter) {
+      case 'Errors':
+        filtered = filtered.where(_isErrorLogLine);
+        break;
+      case 'Warnings':
+        filtered = filtered.where(_isWarningLogLine);
+        break;
+      case 'Info':
+        filtered = filtered.where(_isInfoLogLine);
+        break;
+      case 'All':
+      default:
+        break;
     }
-    return logs;
+
+    final query = _logSearchQuery.trim().toLowerCase();
+    if (query.isNotEmpty) {
+      filtered = filtered.where((line) => line.toLowerCase().contains(query));
+    }
+
+    return filtered.toList();
   }
 
   bool _isErrorLogLine(String line) {
     final l = line.toLowerCase();
     return l.contains('error') || l.contains('failed') || l.contains('timeout');
+  }
+
+  bool _isWarningLogLine(String line) {
+    final l = line.toLowerCase();
+    return l.contains('warn') ||
+        l.contains('retry') ||
+        l.contains('skipping') ||
+        l.contains('cancelled');
+  }
+
+  bool _isInfoLogLine(String line) {
+    return !_isErrorLogLine(line) && !_isWarningLogLine(line);
   }
 
   Future<void> _exportLogs(List<String> logs, String jobId) async {

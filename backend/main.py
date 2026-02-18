@@ -5075,6 +5075,117 @@ async def get_user_jobs_admin(
     return {"jobs": jobs, "user_id": user_id}
 
 
+@app.get("/api/admin/jobs")
+async def get_all_jobs_admin(
+    status: Optional[str] = None,
+    page: int = 1,
+    limit: int = 50,
+    admin: dict = Depends(get_admin_or_above),
+):
+    """List jobs across all users (admin view) with pagination/filtering."""
+    safe_page = max(1, page)
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = (safe_page - 1) * safe_limit
+
+    status_filter = (status or "").strip().lower()
+    allowed_statuses = {"pending", "running", "completed", "failed", "cancelled"}
+    if status_filter and status_filter != "all" and status_filter not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    where_clauses: List[str] = []
+    params: List[object] = []
+    if status_filter and status_filter != "all":
+        where_clauses.append("LOWER(j.status) = ?")
+        params.append(status_filter)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM jobs j
+        {where_sql}
+        """,
+        tuple(params),
+    )
+    total = int((cursor.fetchone() or [0])[0] or 0)
+
+    cursor.execute(
+        f"""
+        SELECT
+            j.job_id,
+            j.user_id,
+            COALESCE(u.username, '') as username,
+            j.category,
+            j.status,
+            j.progress,
+            j.total_cities,
+            j.credit_estimate,
+            j.credit_charged,
+            j.created_at,
+            j.completed_at,
+            (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count
+        FROM jobs j
+        LEFT JOIN users u ON u.id = j.user_id
+        {where_sql}
+        ORDER BY j.created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        tuple(params + [safe_limit, safe_offset]),
+    )
+
+    jobs = [
+        {
+            "job_id": row[0],
+            "user_id": row[1],
+            "username": row[2] or f"user_{row[1]}",
+            "category": row[3],
+            "status": row[4],
+            "progress": row[5],
+            "total_cities": row[6],
+            "credit_estimate": row[7],
+            "credit_charged": row[8],
+            "created_at": row[9],
+            "completed_at": row[10],
+            "result_count": row[11],
+        }
+        for row in cursor.fetchall()
+    ]
+
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*) as total_jobs,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_jobs,
+            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_jobs
+        FROM jobs
+        """
+    )
+    stat_row = cursor.fetchone() or [0, 0, 0, 0]
+
+    conn.close()
+
+    total_pages = (total + safe_limit - 1) // safe_limit if total > 0 else 1
+    return {
+        "jobs": jobs,
+        "page": safe_page,
+        "limit": safe_limit,
+        "total": total,
+        "total_pages": total_pages,
+        "status": status_filter or "all",
+        "stats": {
+            "total_jobs": int(stat_row[0] or 0),
+            "completed": int(stat_row[1] or 0),
+            "failed": int(stat_row[2] or 0),
+            "running": int(stat_row[3] or 0),
+        },
+    }
+
+
 @app.get("/api/admin/jobs/{job_id}/results")
 async def get_job_results_admin(
     job_id: str,
