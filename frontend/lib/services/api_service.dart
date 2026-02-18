@@ -1916,11 +1916,78 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getJobResultsAdmin(String jobId) async {
+  Future<Map<String, dynamic>> getAdminJobActivity({
+    int? userId,
+    String? eventType,
+    String? jobStatus,
+    String? jobType,
+    String? dateFrom,
+    String? dateTo,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final headers = await _getHeaders();
+    final params = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (userId != null) params['user_id'] = userId.toString();
+    if (eventType != null && eventType.isNotEmpty) {
+      params['event_type'] = eventType;
+    }
+    if (jobStatus != null && jobStatus.isNotEmpty) {
+      params['job_status'] = jobStatus;
+    }
+    if (jobType != null && jobType.isNotEmpty) params['job_type'] = jobType;
+    if (dateFrom != null && dateFrom.isNotEmpty) params['date_from'] = dateFrom;
+    if (dateTo != null && dateTo.isNotEmpty) params['date_to'] = dateTo;
+
+    final uri = Uri.parse('$baseUrl/api/admin/job-activity')
+        .replace(queryParameters: params);
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load job activity feed');
+    }
+  }
+
+  Future<Map<String, dynamic>> getAdminJobActivityFilters() async {
     final headers = await _getHeaders();
     final response = await http
         .get(
-          Uri.parse('$baseUrl/api/admin/jobs/$jobId/results'),
+          Uri.parse('$baseUrl/api/admin/job-activity/filters'),
+          headers: headers,
+        )
+        .timeout(timeout);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to load job activity filters');
+    }
+  }
+
+  Future<Map<String, dynamic>> getJobResultsAdmin(
+    String jobId, {
+    int limit = 100,
+    int offset = 0,
+    String? search,
+  }) async {
+    final headers = await _getHeaders();
+    final query = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (search != null && search.trim().isNotEmpty) {
+      query['search'] = search.trim();
+    }
+    final uri = Uri.parse('$baseUrl/api/admin/jobs/$jobId/results')
+        .replace(queryParameters: query);
+    final response = await http
+        .get(
+          uri,
           headers: headers,
         )
         .timeout(timeout);

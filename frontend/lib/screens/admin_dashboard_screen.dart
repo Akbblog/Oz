@@ -42,7 +42,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   static const int _activityPageSize = 25;
   bool _activityLoading = false;
   List<String> _activityActions = [];
+  List<String> _activityJobTypes = [];
+  List<String> _activityStatuses = const [];
   String? _filterAction;
+  String? _filterJobType;
   String? _filterStatus;
   String? _filterDateFrom;
   String? _filterDateTo;
@@ -2223,10 +2226,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     try {
       final userIdText = _filterUserIdController.text.trim();
       final userId = userIdText.isNotEmpty ? int.tryParse(userIdText) : null;
-      final data = await _apiService.getActivityFeed(
+      final data = await _apiService.getAdminJobActivity(
         userId: userId,
-        action: _filterAction,
-        status: _filterStatus,
+        eventType: _filterAction,
+        jobType: _filterJobType,
+        jobStatus: _filterStatus,
         dateFrom: _filterDateFrom,
         dateTo: _filterDateTo,
         limit: _activityPageSize,
@@ -2251,8 +2255,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   Future<void> _loadActivityActions() async {
     try {
-      final actions = await _apiService.getActivityActions();
-      if (mounted) setState(() => _activityActions = actions);
+      final data = await _apiService.getAdminJobActivityFilters();
+      if (mounted) {
+        setState(() {
+          _activityActions =
+              List<String>.from(data['event_types'] ?? const <String>[]);
+          _activityJobTypes =
+              List<String>.from(data['job_types'] ?? const <String>[]);
+          _activityStatuses =
+              List<String>.from(data['job_statuses'] ?? const <String>[]);
+        });
+      }
     } catch (_) {}
   }
 
@@ -2294,6 +2307,75 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
+  Future<void> _openJobActivityDetails(Map<String, dynamic> event) async {
+    final width = MediaQuery.of(context).size.width;
+    final useSlideOver = width >= 980;
+
+    if (useSlideOver) {
+      await showGeneralDialog(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: 'Close',
+        barrierColor: Colors.black.withValues(alpha: 0.55),
+        transitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (context, _, __) {
+          return Align(
+            alignment: Alignment.centerRight,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: ((width > 1600 ? 1600 : width) * 0.56).toDouble(),
+                constraints: const BoxConstraints(maxWidth: 780, minWidth: 420),
+                height: double.infinity,
+                color: AppColors.surfaceDark,
+                child: _JobActivityDetailsPanel(
+                  apiService: _apiService,
+                  event: event,
+                  onClose: () => Navigator.of(context).pop(),
+                ),
+              ),
+            ),
+          );
+        },
+        transitionBuilder: (context, animation, _, child) {
+          final tween =
+              Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero);
+          return SlideTransition(
+            position: tween.animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            ),
+            child: child,
+          );
+        },
+      );
+      return;
+    }
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final height = MediaQuery.of(ctx).size.height * 0.92;
+        return Container(
+          height: height,
+          decoration: BoxDecoration(
+            color: AppColors.surfaceDark,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(18),
+            ),
+            border: Border.all(color: AppColors.elevatedCardDark),
+          ),
+          child: _JobActivityDetailsPanel(
+            apiService: _apiService,
+            event: event,
+            onClose: () => Navigator.of(ctx).pop(),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _pickDate(bool isFrom) async {
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -2325,7 +2407,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     // Lazy-load on first visit
     if (_activityEvents.isEmpty &&
         !_activityLoading &&
-        _activityActions.isEmpty) {
+        _activityActions.isEmpty &&
+        _activityJobTypes.isEmpty &&
+        _activityStatuses.isEmpty) {
       _loadActivityFeed();
       _loadActivityActions();
     }
@@ -2372,17 +2456,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
               _buildFilterDropdown(
                 value: _filterAction,
-                hint: 'All Actions',
+                hint: 'All Events',
                 items: _activityActions,
                 onChanged: (v) => setState(() => _filterAction = v),
-                width: 180,
+                width: 160,
+              ),
+              _buildFilterDropdown(
+                value: _filterJobType,
+                hint: 'All Job Types',
+                items: _activityJobTypes,
+                onChanged: (v) => setState(() => _filterJobType = v),
+                width: 170,
               ),
               _buildFilterDropdown(
                 value: _filterStatus,
-                hint: 'All Outcomes',
-                items: const ['success', 'failure'],
+                hint: 'All Statuses',
+                items: _activityStatuses,
                 onChanged: (v) => setState(() => _filterStatus = v),
-                width: 130,
+                width: 150,
               ),
               _buildDateChip('From', _filterDateFrom, () => _pickDate(true),
                   () => setState(() => _filterDateFrom = null)),
@@ -2468,9 +2559,40 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Widget _buildActivityRow(Map<String, dynamic> e) {
-    final isSuccess = e['status'] == 'success';
-    final statusColor =
-        isSuccess ? AppColors.successGreen : AppColors.dangerRed;
+    final status = (e['job_status'] ?? '').toString().toLowerCase();
+    final eventType = (e['event_type'] ?? '').toString();
+    final jobType = (e['job_type'] ?? '').toString();
+    final jobId = (e['job_id'] ?? '').toString();
+    final username = (e['username'] ?? '').toString();
+    final resultCount = (e['result_count'] as num?)?.toInt() ??
+        int.tryParse('${e['result_count'] ?? 0}') ??
+        0;
+
+    Color statusColor;
+    String statusText;
+    switch (status) {
+      case 'completed':
+        statusColor = AppColors.successGreen;
+        statusText = 'COMPLETED';
+        break;
+      case 'failed':
+        statusColor = AppColors.dangerRed;
+        statusText = 'FAILED';
+        break;
+      case 'cancelled':
+        statusColor = AppColors.warningYellow;
+        statusText = 'CANCELLED';
+        break;
+      case 'running':
+        statusColor = AppColors.infoBlue;
+        statusText = 'RUNNING';
+        break;
+      default:
+        statusColor = Colors.white54;
+        statusText = status.isEmpty ? 'PENDING' : status.toUpperCase();
+        break;
+    }
+
     final createdAt = e['created_at'] ?? '';
     String timeStr = '';
     try {
@@ -2481,90 +2603,103 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       timeStr = createdAt;
     }
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppSpacing.xs),
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceDark,
-        borderRadius: AppSpacing.borderRadiusSm,
-        border: Border.all(color: AppColors.elevatedCardDark),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 90,
-            child: Text(
-              timeStr,
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white54,
-                fontSize: 11,
+    return InkWell(
+      onTap: () => _openJobActivityDetails(e),
+      borderRadius: AppSpacing.borderRadiusSm,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark,
+          borderRadius: AppSpacing.borderRadiusSm,
+          border: Border.all(color: AppColors.elevatedCardDark),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 86,
+              child: Text(
+                timeStr,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white54,
+                  fontSize: 11,
+                ),
               ),
             ),
-          ),
-          SizedBox(
-            width: 80,
-            child: Text(
-              e['actor_username'] ?? '#${e['actor_user_id'] ?? '?'}',
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white70,
-                fontWeight: FontWeight.w600,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: AppSpacing.xs),
-          Expanded(
-            child: Text(
-              e['action'] ?? '',
-              style: AppTypography.labelSmall.copyWith(color: Colors.white),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          SizedBox(
-            width: 80,
-            child: Text(
-              e['target_type'] != null
-                  ? '${e['target_type']}${e['target_id'] != null ? ' #${e['target_id']}' : ''}'
-                  : '',
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white54,
-                fontSize: 11,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Container(
-            width: 56,
-            alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.xxs, vertical: 2),
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.12),
-              borderRadius: AppSpacing.borderRadiusSm,
-            ),
-            child: Text(
-              isSuccess ? 'OK' : 'FAIL',
-              style: AppTypography.labelSmall.copyWith(
-                color: statusColor,
-                fontWeight: FontWeight.w700,
-                fontSize: 10,
+            SizedBox(
+              width: 88,
+              child: Text(
+                username.isEmpty ? '#${e['user_id'] ?? '?'}' : username,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-          ),
-          const SizedBox(width: AppSpacing.xs),
-          SizedBox(
-            width: 90,
-            child: Text(
-              e['ip_address'] ?? '',
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white38,
-                fontSize: 10,
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Text(
+                eventType,
+                style: AppTypography.labelSmall.copyWith(color: Colors.white),
+                overflow: TextOverflow.ellipsis,
               ),
-              overflow: TextOverflow.ellipsis,
             ),
-          ),
-        ],
+            SizedBox(
+              width: 110,
+              child: Text(
+                jobType,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white60,
+                  fontSize: 11,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            SizedBox(
+              width: 92,
+              child: Text(
+                jobId,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white38,
+                  fontSize: 10,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            SizedBox(
+              width: 48,
+              child: Text(
+                '$resultCount',
+                textAlign: TextAlign.center,
+                style: AppTypography.labelSmall.copyWith(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Container(
+              width: 94,
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xxs, vertical: 2),
+              decoration: BoxDecoration(
+                color: statusColor.withValues(alpha: 0.12),
+                borderRadius: AppSpacing.borderRadiusSm,
+              ),
+              child: Text(
+                statusText,
+                style: AppTypography.labelSmall.copyWith(
+                  color: statusColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2841,6 +2976,404 @@ class _GeoPatternPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _JobActivityDetailsPanel extends StatefulWidget {
+  final ApiService apiService;
+  final Map<String, dynamic> event;
+  final VoidCallback onClose;
+
+  const _JobActivityDetailsPanel({
+    required this.apiService,
+    required this.event,
+    required this.onClose,
+  });
+
+  @override
+  State<_JobActivityDetailsPanel> createState() =>
+      _JobActivityDetailsPanelState();
+}
+
+class _JobActivityDetailsPanelState extends State<_JobActivityDetailsPanel> {
+  static const int _pageSize = 25;
+  final TextEditingController _searchController = TextEditingController();
+
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _results = [];
+  int _total = 0;
+  int _offset = 0;
+  String _search = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadResults(resetOffset: true);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  String get _jobId => (widget.event['job_id'] ?? '').toString();
+  String get _jobType =>
+      (widget.event['job_type'] ?? widget.event['category'] ?? '').toString();
+  String get _eventType => (widget.event['event_type'] ?? '').toString();
+  String get _status => (widget.event['job_status'] ?? '').toString();
+  String get _createdAt => (widget.event['created_at'] ?? '').toString();
+  int get _resultCount =>
+      (widget.event['result_count'] as num?)?.toInt() ??
+      int.tryParse('${widget.event['result_count'] ?? 0}') ??
+      0;
+
+  Future<void> _loadResults({bool resetOffset = false}) async {
+    final jobId = _jobId;
+    if (jobId.isEmpty) {
+      setState(() {
+        _loading = false;
+        _results = const [];
+        _total = 0;
+        _error = 'Missing job id';
+      });
+      return;
+    }
+
+    if (resetOffset) _offset = 0;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final data = await widget.apiService.getJobResultsAdmin(
+        jobId,
+        limit: _pageSize,
+        offset: _offset,
+        search: _search,
+      );
+      if (!mounted) return;
+      setState(() {
+        _results = List<Map<String, dynamic>>.from(data['results'] ?? const []);
+        _total = (data['total'] as num?)?.toInt() ?? _results.length;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Failed to load job results: $e';
+      });
+    }
+  }
+
+  String _formatTimestamp(String value) {
+    if (value.isEmpty) return '-';
+    try {
+      final dt = DateTime.parse(value);
+      return '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return value;
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return AppColors.successGreen;
+      case 'failed':
+        return AppColors.dangerRed;
+      case 'cancelled':
+        return AppColors.warningYellow;
+      case 'running':
+        return AppColors.infoBlue;
+      default:
+        return Colors.white70;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = _statusColor(_status);
+    final currentPage = (_offset ~/ _pageSize) + 1;
+    final totalPages = (_total / _pageSize).ceil().clamp(1, 9999);
+
+    return SafeArea(
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              border: Border(
+                bottom: BorderSide(color: AppColors.elevatedCardDark),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Job Activity Details',
+                        style: AppTypography.titleMedium.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: widget.onClose,
+                      icon: const Icon(Icons.close, color: Colors.white54),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Wrap(
+                  spacing: AppSpacing.xs,
+                  runSpacing: AppSpacing.xs,
+                  children: [
+                    _metaChip('Job', _jobId, Colors.white70),
+                    _metaChip('Type', _jobType, Colors.white70),
+                    _metaChip('Event', _eventType, AppColors.brandPurple),
+                    _metaChip('Status', _status.toUpperCase(), statusColor),
+                    _metaChip('Leads', '$_resultCount', AppColors.infoBlue),
+                    _metaChip(
+                        'At', _formatTimestamp(_createdAt), Colors.white70),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText:
+                              'Search leads by business, city, phone, email...',
+                          hintStyle: const TextStyle(
+                            color: Colors.white38,
+                            fontSize: 13,
+                          ),
+                          filled: true,
+                          fillColor: AppColors.elevatedCardDark,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.sm,
+                            vertical: AppSpacing.xs,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: AppSpacing.borderRadiusSm,
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        onSubmitted: (value) {
+                          _search = value.trim();
+                          _loadResults(resetOffset: true);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.xs),
+                    _panelButton(
+                      label: 'Search',
+                      onTap: () {
+                        _search = _searchController.text.trim();
+                        _loadResults(resetOffset: true);
+                      },
+                    ),
+                    const SizedBox(width: AppSpacing.xs),
+                    _panelButton(
+                      label: 'Refresh',
+                      color: AppColors.elevatedCardDark,
+                      onTap: () => _loadResults(),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.brandPurple,
+                      ),
+                    ),
+                  )
+                : _error != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.lg),
+                          child: Text(
+                            _error!,
+                            style: AppTypography.bodyMedium
+                                .copyWith(color: AppColors.dangerRed),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      )
+                    : _results.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(AppSpacing.lg),
+                              child: Text(
+                                'No results found for this job.',
+                                style: AppTypography.bodyMedium
+                                    .copyWith(color: Colors.white60),
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(AppSpacing.md),
+                            itemCount: _results.length,
+                            itemBuilder: (context, index) {
+                              final r = _results[index];
+                              return Container(
+                                margin: const EdgeInsets.only(
+                                  bottom: AppSpacing.xs,
+                                ),
+                                padding: const EdgeInsets.all(AppSpacing.sm),
+                                decoration: BoxDecoration(
+                                  color: AppColors.elevatedCardDark,
+                                  borderRadius: AppSpacing.borderRadiusSm,
+                                  border:
+                                      Border.all(color: AppColors.surfaceDark),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      (r['business_name'] ?? 'Unknown')
+                                          .toString(),
+                                      style: AppTypography.labelLarge.copyWith(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${r['city'] ?? '-'}, ${r['state'] ?? '-'}',
+                                      style: AppTypography.labelSmall
+                                          .copyWith(color: Colors.white60),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Phone: ${r['phone'] ?? '-'}   Email: ${r['email'] ?? '-'}',
+                                      style: AppTypography.labelSmall
+                                          .copyWith(color: Colors.white70),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      'Website: ${r['website'] ?? '-'}',
+                                      style: AppTypography.labelSmall
+                                          .copyWith(color: Colors.white70),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              border: Border(
+                top: BorderSide(color: AppColors.elevatedCardDark),
+              ),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'Page $currentPage / $totalPages',
+                  style: AppTypography.labelSmall.copyWith(
+                    color: Colors.white60,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                _panelButton(
+                  label: 'Prev',
+                  color: AppColors.elevatedCardDark,
+                  onTap: _offset > 0
+                      ? () {
+                          _offset =
+                              ((_offset - _pageSize).clamp(0, _total) as num)
+                                  .toInt();
+                          _loadResults();
+                        }
+                      : null,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                _panelButton(
+                  label: 'Next',
+                  color: AppColors.elevatedCardDark,
+                  onTap: _offset + _pageSize < _total
+                      ? () {
+                          _offset += _pageSize;
+                          _loadResults();
+                        }
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metaChip(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(color: color.withValues(alpha: 0.26)),
+      ),
+      child: Text(
+        '$label: $value',
+        style: AppTypography.labelSmall.copyWith(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _panelButton({
+    required String label,
+    required VoidCallback? onTap,
+    Color? color,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: AppSpacing.borderRadiusSm,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: color ?? AppColors.brandPurple,
+          borderRadius: AppSpacing.borderRadiusSm,
+        ),
+        child: Text(
+          label,
+          style: AppTypography.labelSmall.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ==================== USER TIMELINE DIALOG ====================
