@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
@@ -14,6 +15,7 @@ class SidebarNavigation extends StatelessWidget {
   final bool isAuthenticated;
   final bool isAdmin;
   final VoidCallback onAdminTap;
+  final VoidCallback onWalletTap;
   final VoidCallback onProfileTap;
   final VoidCallback onAuthTap;
   final String? username;
@@ -29,6 +31,7 @@ class SidebarNavigation extends StatelessWidget {
     required this.isAuthenticated,
     required this.isAdmin,
     required this.onAdminTap,
+    required this.onWalletTap,
     required this.onProfileTap,
     required this.onAuthTap,
     this.username,
@@ -75,8 +78,13 @@ class SidebarNavigation extends StatelessWidget {
             for (final item in navItems)
               _buildNavItem(
                 icon: item.icon,
+                selectedIcon: item.selectedIcon,
+                iconAsset: item.iconAsset,
+                selectedIconAsset: item.selectedIconAsset,
                 label: item.label,
                 pageIndex: item.pageIndex,
+                activePageIndexes: item.activePageIndexes,
+                emphasized: item.emphasized,
               ),
             const Spacer(),
             if (isAuthenticated && isAdmin)
@@ -87,7 +95,15 @@ class SidebarNavigation extends StatelessWidget {
               ),
             if (isAuthenticated)
               _buildActionItem(
+                icon: Icons.account_balance_wallet_rounded,
+                iconAsset: 'assets/icons/wallet.svg',
+                label: 'Wallet',
+                onTap: onWalletTap,
+              ),
+            if (isAuthenticated)
+              _buildActionItem(
                 icon: Icons.person_rounded,
+                iconAsset: 'assets/icons/profile.svg',
                 label: 'Profile',
                 onTap: onProfileTap,
               ),
@@ -167,10 +183,19 @@ class SidebarNavigation extends StatelessWidget {
 
   Widget _buildNavItem({
     required IconData icon,
+    required IconData? selectedIcon,
+    required String? iconAsset,
+    required String? selectedIconAsset,
     required String label,
     required int pageIndex,
+    required List<int> activePageIndexes,
+    required bool emphasized,
   }) {
-    final isActive = currentIndex == pageIndex;
+    final isActive =
+        currentIndex == pageIndex || activePageIndexes.contains(currentIndex);
+    final resolvedIcon = isActive ? (selectedIcon ?? icon) : icon;
+    final resolvedIconAsset =
+        isActive ? (selectedIconAsset ?? iconAsset) : iconAsset;
     return Tooltip(
       message: collapsed ? label : '',
       child: InkWell(
@@ -185,7 +210,18 @@ class SidebarNavigation extends StatelessWidget {
             vertical: AppSpacing.sm,
           ),
           decoration: BoxDecoration(
-            gradient: isActive ? AppColors.primaryGradient : null,
+            gradient: isActive
+                ? AppColors.primaryGradient
+                : (emphasized
+                    ? LinearGradient(
+                        colors: [
+                          AppColors.surfaceDark.withValues(alpha: 0.9),
+                          AppColors.backgroundDark.withValues(alpha: 0.9),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      )
+                    : null),
             borderRadius: AppSpacing.borderRadiusMd,
             border: isActive
                 ? Border(
@@ -194,14 +230,19 @@ class SidebarNavigation extends StatelessWidget {
                       width: 3,
                     ),
                   )
-                : null,
+                : (emphasized
+                    ? Border.all(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.25),
+                      )
+                    : null),
           ),
           child: Row(
             mainAxisAlignment:
                 collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
             children: [
-              Icon(
-                icon,
+              _buildAdaptiveIcon(
+                icon: resolvedIcon,
+                iconAsset: resolvedIconAsset,
                 color: isActive ? Colors.white : Colors.white70,
                 size: 20,
               ),
@@ -224,6 +265,7 @@ class SidebarNavigation extends StatelessWidget {
 
   Widget _buildActionItem({
     required IconData icon,
+    String? iconAsset,
     required String label,
     required VoidCallback onTap,
   }) {
@@ -251,7 +293,12 @@ class SidebarNavigation extends StatelessWidget {
             mainAxisAlignment:
                 collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
             children: [
-              Icon(icon, color: Colors.white70, size: 18),
+              _buildAdaptiveIcon(
+                icon: icon,
+                iconAsset: iconAsset,
+                color: Colors.white70,
+                size: 18,
+              ),
               if (!collapsed) ...[
                 const SizedBox(width: AppSpacing.sm),
                 Text(
@@ -266,6 +313,24 @@ class SidebarNavigation extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildAdaptiveIcon({
+    required IconData icon,
+    required Color color,
+    required double size,
+    String? iconAsset,
+  }) {
+    if (iconAsset == null || iconAsset.isEmpty) {
+      return Icon(icon, color: color, size: size);
+    }
+
+    return SvgPicture.asset(
+      iconAsset,
+      width: size,
+      height: size,
+      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
     );
   }
 
@@ -409,12 +474,22 @@ class SidebarNavigation extends StatelessWidget {
 
 class SidebarNavItem {
   final IconData icon;
+  final IconData? selectedIcon;
+  final String? iconAsset;
+  final String? selectedIconAsset;
   final String label;
   final int pageIndex;
+  final List<int> activePageIndexes;
+  final bool emphasized;
 
   const SidebarNavItem({
     required this.icon,
+    this.selectedIcon,
+    this.iconAsset,
+    this.selectedIconAsset,
     required this.label,
     required this.pageIndex,
+    this.activePageIndexes = const [],
+    this.emphasized = false,
   });
 }

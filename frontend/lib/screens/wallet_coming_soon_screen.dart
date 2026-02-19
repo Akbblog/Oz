@@ -511,8 +511,6 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
                                 const SizedBox(height: AppSpacing.md),
                                 _buildComingSoonBanner(),
                                 const SizedBox(height: AppSpacing.lg),
-                                _buildPaymentMethodsSection(layoutType),
-                                const SizedBox(height: AppSpacing.lg),
                                 _buildRequestCreditsCard(),
                                 const SizedBox(height: AppSpacing.xl),
                               ],

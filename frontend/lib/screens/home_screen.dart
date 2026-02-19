@@ -1,4 +1,7 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
@@ -26,6 +29,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+  static const String _iconHome = 'assets/icons/home.svg';
+  static const String _iconHistory = 'assets/icons/history.svg';
+  static const String _iconWallet = 'assets/icons/wallet.svg';
+  static const String _iconProfile = 'assets/icons/profile.svg';
+
   int _currentIndex = 1; // Guest starts on Cities
   late PageController _pageController;
   late final AuthProvider _authProvider;
@@ -42,11 +50,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _NavItem(icon: Icons.search_rounded, label: 'Search', pageIndex: 2),
   ];
   static const List<_NavItem> _authenticatedNavItems = [
-    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard', pageIndex: 0),
-    _NavItem(icon: Icons.location_city_rounded, label: 'Cities', pageIndex: 1),
-    _NavItem(icon: Icons.search_rounded, label: 'Search', pageIndex: 2),
-    _NavItem(icon: Icons.list_alt_rounded, label: 'Results', pageIndex: 3),
-    _NavItem(icon: Icons.history_rounded, label: 'History', pageIndex: 4),
+    _NavItem(
+      icon: Icons.home_outlined,
+      selectedIcon: Icons.home_rounded,
+      iconAsset: _iconHome,
+      selectedIconAsset: _iconHome,
+      label: 'Home',
+      pageIndex: 0,
+    ),
+    _NavItem(
+      icon: Icons.location_city_outlined,
+      selectedIcon: Icons.location_city_rounded,
+      label: 'Cities',
+      pageIndex: 1,
+      activePageIndexes: [1, 2, 3],
+      emphasized: true,
+    ),
+    _NavItem(
+      icon: Icons.history_toggle_off_rounded,
+      selectedIcon: Icons.history_rounded,
+      iconAsset: _iconHistory,
+      selectedIconAsset: _iconHistory,
+      label: 'History',
+      pageIndex: 4,
+    ),
   ];
   List<_NavItem> _navItems = _guestNavItems;
 
@@ -145,14 +172,47 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (_navItems.isEmpty) {
       return _guestNavItems.first;
     }
-    return _navItems.firstWhere(
-      (item) => item.pageIndex == _currentIndex,
-      orElse: () => _navItems.first,
-    );
+
+    for (final item in _navItems) {
+      if (item.pageIndex == _currentIndex) {
+        return item;
+      }
+    }
+
+    for (final item in _navItems) {
+      if (item.activePageIndexes.contains(_currentIndex)) {
+        return item;
+      }
+    }
+
+    return _navItems.first;
   }
 
   void _openLogin() {
     Navigator.of(context).pushNamed('/login');
+  }
+
+  Future<void> _openWallet() async {
+    if (!_isAuthenticated) {
+      _openLogin();
+      return;
+    }
+    await Navigator.of(context).pushNamed('/wallet');
+    if (mounted) {
+      _loadCreditBalance();
+    }
+  }
+
+  void _openProfile() {
+    if (!_isAuthenticated) {
+      _openLogin();
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const ProfileScreen(),
+      ),
+    );
   }
 
   @override
@@ -207,8 +267,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 .map(
                   (item) => SidebarNavItem(
                     icon: item.icon,
+                    selectedIcon: item.selectedIcon,
+                    iconAsset: item.iconAsset,
+                    selectedIconAsset: item.selectedIconAsset,
                     label: item.label,
                     pageIndex: item.pageIndex,
+                    activePageIndexes: item.activePageIndexes,
+                    emphasized: item.emphasized,
                   ),
                 )
                 .toList(),
@@ -231,6 +296,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               );
             },
             onAuthTap: _openLogin,
+            onWalletTap: _openWallet,
             username: authProvider.currentUser?['username'] ?? 'User',
             email: authProvider.currentUser?['email'] ?? 'Pro Account',
           );
@@ -593,6 +659,175 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildBottomNav() {
+    if (!_isAuthenticated) {
+      return _buildGuestBottomNav();
+    }
+
+    final homeActive = _currentIndex == 0;
+    final historyActive = _currentIndex == 4;
+    final citiesFlowActive =
+        _currentIndex == 1 || _currentIndex == 2 || _currentIndex == 3;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          AppSpacing.xs,
+          AppSpacing.md,
+          AppSpacing.md,
+        ),
+        child: SizedBox(
+          height: 96,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.bottomCenter,
+            children: [
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: 6,
+                child: IgnorePointer(
+                  child: Container(
+                    height: 46,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(30),
+                      gradient: RadialGradient(
+                        center: Alignment.topCenter,
+                        radius: 1.3,
+                        colors: [
+                          AppColors.primaryBlue.withValues(alpha: 0.22),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: 78,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            AppColors.elevatedCardDark.withValues(alpha: 0.9),
+                            AppColors.backgroundDark.withValues(alpha: 0.9),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.09),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.44),
+                            blurRadius: 28,
+                            spreadRadius: -14,
+                            offset: const Offset(0, 14),
+                          ),
+                          BoxShadow(
+                            color: AppColors.primaryBlue.withValues(alpha: 0.2),
+                            blurRadius: 24,
+                            spreadRadius: -16,
+                            offset: const Offset(0, -4),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildDockNavItem(
+                              icon: Icons.home_outlined,
+                              selectedIcon: Icons.home_rounded,
+                              iconAsset: _iconHome,
+                              selectedIconAsset: _iconHome,
+                              label: 'Home',
+                              isSelected: homeActive,
+                              onTap: () => _onNavTap(0),
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildDockNavItem(
+                              icon: Icons.history_toggle_off_rounded,
+                              selectedIcon: Icons.history_rounded,
+                              iconAsset: _iconHistory,
+                              selectedIconAsset: _iconHistory,
+                              label: 'History',
+                              isSelected: historyActive,
+                              onTap: () => _onNavTap(4),
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildDockNavItem(
+                              icon: Icons.add_rounded,
+                              selectedIcon: Icons.add_rounded,
+                              label: 'New',
+                              isSelected: citiesFlowActive,
+                              onTap: () => _onNavTap(1),
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildDockNavItem(
+                              icon: Icons.account_balance_wallet_outlined,
+                              selectedIcon:
+                                  Icons.account_balance_wallet_rounded,
+                              iconAsset: _iconWallet,
+                              selectedIconAsset: _iconWallet,
+                              label: 'Wallet',
+                              isSelected: false,
+                              onTap: _openWallet,
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildDockNavItem(
+                              icon: Icons.person_outline_rounded,
+                              selectedIcon: Icons.person_rounded,
+                              iconAsset: _iconProfile,
+                              selectedIconAsset: _iconProfile,
+                              label: 'Profile',
+                              isSelected: false,
+                              onTap: _openProfile,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 1,
+                left: 18,
+                right: 18,
+                child: IgnorePointer(
+                  child: Container(
+                    height: 1,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.transparent,
+                          AppColors.primaryBlueLight.withValues(alpha: 0.22),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGuestBottomNav() {
     return Container(
       padding: const EdgeInsets.fromLTRB(
           AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
@@ -642,8 +877,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        item.icon,
+                      _buildAdaptiveIcon(
+                        icon: isSelected
+                            ? (item.selectedIcon ?? item.icon)
+                            : item.icon,
+                        iconAsset: isSelected
+                            ? (item.selectedIconAsset ?? item.iconAsset)
+                            : item.iconAsset,
                         color: isSelected
                             ? AppColors.primaryBlueLight
                             : Colors.white54,
@@ -668,6 +908,130 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           }),
         ),
       ),
+    );
+  }
+
+  Widget _buildDockNavItem({
+    required IconData icon,
+    IconData? selectedIcon,
+    String? iconAsset,
+    String? selectedIconAsset,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    final resolvedIcon = isSelected ? (selectedIcon ?? icon) : icon;
+    final resolvedIconAsset =
+        isSelected ? (selectedIconAsset ?? iconAsset) : iconAsset;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedContainer(
+          duration: AppSpacing.durationMedium,
+          curve: Curves.easeOutCubic,
+          margin: const EdgeInsets.symmetric(
+            horizontal: 3,
+            vertical: 8,
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          decoration: BoxDecoration(
+            gradient: isSelected
+                ? LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      AppColors.primaryBlue.withValues(alpha: 0.24),
+                      AppColors.primaryBlue.withValues(alpha: 0.1),
+                    ],
+                  )
+                : null,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.primaryBlueLight.withValues(alpha: 0.36)
+                  : Colors.white.withValues(alpha: 0.02),
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              AnimatedContainer(
+                duration: AppSpacing.durationMedium,
+                curve: Curves.easeOutCubic,
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isSelected
+                      ? AppColors.primaryBlue.withValues(alpha: 0.22)
+                      : Colors.transparent,
+                  border: isSelected
+                      ? Border.all(
+                          color:
+                              AppColors.primaryBlueLight.withValues(alpha: 0.4),
+                        )
+                      : null,
+                ),
+                child: Center(
+                  child: _buildAdaptiveIcon(
+                    icon: resolvedIcon,
+                    iconAsset: resolvedIconAsset,
+                    color: isSelected
+                        ? AppColors.primaryBlueLight
+                        : Colors.white.withValues(alpha: 0.75),
+                    size: 20,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: AppTypography.labelSmall.copyWith(
+                  color:
+                      isSelected ? AppColors.primaryBlueLight : Colors.white60,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  fontSize: 11.5,
+                  letterSpacing: 0.12,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              AnimatedContainer(
+                duration: AppSpacing.durationMedium,
+                curve: Curves.easeOutCubic,
+                margin: const EdgeInsets.only(top: 2),
+                width: isSelected ? 16 : 0,
+                height: 2,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: AppColors.primaryBlueLight.withValues(alpha: 0.95),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdaptiveIcon({
+    required IconData icon,
+    required Color color,
+    required double size,
+    String? iconAsset,
+  }) {
+    if (iconAsset == null || iconAsset.isEmpty) {
+      return Icon(icon, color: color, size: size);
+    }
+
+    return SvgPicture.asset(
+      iconAsset,
+      width: size,
+      height: size,
+      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
     );
   }
 
@@ -706,13 +1070,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
 class _NavItem {
   final IconData icon;
+  final IconData? selectedIcon;
+  final String? iconAsset;
+  final String? selectedIconAsset;
   final String label;
   final int pageIndex;
+  final List<int> activePageIndexes;
+  final bool emphasized;
 
   const _NavItem({
     required this.icon,
+    this.selectedIcon,
+    this.iconAsset,
+    this.selectedIconAsset,
     required this.label,
     required this.pageIndex,
+    this.activePageIndexes = const [],
+    this.emphasized = false,
   });
 }
 

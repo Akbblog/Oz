@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 import 'dart:convert';
 import '../providers/scraper_provider.dart';
 import '../providers/auth_provider.dart';
@@ -11,6 +12,7 @@ import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
 import '../widgets/progress_stepper.dart';
+import '../widgets/job_completion_card.dart';
 import 'register_screen.dart';
 import 'results_screen.dart';
 
@@ -62,7 +64,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   int _estimatedCost = 0;
   bool _loadingCredits = true;
   bool _canCreateJob = true;
-  String? _lastCompletedJobId; // Track job completion for auto-navigation
+  String? _lastCompletedJobId; // Track completion updates per job
   String _logFilter = 'All'; // All, Errors, Warnings, Info
   String _logSearchQuery = '';
   bool _logExpanded = false;
@@ -71,6 +73,11 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   bool _showCategorySuggestions = true;
   _RepeatJobPreset? _activeJobPreset;
   _RepeatJobPreset? _lastCompletedPreset;
+  bool _isDownloading = false;
+  int _lastKnownResultCount = 0;
+  String? _lastResultJobId;
+  final List<String> _syntheticResultLogs = <String>[];
+  bool _completionSummaryAdded = false;
   bool _attemptedStart = false;
   bool _draftLoaded = false;
 
@@ -120,7 +127,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     _logSearchController.addListener(_onLogSearchChanged);
     _citiesController.addListener(_updateCostEstimate);
 
-    // Listen for job completion to auto-navigate
+    // Listen for job completion and update local completion state once.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupJobCompletionListener();
     });
@@ -172,7 +179,15 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               maxResults: _maxResults,
             );
         _activeJobPreset = null;
-        _navigateToResults(job.jobId);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                const Text('Job complete. You can view or download below.'),
+            backgroundColor: _ScrapeColors.emerald,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     });
   }
@@ -180,7 +195,6 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   void _navigateToResults(String jobId) {
     if (!mounted) return;
 
-    // Auto-navigate with animation
     Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) {
@@ -204,24 +218,6 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         transitionDuration: const Duration(milliseconds: 600),
       ),
     );
-
-    // Show success toast
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
-            children: [
-              Icon(Icons.check_circle, color: Colors.white),
-              SizedBox(width: 12),
-              Text('Search completed! Navigating to results...'),
-            ],
-          ),
-          backgroundColor: Colors.green.shade700,
-          duration: const Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
   }
 
   @override
@@ -1624,6 +1620,22 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           _buildJobControls(scraperProvider),
           const SizedBox(height: AppSpacing.sm),
           _buildJobStages(job),
+          AnimatedSwitcher(
+            duration: AppSpacing.durationMedium,
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: (job != null && job.status == ScrapingStatus.completed)
+                ? Padding(
+                    key: ValueKey<String>('completed-${job.jobId}'),
+                    padding: const EdgeInsets.only(top: AppSpacing.md),
+                    child: _buildCompletedJobCard(
+                      job: job,
+                      scraperProvider: scraperProvider,
+                    ),
+                  )
+                : const SizedBox.shrink(
+                    key: ValueKey<String>('no-completed-card')),
+          ),
           const SizedBox(height: AppSpacing.md),
           Row(
             children: [
@@ -1634,6 +1646,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                   logs,
                   jobId: job?.jobId,
                   isRunning: isRunning,
+                  job: job,
                 ),
               ),
             ],
@@ -1691,18 +1704,20 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     List<String> logs, {
     String? jobId,
     required bool isRunning,
+    ScrapingJob? job,
   }) {
-    final filtered = _filteredLogs(logs);
+    final logsForDisplay = _logsWithSyntheticEntries(logs, job);
+    final filtered = _filteredLogs(logsForDisplay);
     final emptyMessage = _buildLogEmptyMessage(
-      logs: logs,
+      logs: logsForDisplay,
       filtered: filtered,
       isRunning: isRunning,
     );
-    if (_logAutoScroll && logs.length != _lastObservedLogCount) {
-      _lastObservedLogCount = logs.length;
+    if (_logAutoScroll && logsForDisplay.length != _lastObservedLogCount) {
+      _lastObservedLogCount = logsForDisplay.length;
       _scrollLogsToBottom();
-    } else if (logs.length != _lastObservedLogCount) {
-      _lastObservedLogCount = logs.length;
+    } else if (logsForDisplay.length != _lastObservedLogCount) {
+      _lastObservedLogCount = logsForDisplay.length;
     }
     final logHeight = _logExpanded ? 300.0 : 110.0;
 
@@ -1761,21 +1776,25 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 ),
                 IconButton(
                   tooltip: 'Copy logs',
-                  onPressed: logs.isEmpty ? null : () => _copyLogs(logs),
+                  onPressed: logsForDisplay.isEmpty
+                      ? null
+                      : () => _copyLogs(logsForDisplay),
                   icon: Icon(
                     Icons.copy_all_rounded,
-                    color: logs.isEmpty ? Colors.white24 : Colors.white60,
+                    color: logsForDisplay.isEmpty
+                        ? Colors.white24
+                        : Colors.white60,
                     size: 18,
                   ),
                 ),
                 IconButton(
                   tooltip: 'Export logs',
-                  onPressed: (jobId == null || logs.isEmpty)
+                  onPressed: (jobId == null || logsForDisplay.isEmpty)
                       ? null
-                      : () => _exportLogs(logs, jobId),
+                      : () => _exportLogs(logsForDisplay, jobId),
                   icon: Icon(
                     Icons.download_rounded,
-                    color: (jobId == null || logs.isEmpty)
+                    color: (jobId == null || logsForDisplay.isEmpty)
                         ? Colors.white24
                         : Colors.white60,
                     size: 18,
@@ -2002,6 +2021,162 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  List<String> _logsWithSyntheticEntries(List<String> logs, ScrapingJob? job) {
+    if (job == null) return logs;
+
+    if (_lastResultJobId != job.jobId) {
+      _lastResultJobId = job.jobId;
+      _lastKnownResultCount = job.results.length;
+      _syntheticResultLogs.clear();
+      _completionSummaryAdded = false;
+    }
+
+    if (job.status == ScrapingStatus.running) {
+      final delta = job.results.length - _lastKnownResultCount;
+      if (delta > 0) {
+        final timestamp = DateTime.now().toIso8601String();
+        _syntheticResultLogs.add(
+          '[$timestamp] [LIVE] +$delta leads found (total ${job.results.length})',
+        );
+      }
+      _lastKnownResultCount = job.results.length;
+    }
+
+    if (job.status == ScrapingStatus.completed && !_completionSummaryAdded) {
+      _lastKnownResultCount = job.results.length;
+      final cityCounts = <String, int>{};
+      for (final result in job.results) {
+        final city = (result['city'] ?? '').toString().trim();
+        final state = (result['state'] ?? '').toString().trim();
+        if (city.isEmpty) continue;
+        final key = state.isEmpty ? city : '$city, $state';
+        cityCounts[key] = (cityCounts[key] ?? 0) + 1;
+      }
+      final topCity = cityCounts.entries.isEmpty
+          ? null
+          : cityCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+      final avg =
+          job.totalCities > 0 ? job.results.length / job.totalCities : 0.0;
+
+      _syntheticResultLogs.add(
+        '[SUMMARY] Scraping complete - ${job.results.length} businesses found across ${job.totalCities} cities',
+      );
+      if (topCity != null) {
+        _syntheticResultLogs
+            .add('[SUMMARY] Top city: ${topCity.key} (${topCity.value} leads)');
+      }
+      _syntheticResultLogs
+          .add('[SUMMARY] Avg: ${avg.toStringAsFixed(1)} leads per city');
+      _completionSummaryAdded = true;
+    }
+
+    return [...logs, ..._syntheticResultLogs];
+  }
+
+  Future<void> _downloadCompletedResults(
+      ScraperProvider scraperProvider) async {
+    if (_isDownloading) return;
+
+    setState(() => _isDownloading = true);
+    try {
+      final data = await scraperProvider.downloadResults();
+      final filename = (data['filename'] ?? 'results.xlsx').toString();
+      final content = (data['content'] ?? '').toString();
+
+      if (content.isEmpty) {
+        throw Exception('Downloaded file is empty');
+      }
+
+      if (!mounted) return;
+      final saved = await saveExcel(content, filename, context: context);
+      if (!saved) {
+        throw Exception('Could not save the downloaded file');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to download results: $e'),
+          backgroundColor: _ScrapeColors.rose,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isDownloading = false);
+      }
+    }
+  }
+
+  Future<void> _copyJobId(String jobId) async {
+    await Clipboard.setData(ClipboardData(text: jobId));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Job ID copied: $jobId'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Widget _buildCompletedJobCard({
+    required ScrapingJob job,
+    required ScraperProvider scraperProvider,
+  }) {
+    final completedAt = job.completedAt ?? DateTime.now();
+    final duration = completedAt.isAfter(job.createdAt)
+        ? completedAt.difference(job.createdAt)
+        : Duration.zero;
+    final resultCount = job.results.length;
+    final avgPerCity =
+        job.totalCities > 0 ? resultCount / job.totalCities : 0.0;
+    final topCity = _topCitySummary(job.results);
+    final cityPreview = _cityPreview(job.cities);
+    return JobCompletionCard(
+      category: job.category,
+      jobId: job.jobId,
+      completedAt: completedAt,
+      leadCount: resultCount,
+      citiesText: cityPreview,
+      durationText: _formatDuration(duration),
+      topCityText: topCity == 'N/A' ? 'Top city: N/A' : 'Top city: $topCity',
+      avgPerCityText: 'Avg: ~${avgPerCity.toStringAsFixed(1)}/city',
+      isDownloading: _isDownloading,
+      onViewResults: () => _navigateToResults(job.jobId),
+      onDownload: () => _downloadCompletedResults(scraperProvider),
+      trailing: IconButton(
+        tooltip: 'Copy job ID',
+        onPressed: () => _copyJobId(job.jobId),
+        icon: const Icon(
+          Icons.more_vert_rounded,
+          color: Colors.white54,
+          size: 18,
+        ),
+      ),
+    );
+  }
+
+  String _topCitySummary(List<Map<String, dynamic>> results) {
+    final cityCounts = <String, int>{};
+    for (final result in results) {
+      final city = (result['city'] ?? '').toString().trim();
+      final state = (result['state'] ?? '').toString().trim();
+      if (city.isEmpty) continue;
+      final key = state.isEmpty ? city : '$city, $state';
+      cityCounts[key] = (cityCounts[key] ?? 0) + 1;
+    }
+    if (cityCounts.isEmpty) return 'N/A';
+    final top = cityCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    return '${top.key} (${top.value})';
+  }
+
+  String _cityPreview(List<String> cities) {
+    if (cities.isEmpty) return 'N/A';
+    if (cities.length <= 2) return cities.join(', ');
+    final remaining = cities.length - 2;
+    return '${cities[0]}, ${cities[1]} +$remaining more';
   }
 
   Widget _logFilterChip(String label) {
@@ -2406,20 +2581,42 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         job.status == ScrapingStatus.running && completedCities > 0
             ? avgPerCity * remainingCities
             : null;
+    final isCompleted = job.status == ScrapingStatus.completed;
+    final isRunning = job.status == ScrapingStatus.running;
+    final leadsValue = isCompleted
+        ? '${job.results.length} total'
+        : isRunning
+            ? '${job.results.length} found'
+            : '${job.results.length}';
+    final leadsColor = isCompleted ? _ScrapeColors.emerald : Colors.white;
+    final rate =
+        completedCities > 0 ? job.results.length / completedCities : 0.0;
 
-    final stats = [
+    final stats = <_MiniStat>[
       _MiniStat(label: 'Elapsed', value: _formatDuration(elapsed)),
       _MiniStat(
         label: 'Est. Remaining',
         value: estRemaining == null ? '—' : _formatDuration(estRemaining),
       ),
-      _MiniStat(label: 'Leads', value: '${job.results.length}'),
+      _MiniStat(
+        label: 'Leads',
+        value: leadsValue,
+        valueColor: leadsColor,
+      ),
       _MiniStat(
         label: 'Cities',
         value:
             '${completedCities.clamp(0, job.totalCities)}/${job.totalCities}',
       ),
     ];
+    if (completedCities > 0) {
+      stats.add(
+        _MiniStat(
+          label: 'Rate',
+          value: '~${rate.toStringAsFixed(1)}/city',
+        ),
+      );
+    }
 
     return Wrap(
       spacing: AppSpacing.sm,
@@ -2455,7 +2652,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           Text(
             stat.value,
             style: AppTypography.labelLarge.copyWith(
-              color: Colors.white,
+              color: stat.valueColor ?? Colors.white,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -2526,7 +2723,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 if (isCompleted) {
                   statusIcon = Icons.check_circle_rounded;
                   statusColor = _ScrapeColors.emerald;
-                  statusLabel = '$count leads';
+                  statusLabel = '$count ${count == 1 ? 'lead' : 'leads'}';
                 } else if (isFailedOrCancelled) {
                   statusIcon = Icons.error_rounded;
                   statusColor = _ScrapeColors.rose;
@@ -2536,12 +2733,19 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 } else if (isActive) {
                   statusIcon = Icons.autorenew_rounded;
                   statusColor = _ScrapeColors.primaryLight;
-                  statusLabel = 'Scraping...';
+                  statusLabel = '$count ${count == 1 ? 'lead' : 'leads'}';
                 } else {
                   statusIcon = Icons.circle_outlined;
                   statusColor = Colors.white24;
                   statusLabel = 'Pending';
                 }
+
+                final statusTextStyle = AppTypography.labelSmall.copyWith(
+                  color: statusColor == Colors.white24
+                      ? Colors.white38
+                      : statusColor.withValues(alpha: 0.95),
+                  fontWeight: FontWeight.w700,
+                );
 
                 return Container(
                   margin: const EdgeInsets.only(bottom: AppSpacing.xs),
@@ -2574,14 +2778,18 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                         ),
                       ),
                       const SizedBox(width: AppSpacing.xs),
-                      Text(
-                        statusLabel,
-                        style: AppTypography.labelSmall.copyWith(
-                          color: statusColor == Colors.white24
-                              ? Colors.white38
-                              : statusColor.withValues(alpha: 0.95),
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            statusLabel,
+                            style: statusTextStyle,
+                          ),
+                          if (isActive) ...[
+                            const SizedBox(width: 2),
+                            _AnimatedDots(color: statusColor),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -2622,8 +2830,55 @@ class _StageItem {
 class _MiniStat {
   final String label;
   final String value;
+  final Color? valueColor;
 
-  const _MiniStat({required this.label, required this.value});
+  const _MiniStat({
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
+}
+
+class _AnimatedDots extends StatefulWidget {
+  final Color color;
+
+  const _AnimatedDots({required this.color});
+
+  @override
+  State<_AnimatedDots> createState() => _AnimatedDotsState();
+}
+
+class _AnimatedDotsState extends State<_AnimatedDots> {
+  late final Timer _timer;
+  int _dotCount = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 450), (_) {
+      if (!mounted) return;
+      setState(() {
+        _dotCount = _dotCount == 3 ? 1 : _dotCount + 1;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '.' * _dotCount,
+      style: AppTypography.labelSmall.copyWith(
+        color: widget.color.withValues(alpha: 0.95),
+        fontWeight: FontWeight.w700,
+      ),
+    );
+  }
 }
 
 class _ScrapeColors {

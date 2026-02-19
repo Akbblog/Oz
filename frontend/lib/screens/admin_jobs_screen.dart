@@ -6,6 +6,7 @@ import '../core/theme/app_theme.dart';
 import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
 import '../widgets/infinity_data_table.dart';
+import '../widgets/job_completion_card.dart';
 import 'results_screen.dart';
 
 class AdminJobsScreen extends StatefulWidget {
@@ -399,6 +400,16 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
   }
 
   String _pad(int value) => value.toString().padLeft(2, '0');
+
+  String _formatDurationCompact(Duration duration) {
+    final totalSeconds = duration.inSeconds.clamp(0, 9999999);
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    if (hours > 0) return '${hours}h ${minutes}m';
+    if (minutes > 0) return '${minutes}m ${seconds}s';
+    return '${seconds}s';
+  }
 
   _StatusStyle _statusStyle(String status) {
     switch (status.toLowerCase()) {
@@ -1086,156 +1097,83 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
     final jobId = (job['job_id'] ?? '').toString();
     final category = (job['category'] ?? 'Unknown').toString();
     final username = (job['username'] ?? 'unknown').toString();
+    final statusRaw = (job['status'] ?? 'unknown').toString().toLowerCase();
+    if (statusRaw == 'completed') {
+      return _buildCompletedJobCard(job);
+    }
     final resultCount = _resultsCount(job);
     final createdAt = _formatDate(job['created_at']?.toString());
     final status = _statusStyle((job['status'] ?? 'unknown').toString());
     final isDownloading = _downloadingJobs.contains(jobId);
-
-    return Container(
+    final cityCount = _asInt(job['total_cities']);
+    final createdAtDate =
+        DateTime.tryParse(job['created_at']?.toString() ?? '') ??
+            DateTime.now();
+    return JobStatusCard(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: AppSpacing.paddingMd,
-      decoration: BoxDecoration(
-        color: _AdminJobsColors.slate900,
-        borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(
-          color: _AdminJobsColors.indigo.withValues(alpha: 0.2),
+      category: category,
+      jobId: jobId,
+      timestamp: createdAtDate,
+      statusLabel: status.label,
+      statusColor: status.color,
+      statusBackground: status.background,
+      statusIcon: status.icon,
+      primaryInfo: 'Owner: @$username',
+      secondaryInfo: '$resultCount results • $cityCount cities',
+      metaItems: [
+        JobCardMetaItem(
+          icon: Icons.calendar_today_rounded,
+          text: createdAt,
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      category,
-                      style: AppTypography.titleSmall.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '#$jobId  -  $username',
-                      style: AppTypography.labelSmall.copyWith(
-                        color: Colors.white54,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.xs,
-                  vertical: AppSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: status.background,
-                  borderRadius: AppSpacing.borderRadiusSm,
-                  border: Border.all(
-                    color: status.color.withValues(alpha: 0.45),
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(status.icon, size: 14, color: status.color),
-                    const SizedBox(width: 4),
-                    Text(
-                      status.label,
-                      style: AppTypography.labelSmall.copyWith(
-                        color: status.color,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Wrap(
-            spacing: AppSpacing.xs,
-            runSpacing: AppSpacing.xs,
-            children: [
-              _metaPill(Icons.calendar_today_rounded, createdAt),
-              _metaPill(Icons.list_alt_rounded, '$resultCount results'),
-              _metaPill(
-                Icons.location_city_rounded,
-                '${_asInt(job['total_cities'])} cities',
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _openResults(job),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _AdminJobsColors.indigo,
-                    foregroundColor: Colors.white,
-                  ),
-                  icon: const Icon(Icons.visibility_rounded, size: 16),
-                  label: const Text('View'),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: isDownloading ? null : () => _downloadJob(job),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.16),
-                    ),
-                  ),
-                  icon: isDownloading
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.download_rounded, size: 16),
-                  label: Text(isDownloading ? 'Downloading' : 'CSV'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+        JobCardMetaItem(
+          icon: Icons.list_alt_rounded,
+          text: '$resultCount results',
+        ),
+        JobCardMetaItem(
+          icon: Icons.location_city_rounded,
+          text: '$cityCount cities',
+        ),
+      ],
+      isDownloading: isDownloading,
+      onViewResults: () => _openResults(job),
+      onDownload: () => _downloadJob(job),
+      downloadLabel: 'Download CSV',
     );
   }
 
-  Widget _metaPill(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.xs,
-        vertical: AppSpacing.xxs,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: AppSpacing.borderRadiusRound,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: Colors.white54),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: AppTypography.labelSmall.copyWith(
-              color: Colors.white70,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
+  Widget _buildCompletedJobCard(Map<String, dynamic> job) {
+    final jobId = (job['job_id'] ?? '').toString();
+    final category = (job['category'] ?? 'Unknown').toString();
+    final username = (job['username'] ?? 'unknown').toString();
+    final resultCount = _resultsCount(job);
+    final totalCities = _asInt(job['total_cities']);
+    final createdAt = DateTime.tryParse(job['created_at']?.toString() ?? '');
+    final completedAt =
+        DateTime.tryParse(job['completed_at']?.toString() ?? '') ??
+            createdAt ??
+            DateTime.now();
+    final duration = createdAt != null && completedAt.isAfter(createdAt)
+        ? completedAt.difference(createdAt)
+        : Duration.zero;
+    final avgPerCity = totalCities > 0 ? resultCount / totalCities : 0.0;
+    final isDownloading = _downloadingJobs.contains(jobId);
+
+    return JobCompletionCard(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      category: category,
+      jobId: jobId,
+      completedAt: completedAt,
+      leadCount: resultCount,
+      citiesText: totalCities > 0 ? '$totalCities cities' : 'N/A',
+      durationText: _formatDurationCompact(duration),
+      topCityText: 'Owner: @$username',
+      avgPerCityText: totalCities > 0
+          ? 'Avg: ~${avgPerCity.toStringAsFixed(1)}/city'
+          : 'Avg: N/A',
+      isDownloading: isDownloading,
+      onViewResults: () => _openResults(job),
+      onDownload: () => _downloadJob(job),
+      downloadLabel: 'Download CSV',
     );
   }
 
