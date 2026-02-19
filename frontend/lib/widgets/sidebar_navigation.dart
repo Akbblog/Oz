@@ -142,11 +142,7 @@ class SidebarNavigation extends StatelessWidget {
               ],
             ),
             child: const Center(
-              child: BrandMark(
-                tiled: false,
-                size: 22,
-                hoverGlow: true,
-              ),
+              child: BrandMark(tiled: false, size: 22, hoverGlow: true),
             ),
           ),
           if (!collapsed) ...[
@@ -282,11 +278,7 @@ class SidebarNavigation extends StatelessWidget {
             mainAxisAlignment:
                 collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
             children: [
-              _buildAdaptiveIcon(
-                icon: icon,
-                color: Colors.white70,
-                size: 18,
-              ),
+              _buildAdaptiveIcon(icon: icon, color: Colors.white70, size: 18),
               if (!collapsed) ...[
                 const SizedBox(width: AppSpacing.sm),
                 Text(
@@ -344,8 +336,11 @@ class SidebarNavigation extends StatelessWidget {
                 ),
               ),
               child: const Center(
-                child: Icon(Icons.visibility_rounded,
-                    color: Colors.white70, size: 18),
+                child: Icon(
+                  Icons.visibility_rounded,
+                  color: Colors.white70,
+                  size: 18,
+                ),
               ),
             ),
             if (!collapsed) ...[
@@ -391,9 +386,7 @@ class SidebarNavigation extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceDark.withValues(alpha: 0.7),
         borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(
-          color: AppColors.primaryBlue.withValues(alpha: 0.2),
-        ),
+        border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.2)),
       ),
       child: Row(
         mainAxisAlignment:
