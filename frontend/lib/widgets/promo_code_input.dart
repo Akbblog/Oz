@@ -115,7 +115,7 @@ class _PromoCodeInputState extends State<PromoCodeInput> {
                   prefixIcon: Icon(
                     _validPromo != null
                         ? Icons.check_circle
-                        : Icons.local_offer_outlined,
+                        : Icons.local_offer_rounded,
                     color: _validPromo != null
                         ? _PromoColors.emerald
                         : Colors.white38,

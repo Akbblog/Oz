@@ -3405,18 +3405,64 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
     """Get all jobs for current user"""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
-        SELECT job_id, category, status, progress,
-               total_cities, credit_estimate, credit_charged,
-               created_at, completed_at
-        FROM jobs WHERE user_id = ? ORDER BY created_at DESC
+        SELECT j.job_id, j.category, j.status, j.progress,
+               j.total_cities, j.credit_estimate, j.credit_charged,
+               j.created_at, j.completed_at, j.cities_data,
+               (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count
+        FROM jobs j WHERE j.user_id = ? ORDER BY j.created_at DESC
     """, (current_user["id"],))
-    
+
+    job_rows = cursor.fetchall()
+    job_ids = [row[0] for row in job_rows]
+
+    # Batch-fetch top city per job
+    top_cities = {}
+    if job_ids:
+        placeholders = ",".join("?" * len(job_ids))
+        cursor.execute(f"""
+            SELECT job_id, city, state, COUNT(*) as cnt
+            FROM results
+            WHERE job_id IN ({placeholders}) AND city IS NOT NULL AND city != ''
+            GROUP BY job_id, city, state
+            ORDER BY job_id, cnt DESC
+        """, job_ids)
+        for tc_row in cursor.fetchall():
+            jid = tc_row[0]
+            if jid not in top_cities:
+                city_name = tc_row[1]
+                state_name = tc_row[2] or ""
+                label = f"{city_name}, {state_name}" if state_name else city_name
+                top_cities[jid] = {"name": label, "count": tc_row[3]}
+
     jobs = []
-    for row in cursor.fetchall():
+    for row in job_rows:
+        job_id = row[0]
+        # Parse cities from cities_data JSON
+        cities = []
+        cities_data_raw = row[9]
+        if cities_data_raw:
+            try:
+                cities_data_parsed = json.loads(cities_data_raw) if isinstance(cities_data_raw, str) else cities_data_raw
+                if isinstance(cities_data_parsed, list):
+                    for item in cities_data_parsed:
+                        if isinstance(item, dict):
+                            city = item.get("city", "")
+                            state = item.get("state", "")
+                            if city:
+                                cities.append(f"{city}, {state}" if state else city)
+                        elif isinstance(item, str) and item.strip():
+                            cities.append(item.strip())
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        result_count = row[10] or 0
+        tc = top_cities.get(job_id)
+        top_city_text = f"{tc['name']} ({tc['count']})" if tc else None
+
         jobs.append({
-            "job_id": row[0],
+            "job_id": job_id,
             "category": row[1],
             "status": row[2],
             "progress": row[3],
@@ -3424,9 +3470,12 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
             "credit_estimate": row[5],
             "credit_charged": row[6],
             "created_at": row[7],
-            "completed_at": row[8]
+            "completed_at": row[8],
+            "cities": cities,
+            "result_count": result_count,
+            "top_city": top_city_text
         })
-    
+
     conn.close()
     return {"jobs": jobs}
 

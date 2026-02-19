@@ -475,7 +475,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                   filter == 'Phone'
                       ? Icons.phone_rounded
                       : filter == 'Email'
-                          ? Icons.email_outlined
+                          ? Icons.email_rounded
                           : filter == 'Website'
                               ? Icons.language_rounded
                               : Icons.location_on_rounded,
@@ -1425,7 +1425,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                         onTap: () => _launchPhone(row['phone'] ?? ''),
                       ),
                       _tableActionButton(
-                        icon: Icons.email_outlined,
+                        icon: Icons.email_rounded,
                         tooltip: 'Email',
                         onTap: () => _launchEmail(row['email'] ?? ''),
                       ),
@@ -1825,7 +1825,7 @@ class _LeadCardState extends State<_LeadCard> {
                       children: [
                         if (hasEmail)
                           _iconButton(
-                            icon: Icons.email_outlined,
+                            icon: Icons.email_rounded,
                             color: AppColors.primaryBlueLight,
                             tooltip: 'Send Email',
                             onTap: widget.onEmailTap,

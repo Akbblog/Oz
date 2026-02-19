@@ -161,11 +161,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 controller: _passwordController,
                 label: 'New Password',
                 hint: 'Enter new password',
-                prefixIcon: Icons.lock_outlined,
+                prefixIcon: Icons.lock_rounded,
                 obscureText: _obscurePassword,
                 suffixIcon: IconButton(
                   icon: Icon(
-                    _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    _obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded,
                     color: Colors.white54,
                   ),
                   onPressed: () {
@@ -192,11 +192,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 controller: _confirmPasswordController,
                 label: 'Confirm Password',
                 hint: 'Confirm new password',
-                prefixIcon: Icons.lock_outlined,
+                prefixIcon: Icons.lock_rounded,
                 obscureText: _obscureConfirmPassword,
                 suffixIcon: IconButton(
                   icon: Icon(
-                    _obscureConfirmPassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    _obscureConfirmPassword ? Icons.visibility_rounded : Icons.visibility_off_rounded,
                     color: Colors.white54,
                   ),
                   onPressed: () {

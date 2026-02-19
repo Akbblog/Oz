@@ -45,13 +45,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   ];
   static const List<_NavItem> _authenticatedNavItems = [
     _NavItem(
-      icon: Icons.home,
-      selectedIcon: Icons.home,
+      icon: Icons.home_rounded,
+      selectedIcon: Icons.home_rounded,
       label: 'Home',
       pageIndex: 0,
     ),
     _NavItem(
-      icon: Icons.location_city_outlined,
+      icon: Icons.location_city_rounded,
       selectedIcon: Icons.location_city_rounded,
       label: 'Cities',
       pageIndex: 1,
@@ -726,8 +726,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         children: [
                           Expanded(
                             child: _buildDockNavItem(
-                              icon: Icons.home,
-                              selectedIcon: Icons.home,
+                              icon: Icons.home_rounded,
+                              selectedIcon: Icons.home_rounded,
                               label: 'Home',
                               isSelected: homeActive,
                               onTap: () => _onNavTap(0),
@@ -753,8 +753,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                           Expanded(
                             child: _buildDockNavItem(
-                              icon: Icons.wallet,
-                              selectedIcon: Icons.wallet,
+                              icon: Icons.account_balance_wallet_rounded,
+                              selectedIcon: Icons.account_balance_wallet_rounded,
                               label: 'Wallet',
                               isSelected: false,
                               onTap: _openWallet,
@@ -924,31 +924,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              AnimatedContainer(
-                duration: AppSpacing.durationMedium,
-                curve: Curves.easeOutCubic,
+              SizedBox(
                 width: 30,
                 height: 30,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isSelected
-                      ? AppColors.primaryBlue.withValues(alpha: 0.22)
-                      : Colors.transparent,
-                  border: isSelected
-                      ? Border.all(
-                          color: AppColors.primaryBlueLight.withValues(
-                            alpha: 0.4,
-                          ),
-                        )
-                      : null,
-                ),
                 child: Center(
                   child: _buildAdaptiveIcon(
                     icon: resolvedIcon,
                     color: isSelected
-                        ? AppColors.primaryBlueLight
-                        : Colors.white.withValues(alpha: 0.75),
-                    size: 20,
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.6),
+                    size: 22,
                   ),
                 ),
               ),

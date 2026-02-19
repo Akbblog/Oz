@@ -365,8 +365,8 @@ class _LoginScreenState extends State<LoginScreen>
                     suffixIcon: IconButton(
                       icon: Icon(
                         visible
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
+                            ? Icons.visibility_rounded
+                            : Icons.visibility_off_rounded,
                         color: AppColors.textSecondaryLight,
                         size: 20,
                       ),

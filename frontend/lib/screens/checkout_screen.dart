@@ -353,7 +353,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 child: Icon(
                   widget.isSubscription
                       ? Icons.autorenew
-                      : Icons.shopping_cart_outlined,
+                      : Icons.shopping_cart_rounded,
                   color: _CheckoutColors.primary,
                   size: 24,
                 ),

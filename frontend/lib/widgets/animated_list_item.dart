@@ -185,18 +185,18 @@ class BusinessCard extends StatelessWidget {
                     children: [
                       if (phone != null)
                         _InfoChip(
-                          icon: Icons.phone_outlined,
+                          icon: Icons.phone_rounded,
                           text: phone!,
                         ),
                       if (website != null)
                         _InfoChip(
-                          icon: Icons.language_outlined,
+                          icon: Icons.language_rounded,
                           text: website!,
                           isLink: true,
                         ),
                       if (address != null)
                         _InfoChip(
-                          icon: Icons.location_on_outlined,
+                          icon: Icons.location_on_rounded,
                           text: address!,
                         ),
                     ],

@@ -442,7 +442,7 @@ class _SubscriptionManagementScreenState
           ),
           const SizedBox(height: AppSpacing.sm),
           _actionButton(
-            icon: Icons.cancel_outlined,
+            icon: Icons.cancel_rounded,
             label: 'Cancel at Period End',
             subtitle: 'Keep access until billing period ends',
             color: const Color(0xFFF59E0B),

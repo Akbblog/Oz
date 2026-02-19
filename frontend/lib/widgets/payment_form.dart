@@ -54,7 +54,7 @@ class _PaymentFormState extends State<PaymentForm> {
       case 'Discover':
         return Icons.credit_card;
       default:
-        return Icons.credit_card_outlined;
+        return Icons.credit_card_rounded;
     }
   }
 
@@ -120,7 +120,7 @@ class _PaymentFormState extends State<PaymentForm> {
                   controller: _expiryController,
                   label: 'Expiry',
                   hint: 'MM/YY',
-                  icon: Icons.calendar_today_outlined,
+                  icon: Icons.calendar_today_rounded,
                   keyboardType: TextInputType.number,
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
@@ -279,7 +279,7 @@ class _PaymentFormState extends State<PaymentForm> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.shield_outlined, color: Colors.white38, size: 14),
+              Icon(Icons.shield_rounded, color: Colors.white38, size: 14),
               const SizedBox(width: 4),
               Text(
                 'Secured by Stripe. Card data never stored on our servers.',

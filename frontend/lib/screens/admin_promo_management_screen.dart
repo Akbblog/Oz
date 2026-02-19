@@ -298,7 +298,7 @@ class _AdminPromoManagementScreenState extends State<AdminPromoManagementScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                Icons.local_offer_outlined,
+                Icons.local_offer_rounded,
                 color: AppColors.primaryBlueLight,
                 size: 44,
               ),

@@ -1258,7 +1258,9 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
       leadCount: resultCount,
       citiesText: _historyCityPreview(cities),
       durationText: _formatDurationCompact(duration),
-      topCityText: _historyTopCity(job['results']),
+      topCityText: job['top_city'] != null
+          ? 'Top city: ${job['top_city']}'
+          : _historyTopCity(job['results']),
       avgPerCityText: cities.isNotEmpty
           ? 'Avg: ~${avgPerCity.toStringAsFixed(1)}/city'
           : 'Avg: N/A',

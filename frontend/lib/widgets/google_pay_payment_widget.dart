@@ -201,7 +201,7 @@ class _GooglePayPaymentWidgetState extends State<GooglePayPaymentWidget> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.shield_outlined, color: Colors.white38, size: 14),
+            Icon(Icons.shield_rounded, color: Colors.white38, size: 14),
             const SizedBox(width: 4),
             Text(
               'Processed securely via Stripe + Google Pay.',

@@ -573,7 +573,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         break;
       default:
         color = Colors.white38;
-        icon = Icons.circle_outlined;
+        icon = Icons.circle_rounded;
         label = status.isEmpty ? 'Unknown' : status;
     }
 

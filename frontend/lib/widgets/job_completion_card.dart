@@ -173,7 +173,7 @@ class JobCompletionCard extends StatelessWidget {
                   spacing: AppSpacing.xs,
                   runSpacing: AppSpacing.xs,
                   children: [
-                    _metaPill(Icons.timer_outlined, durationText),
+                    _metaPill(Icons.timer_rounded, durationText),
                     _metaPill(Icons.insights_rounded, topCityText),
                     _metaPill(Icons.speed_rounded, avgPerCityText),
                   ],

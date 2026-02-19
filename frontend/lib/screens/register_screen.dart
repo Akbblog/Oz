@@ -367,7 +367,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               style: const TextStyle(color: AppColors.textPrimaryLight),
               decoration: _inputDecoration(
                 hint: 'Enter your phone number',
-                icon: Icons.phone_outlined,
+                icon: Icons.phone_rounded,
               ),
               validator: (value) {
                 final raw = (value ?? '').trim();
@@ -399,8 +399,8 @@ class _RegisterScreenState extends State<RegisterScreen>
                     suffixIcon: IconButton(
                       icon: Icon(
                         visible
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
+                            ? Icons.visibility_rounded
+                            : Icons.visibility_off_rounded,
                         color: AppColors.textSecondaryLight,
                         size: 20,
                       ),
@@ -430,8 +430,8 @@ class _RegisterScreenState extends State<RegisterScreen>
                     suffixIcon: IconButton(
                       icon: Icon(
                         visible
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
+                            ? Icons.visibility_rounded
+                            : Icons.visibility_off_rounded,
                         color: AppColors.textSecondaryLight,
                         size: 20,
                       ),
@@ -515,7 +515,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                     : Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.person_add_outlined,
+                          const Icon(Icons.person_add_rounded,
                               color: Colors.white, size: 20),
                           const SizedBox(width: 8),
                           Text(

@@ -1453,7 +1453,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                       Icon(
                         isSelected
                             ? Icons.check_circle_rounded
-                            : Icons.circle_outlined,
+                            : Icons.circle_rounded,
                         color: isSelected
                             ? _LocationColors.primary
                             : _LocationColors.textSecondary,
@@ -1571,7 +1571,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                       Icon(
                         isSelected
                             ? Icons.check_circle_rounded
-                            : Icons.circle_outlined,
+                            : Icons.circle_rounded,
                         color: isSelected
                             ? _LocationColors.primary
                             : _LocationColors.textSecondary,

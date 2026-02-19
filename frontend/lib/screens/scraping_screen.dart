@@ -644,7 +644,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                                   ),
                                 ),
                                 icon: const Icon(
-                                  Icons.person_add_outlined,
+                                  Icons.person_add_rounded,
                                   size: 16,
                                 ),
                                 label: Text(
@@ -1767,7 +1767,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                   icon: Icon(
                     _logAutoScroll
                         ? Icons.push_pin_rounded
-                        : Icons.push_pin_outlined,
+                        : Icons.push_pin_rounded,
                     color: _logAutoScroll
                         ? _ScrapeColors.primaryLight
                         : Colors.white60,
@@ -2735,7 +2735,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                   statusColor = _ScrapeColors.primaryLight;
                   statusLabel = '$count ${count == 1 ? 'lead' : 'leads'}';
                 } else {
-                  statusIcon = Icons.circle_outlined;
+                  statusIcon = Icons.circle_rounded;
                   statusColor = Colors.white24;
                   statusLabel = 'Pending';
                 }

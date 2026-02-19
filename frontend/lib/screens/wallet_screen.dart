@@ -1043,7 +1043,7 @@ class _WalletScreenState extends State<WalletScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.inbox_outlined, color: Colors.white24, size: 40),
+            Icon(Icons.inbox_rounded, color: Colors.white24, size: 40),
             const SizedBox(height: AppSpacing.sm),
             Text(
               message,
