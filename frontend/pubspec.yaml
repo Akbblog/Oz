@@ -24,6 +24,7 @@ dependencies:
   open_filex: ^4.5.0
   url_launcher: ^6.2.5
   flutter_svg: ^2.0.10
+  flutter_tabler_icons: ^1.43.0
   country_flags: ^4.1.2
   pay: ^2.0.0
 

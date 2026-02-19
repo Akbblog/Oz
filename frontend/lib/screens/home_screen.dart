@@ -1,7 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter_tabler_icons/flutter_tabler_icons.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
@@ -29,11 +29,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  static const String _iconHome = 'assets/icons/home.svg';
-  static const String _iconHistory = 'assets/icons/history.svg';
-  static const String _iconWallet = 'assets/icons/wallet.svg';
-  static const String _iconProfile = 'assets/icons/profile.svg';
-
   int _currentIndex = 1; // Guest starts on Cities
   late PageController _pageController;
   late final AuthProvider _authProvider;
@@ -53,8 +48,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _NavItem(
       icon: Icons.home_outlined,
       selectedIcon: Icons.home_rounded,
-      iconAsset: _iconHome,
-      selectedIconAsset: _iconHome,
       label: 'Home',
       pageIndex: 0,
     ),
@@ -69,8 +62,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _NavItem(
       icon: Icons.history_toggle_off_rounded,
       selectedIcon: Icons.history_rounded,
-      iconAsset: _iconHistory,
-      selectedIconAsset: _iconHistory,
       label: 'History',
       pageIndex: 4,
     ),
@@ -268,8 +259,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   (item) => SidebarNavItem(
                     icon: item.icon,
                     selectedIcon: item.selectedIcon,
-                    iconAsset: item.iconAsset,
-                    selectedIconAsset: item.selectedIconAsset,
                     label: item.label,
                     pageIndex: item.pageIndex,
                     activePageIndexes: item.activePageIndexes,
@@ -745,8 +734,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             child: _buildDockNavItem(
                               icon: Icons.home_outlined,
                               selectedIcon: Icons.home_rounded,
-                              iconAsset: _iconHome,
-                              selectedIconAsset: _iconHome,
                               label: 'Home',
                               isSelected: homeActive,
                               onTap: () => _onNavTap(0),
@@ -756,8 +743,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             child: _buildDockNavItem(
                               icon: Icons.history_toggle_off_rounded,
                               selectedIcon: Icons.history_rounded,
-                              iconAsset: _iconHistory,
-                              selectedIconAsset: _iconHistory,
                               label: 'History',
                               isSelected: historyActive,
                               onTap: () => _onNavTap(4),
@@ -777,8 +762,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               icon: Icons.account_balance_wallet_outlined,
                               selectedIcon:
                                   Icons.account_balance_wallet_rounded,
-                              iconAsset: _iconWallet,
-                              selectedIconAsset: _iconWallet,
                               label: 'Wallet',
                               isSelected: false,
                               onTap: _openWallet,
@@ -788,8 +771,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             child: _buildDockNavItem(
                               icon: Icons.person_outline_rounded,
                               selectedIcon: Icons.person_rounded,
-                              iconAsset: _iconProfile,
-                              selectedIconAsset: _iconProfile,
                               label: 'Profile',
                               isSelected: false,
                               onTap: _openProfile,
@@ -881,9 +862,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         icon: isSelected
                             ? (item.selectedIcon ?? item.icon)
                             : item.icon,
-                        iconAsset: isSelected
-                            ? (item.selectedIconAsset ?? item.iconAsset)
-                            : item.iconAsset,
                         color: isSelected
                             ? AppColors.primaryBlueLight
                             : Colors.white54,
@@ -914,15 +892,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _buildDockNavItem({
     required IconData icon,
     IconData? selectedIcon,
-    String? iconAsset,
-    String? selectedIconAsset,
     required String label,
     required bool isSelected,
     required VoidCallback onTap,
   }) {
     final resolvedIcon = isSelected ? (selectedIcon ?? icon) : icon;
-    final resolvedIconAsset =
-        isSelected ? (selectedIconAsset ?? iconAsset) : iconAsset;
 
     return Material(
       color: Colors.transparent,
@@ -978,7 +952,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: Center(
                   child: _buildAdaptiveIcon(
                     icon: resolvedIcon,
-                    iconAsset: resolvedIconAsset,
                     color: isSelected
                         ? AppColors.primaryBlueLight
                         : Colors.white.withValues(alpha: 0.75),
@@ -1021,18 +994,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required IconData icon,
     required Color color,
     required double size,
-    String? iconAsset,
   }) {
-    if (iconAsset == null || iconAsset.isEmpty) {
-      return Icon(icon, color: color, size: size);
-    }
-
-    return SvgPicture.asset(
-      iconAsset,
-      width: size,
-      height: size,
-      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-    );
+    return Icon(icon, color: color, size: size);
   }
 
   Widget _buildDesktopContent() {
@@ -1071,8 +1034,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 class _NavItem {
   final IconData icon;
   final IconData? selectedIcon;
-  final String? iconAsset;
-  final String? selectedIconAsset;
   final String label;
   final int pageIndex;
   final List<int> activePageIndexes;
@@ -1081,8 +1042,6 @@ class _NavItem {
   const _NavItem({
     required this.icon,
     this.selectedIcon,
-    this.iconAsset,
-    this.selectedIconAsset,
     required this.label,
     required this.pageIndex,
     this.activePageIndexes = const [],
