@@ -451,13 +451,14 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     final rawMethods = flags['payment_methods_enabled'];
     final methods = rawMethods is List
         ? rawMethods.map((m) => m.toString().trim().toLowerCase()).toList()
-        : <String>['stripe', 'paypal', 'coinbase'];
+        : <String>['coinbase'];
 
     if (!mounted) return;
     setState(() {
       _creditBalance = creditBalance;
       _enableLivePayments = enabled;
-      _methods = methods.where((m) => m.isNotEmpty).toList();
+      final filtered = methods.where((m) => m == 'coinbase').toSet().toList();
+      _methods = filtered.isEmpty ? const ['coinbase'] : filtered;
       _loading = false;
     });
   }
@@ -706,9 +707,7 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
   }
 
   Widget _buildPaymentMethodsSection(LayoutType layoutType) {
-    final methods = _methods.isEmpty
-        ? const <String>['stripe', 'paypal', 'coinbase']
-        : _methods;
+    final methods = _methods.isEmpty ? const <String>['coinbase'] : _methods;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

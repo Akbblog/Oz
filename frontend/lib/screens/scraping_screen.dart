@@ -15,6 +15,7 @@ import '../widgets/progress_stepper.dart';
 import '../widgets/job_completion_card.dart';
 import 'register_screen.dart';
 import 'results_screen.dart';
+import '../services/analytics_service.dart';
 
 class _RepeatJobPreset {
   final String category;
@@ -179,6 +180,10 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               maxResults: _maxResults,
             );
         _activeJobPreset = null;
+        AnalyticsService.instance.track('search_complete', properties: {
+          'job_type': job.category,
+          'result_count': job.results.length,
+        });
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -758,6 +763,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       cities: List<String>.from(cities),
       maxResults: _maxResults,
     );
+
+    AnalyticsService.instance.track('search_start', properties: {
+      'job_type': category,
+      'city_count': cities.length,
+      'max_results': _maxResults,
+    });
 
     await provider.startScraping(
       category: category,

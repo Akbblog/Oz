@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
+import '../services/analytics_service.dart';
 
 class PaymentSuccessScreen extends StatefulWidget {
   final Map<String, dynamic> transaction;
@@ -43,6 +44,18 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
       ),
     );
     _controller.forward();
+
+    final credits = widget.transaction['credits_purchased'] ??
+        widget.transaction['credits'] ??
+        0;
+    final amountCents = widget.transaction['amount_cents'] ??
+        widget.transaction['total_amount_cents'] ??
+        0;
+    AnalyticsService.instance.track('credit_purchase', properties: {
+      'credits': credits,
+      'amount_cents': amountCents,
+      'is_subscription': widget.isSubscription,
+    });
   }
 
   @override

@@ -21,10 +21,12 @@ import 'providers/scraper_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
 import 'core/theme/app_theme.dart';
+import 'services/analytics_service.dart';
 
 void main() {
   // Enable clean URLs on web (e.g., /privacy-policy instead of /#/privacy-policy).
   usePathUrlStrategy();
+  AnalyticsService.instance.init();
   runApp(
     MultiProvider(
       providers: [

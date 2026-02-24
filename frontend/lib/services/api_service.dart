@@ -28,7 +28,7 @@ class ApiService {
     if (listValue is List) {
       return listValue
           .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e as Map))
+          .map((e) => Map<String, dynamic>.from(e))
           .toList();
     }
 
@@ -1993,6 +1993,55 @@ class ApiService {
       throw Exception('Failed to load job activity filters');
     }
   }
+
+  // ── Analytics Admin Endpoints ─────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> getAnalyticsDau({int days = 30}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/analytics/dau')
+        .replace(queryParameters: {'days': days.toString()});
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception('Failed to load DAU analytics');
+  }
+
+  Future<Map<String, dynamic>> getAnalyticsFeatureAdoption({int days = 30}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/analytics/feature-adoption')
+        .replace(queryParameters: {'days': days.toString()});
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception('Failed to load feature adoption analytics');
+  }
+
+  Future<Map<String, dynamic>> getAnalyticsFunnel({int days = 90}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/analytics/funnel')
+        .replace(queryParameters: {'days': days.toString()});
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception('Failed to load funnel analytics');
+  }
+
+  Future<Map<String, dynamic>> getAnalyticsSessionStats({int days = 30}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/analytics/session-stats')
+        .replace(queryParameters: {'days': days.toString()});
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception('Failed to load session stats');
+  }
+
+  Future<Map<String, dynamic>> getAnalyticsCreditPatterns({int days = 30}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/analytics/credit-patterns')
+        .replace(queryParameters: {'days': days.toString()});
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception('Failed to load credit pattern analytics');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getJobResultsAdmin(
     String jobId, {

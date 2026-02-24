@@ -837,7 +837,7 @@ class _WalletScreenState extends State<WalletScreen>
         final amountCents = tx['amount_cents'] ?? 0;
         final amount = (amountCents / 100).toStringAsFixed(2);
         final credits = tx['credits_purchased'] ?? 0;
-        final provider = tx['payment_provider'] ?? 'stripe';
+        final provider = tx['payment_provider'] ?? 'coinbase';
         final createdAt = tx['created_at'] ?? '';
 
         final statusColor = _getStatusColor(status);

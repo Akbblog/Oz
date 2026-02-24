@@ -1,17 +1,11 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
 import '../services/api_service.dart';
-import '../services/stripe_js_interop.dart';
-// TODO(payments): Uncomment when re-enabling other payment methods.
-// import '../widgets/payment_form.dart';
-// import '../widgets/crypto_payment_widget.dart';
-// import '../widgets/paypal_payment_widget.dart';
+import '../widgets/crypto_payment_widget.dart';
 import '../widgets/promo_code_input.dart';
-import '../widgets/google_pay_payment_widget.dart';
-import 'payment_success_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final Map<String, dynamic> item;
@@ -32,47 +26,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String? _paymentError;
   Map<String, dynamic>? _promo;
   Map<String, dynamic>? _priceBreakdown;
-  bool _isGooglePayLoading = false;
-
-  // Google Pay state
-  String? _stripePublishableKey;
-  String _googlePayMerchantName = 'Infinity Leads Pro';
-  String _googlePayEnvironment = 'TEST';
-  String? _googlePayClientSecret;
-  String? _googlePayTransactionId;
+  bool _isCoinbaseLoading = false;
+  Map<String, dynamic>? _coinbaseCharge;
 
   @override
   void initState() {
     super.initState();
     if (!widget.isSubscription) {
       _calculatePrice();
-    }
-    _loadPaymentConfig();
-  }
-
-  String get _displayAmount {
-    final totalCents = _priceBreakdown?['total_cents'] ??
-        (widget.isSubscription
-            ? widget.item['base_price_cents']
-            : widget.item['display_price_cents'] ??
-                widget.item['base_price_cents']) ??
-        0;
-    return (totalCents / 100).toStringAsFixed(2);
-  }
-
-  Future<void> _loadPaymentConfig() async {
-    try {
-      final flags = await _apiService.getFeatureFlags();
-      if (!mounted) return;
-      setState(() {
-        _stripePublishableKey = flags['stripe_publishable_key'] as String?;
-        _googlePayMerchantName =
-            (flags['google_pay_merchant_name'] as String?) ?? 'Infinity Leads Pro';
-        _googlePayEnvironment =
-            (flags['google_pay_environment'] as String?) ?? 'TEST';
-      });
-    } catch (_) {
-      // Non-critical: Google Pay tab just won't show.
     }
   }
 
@@ -88,92 +49,70 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     } catch (_) {}
   }
 
-  // TODO(payments): Restore _processCardPayment, _createCryptoCharge,
-  // _createPayPalOrder, _capturePayPalOrder when re-enabling other methods.
+  Future<void> _initiateCoinbaseCheckout() async {
+    if (widget.isSubscription) {
+      setState(() {
+        _paymentError =
+            'Subscription checkout via Coinbase is not enabled yet.';
+      });
+      return;
+    }
 
-  Future<void> _initiateGooglePay() async {
+    final packageId = (widget.item['id'] as num?)?.toInt();
+    if (packageId == null || packageId <= 0) {
+      setState(() {
+        _paymentError = 'Invalid package selected.';
+      });
+      return;
+    }
+
     setState(() {
-      _isGooglePayLoading = true;
+      _isCoinbaseLoading = true;
       _paymentError = null;
     });
 
     try {
       final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
       final result = await _apiService.purchaseCredits(
-        packageId: widget.item['id'],
-        paymentProvider: 'googlepay',
+        packageId: packageId,
+        paymentProvider: 'coinbase',
         promoCode: _promo?['code'],
         idempotencyKey: idempotencyKey,
       );
-      if (mounted) {
-        setState(() {
-          _googlePayClientSecret = result['client_secret'] as String?;
-          _googlePayTransactionId = result['transaction_id'] as String?;
-          _isGooglePayLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isGooglePayLoading = false;
-        });
-      }
-    }
-  }
 
-  Future<void> _onGooglePayToken(String stripeToken) async {
-    if (_googlePayClientSecret == null || _stripePublishableKey == null) {
-      setState(() => _paymentError = 'Payment not ready. Please try again.');
-      return;
-    }
-
-    setState(() {
-      _isGooglePayLoading = true;
-      _paymentError = null;
-    });
-
-    try {
-      if (!kIsWeb) {
-        setState(() {
-          _paymentError = 'Google Pay is only supported on web.';
-          _isGooglePayLoading = false;
-        });
-        return;
+      final hostedUrl =
+          (result['hosted_url'] ?? result['checkout_url'] ?? '').toString();
+      if (hostedUrl.isEmpty) {
+        throw Exception('Coinbase checkout link was not returned');
       }
 
-      final stripe = StripeJs(_stripePublishableKey!);
-      final confirmResult = await stripe.confirmCardPayment(
-        _googlePayClientSecret!,
-        googlePayToken: stripeToken,
-      );
+      final uri = Uri.tryParse(hostedUrl);
+      if (uri == null) {
+        throw Exception('Invalid Coinbase checkout link');
+      }
 
       if (!mounted) return;
+      setState(() {
+        _coinbaseCharge = {
+          ...result,
+          'status': result['status'] ?? 'processing',
+          'hosted_url': hostedUrl,
+        };
+        _isCoinbaseLoading = false;
+      });
 
-      if (confirmResult.success) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => PaymentSuccessScreen(
-              transaction: {
-                'transaction_id': _googlePayTransactionId,
-                'payment_provider': 'stripe',
-                'status': confirmResult.status,
-              },
-              isSubscription: false,
-            ),
-          ),
-        );
-      } else {
+      final launched =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
         setState(() {
-          _paymentError = confirmResult.errorMessage ?? 'Payment failed';
-          _isGooglePayLoading = false;
+          _paymentError = 'Could not open Coinbase checkout.';
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isGooglePayLoading = false;
+          _isCoinbaseLoading = false;
         });
       }
     }
@@ -213,41 +152,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           _buildPriceBreakdown(),
                           const SizedBox(height: AppSpacing.lg),
                         ],
-                        // Google Pay only (other methods hidden)
+                        // Coinbase checkout only
                         const SizedBox(height: AppSpacing.lg),
-                        if (_stripePublishableKey != null)
-                          GooglePayPaymentWidget(
-                            stripePublishableKey: _stripePublishableKey!,
-                            amount: _displayAmount,
-                            currencyCode: 'USD',
-                            countryCode: 'US',
-                            merchantName: _googlePayMerchantName,
-                            environment: _googlePayEnvironment,
-                            isLoading: _isGooglePayLoading,
-                            error: _paymentError,
-                            isReady: _googlePayClientSecret != null,
-                            onInitiatePayment: _initiateGooglePay,
-                            onPaymentResult: _onGooglePayToken,
-                          )
+                        if (widget.isSubscription)
+                          _buildSubscriptionUnsupportedCard()
                         else
-                          Center(
-                            child: Padding(
-                              padding: AppSpacing.paddingLg,
-                              child: Column(
-                                children: [
-                                  const CircularProgressIndicator(
-                                    color: AppColors.primaryBlue,
-                                  ),
-                                  const SizedBox(height: AppSpacing.md),
-                                  Text(
-                                    'Loading payment method...',
-                                    style: AppTypography.bodySmall.copyWith(
-                                      color: Colors.white54,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                          CryptoPaymentWidget(
+                            chargeData: _coinbaseCharge,
+                            isLoading: _isCoinbaseLoading,
+                            onCreateCharge: _initiateCoinbaseCheckout,
+                            error: _paymentError,
                           ),
                         const SizedBox(height: AppSpacing.xl),
                       ],
@@ -464,6 +378,22 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  Widget _buildSubscriptionUnsupportedCard() {
+    return Container(
+      width: double.infinity,
+      padding: AppSpacing.paddingMd,
+      decoration: BoxDecoration(
+        color: _CheckoutColors.surface.withValues(alpha: 0.3),
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Text(
+        'Subscription checkout is not available in Coinbase-only mode yet.',
+        style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
+      ),
+    );
+  }
+
   Widget _priceRow(String label, String value,
       {bool isBold = false, Color? color}) {
     return Padding(
@@ -473,16 +403,18 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         children: [
           Text(
             label,
-            style: (isBold ? AppTypography.labelLarge : AppTypography.bodyMedium)
-                .copyWith(
+            style:
+                (isBold ? AppTypography.labelLarge : AppTypography.bodyMedium)
+                    .copyWith(
               color: Colors.white70,
               fontWeight: isBold ? FontWeight.w700 : FontWeight.w400,
             ),
           ),
           Text(
             value,
-            style: (isBold ? AppTypography.titleMedium : AppTypography.bodyMedium)
-                .copyWith(
+            style:
+                (isBold ? AppTypography.titleMedium : AppTypography.bodyMedium)
+                    .copyWith(
               color: color ?? Colors.white,
               fontWeight: isBold ? FontWeight.w700 : FontWeight.w500,
             ),
@@ -491,9 +423,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       ),
     );
   }
-
-  // TODO(payments): Restore _buildPaymentMethodToggle and _methodTab
-  // when re-enabling Card, PayPal, and Crypto payment methods.
 }
 
 class _CheckoutColors {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../core/theme/app_theme.dart';
+import '../services/analytics_service.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -116,6 +117,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     if (message != null && mounted) {
       _showSnackBar(message);
+      AnalyticsService.instance.track('register');
       Navigator.of(context).pop();
     } else if (mounted) {
       final error =

@@ -308,8 +308,6 @@ class _DashboardScreenState extends State<DashboardScreen>
           ],
         ),
         const SizedBox(height: AppSpacing.lg),
-        _buildQuickActions(layoutType),
-        const SizedBox(height: AppSpacing.lg),
         _buildActivityFeed(layoutType),
       ],
     );

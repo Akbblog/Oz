@@ -1319,8 +1319,10 @@ class _ResultsScreenState extends State<ResultsScreen>
       'city',
       'state',
       'phone',
+      'whatsapp',
       'email',
       'website',
+      'whatsapp_url',
       'address',
       'google_maps_url',
     ];
@@ -1368,8 +1370,10 @@ class _ResultsScreenState extends State<ResultsScreen>
                 'city': r['city'] ?? 'N/A',
                 'state': r['state'] ?? '',
                 'phone': r['phone'] ?? 'N/A',
+                'whatsapp': r['whatsapp'] ?? 'N/A',
                 'email': r['email'] ?? 'N/A',
                 'website': r['website'] ?? 'N/A',
+                'whatsapp_url': r['whatsapp_url'] ?? 'N/A',
                 'address': r['address'] ?? 'N/A',
                 'google_maps_url': r['google_maps_url'] ?? '',
               })

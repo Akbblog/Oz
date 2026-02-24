@@ -334,14 +334,21 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     }
   }
 
-  void _resetSelections() {
+  void _deselectState() {
     setState(() {
       _selectedState = null;
       _selectedCities = [];
       _selectAllCities = false;
+      _isCitiesLoading = false;
       _citySearchController.clear();
+      _stateSearchController.clear();
+      _filteredStates = _statesAndCities.keys.toList();
       _filteredCities = [];
     });
+  }
+
+  void _resetSelections() {
+    _deselectState();
   }
 
   /// Clear country selection and return to country selection mode.
@@ -970,6 +977,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     required LayoutType layoutType,
     bool inSplitPanel = false,
   }) {
+    final showSelectedState = _selectedState != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -988,7 +996,7 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
                 fontWeight: FontWeight.w700,
               ),
             ),
-            if (_filteredStates.isNotEmpty) ...[
+            if (!showSelectedState && _filteredStates.isNotEmpty) ...[
               const SizedBox(width: AppSpacing.xs),
               Container(
                 padding: const EdgeInsets.symmetric(
@@ -1011,27 +1019,165 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
-        _buildStateSearch(),
-        const SizedBox(height: AppSpacing.sm),
-        _buildSelectedStateChips(),
-        if (_selectedState != null) const SizedBox(height: AppSpacing.sm),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: _stateGridColumns(layoutType, inSplitPanel),
-            crossAxisSpacing: AppSpacing.xs,
-            mainAxisSpacing: AppSpacing.xs,
-            childAspectRatio: 2.8,
-          ),
-          itemCount: _filteredStates.length,
-          itemBuilder: (context, index) {
-            final state = _filteredStates[index];
-            final isSelected = _selectedState == state;
-            return _buildStateCard(state, isSelected);
+        AnimatedSwitcher(
+          duration: AppSpacing.durationMedium,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.98, end: 1.0).animate(
+                  CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                ),
+                child: child,
+              ),
+            );
           },
+          child: showSelectedState
+              ? KeyedSubtree(
+                  key: const ValueKey<String>('selected_state_bar'),
+                  child: _buildSelectedStateBar(),
+                )
+              : KeyedSubtree(
+                  key: const ValueKey<String>('state_grid'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildStateSearch(),
+                      const SizedBox(height: AppSpacing.sm),
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount:
+                              _stateGridColumns(layoutType, inSplitPanel),
+                          crossAxisSpacing: AppSpacing.xs,
+                          mainAxisSpacing: AppSpacing.xs,
+                          childAspectRatio: 2.8,
+                        ),
+                        itemCount: _filteredStates.length,
+                        itemBuilder: (context, index) {
+                          final state = _filteredStates[index];
+                          final isSelected = _selectedState == state;
+                          return _buildStateCard(state, isSelected);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSelectedStateBar() {
+    final state = _selectedState;
+    if (state == null || state.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: _LocationColors.primary.withValues(alpha: 0.15),
+        borderRadius: AppSpacing.borderRadiusMd,
+        border: Border.all(
+          color: _LocationColors.primary.withValues(alpha: 0.5),
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          Tooltip(
+            message: 'Change region',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _deselectState,
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _LocationColors.primary.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.arrow_back_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Change',
+                        style: AppTypography.labelSmall.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: _LocationColors.primary.withValues(alpha: 0.2),
+              borderRadius: AppSpacing.borderRadiusSm,
+            ),
+            child: Center(
+              child: Text(
+                state.length >= 2 ? state.substring(0, 2).toUpperCase() : state,
+                style: AppTypography.labelSmall.copyWith(
+                  color: _LocationColors.primary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              state,
+              style: AppTypography.labelLarge.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Tooltip(
+            message: 'Remove region',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _deselectState,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.close_rounded,
+                    color: _LocationColors.primary,
+                    size: 20,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1083,93 +1229,18 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
     );
   }
 
-  Widget _buildSelectedStateChips() {
-    if (_selectedState == null) {
-      return const SizedBox.shrink();
-    }
-    return Wrap(
-      spacing: AppSpacing.xs,
-      runSpacing: AppSpacing.xs,
-      children: [
-        _buildChip(
-          label: _selectedState!,
-          onRemove: () => _resetSelections(),
-        ),
-        TextButton(
-          onPressed: _resetSelections,
-          style: TextButton.styleFrom(
-            foregroundColor: _LocationColors.textSecondary,
-          ),
-          child: const Text('Clear all'),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChip({required String label, required VoidCallback onRemove}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: AppSpacing.xxs,
-      ),
-      decoration: BoxDecoration(
-        color: _LocationColors.primary.withValues(alpha: 0.12),
-        borderRadius: AppSpacing.borderRadiusRound,
-        border: Border.all(
-          color: _LocationColors.primary.withValues(alpha: 0.3),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: _LocationColors.primary.withValues(alpha: 0.2),
-            blurRadius: 8,
-            spreadRadius: -6,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: AppTypography.labelSmall.copyWith(
-              color: _LocationColors.primary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: onRemove,
-            child: Icon(
-              Icons.close_rounded,
-              size: 16,
-              color: _LocationColors.primary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildStateCard(String state, bool isSelected) {
     final cityCount = (_statesAndCities[state] ?? []).length;
     return GestureDetector(
       onTap: () {
         setState(() {
-          _selectedState = isSelected ? null : state;
+          _selectedState = state;
           _selectedCities = [];
           _selectAllCities = false;
           _citySearchController.clear();
-          if (_selectedState != null) {
-            _filteredCities = _statesAndCities[_selectedState] ?? [];
-          }
+          _filteredCities = _statesAndCities[state] ?? [];
         });
-        if (!isSelected) {
-          _loadCitiesForState(state);
-        } else {
-          setState(() {
-            _filteredCities = [];
-          });
-        }
+        _loadCitiesForState(state);
       },
       child: Container(
         padding: const EdgeInsets.symmetric(

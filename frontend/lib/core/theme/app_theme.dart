@@ -68,38 +68,38 @@ class AppTheme {
         // Elevated Button Theme - Primary action styling (Deep Teal)
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(
-            elevation: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) return 0;
-              if (states.contains(MaterialState.hovered)) return 6;
+            elevation: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) return 0;
+              if (states.contains(WidgetState.hovered)) return 6;
               return 0;
             }),
-            shadowColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.hovered)) {
+            shadowColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.primaryBlue.withValues(alpha: 0.55);
               }
               return AppColors.primaryBlue.withValues(alpha: 0.0);
             }),
-            backgroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            backgroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return AppColors.disabledLight;
               }
-              if (states.contains(MaterialState.hovered)) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.brighten(AppColors.primaryBlue, 0.10);
               }
               return AppColors.primaryBlue;
             }),
-            foregroundColor: const MaterialStatePropertyAll(Colors.white),
-            padding: const MaterialStatePropertyAll(
+            foregroundColor: const WidgetStatePropertyAll(Colors.white),
+            padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(
                 horizontal: AppSpacing.md,
                 vertical: AppSpacing.sm,
               ),
             ),
-            minimumSize: const MaterialStatePropertyAll(Size(0, 44)),
-            shape: MaterialStatePropertyAll(
+            minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+            shape: WidgetStatePropertyAll(
               RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
             ),
-            textStyle: MaterialStatePropertyAll(
+            textStyle: WidgetStatePropertyAll(
               AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w500),
             ),
           ),
@@ -108,41 +108,41 @@ class AppTheme {
         // Outlined Button Theme
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: ButtonStyle(
-            foregroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            foregroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return AppColors.textDisabledLight;
               }
-              if (states.contains(MaterialState.hovered)) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.brighten(AppColors.primaryBlue, 0.10);
               }
               return AppColors.primaryBlue;
             }),
-            overlayColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.hovered)) {
+            overlayColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.primaryBlue.withValues(alpha: 0.10);
               }
               return null;
             }),
-            padding: const MaterialStatePropertyAll(
+            padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(
                 horizontal: AppSpacing.md,
                 vertical: AppSpacing.sm,
               ),
             ),
-            minimumSize: const MaterialStatePropertyAll(Size(0, 44)),
-            shape: MaterialStatePropertyAll(
+            minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+            shape: WidgetStatePropertyAll(
               RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
             ),
-            side: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            side: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return BorderSide(color: AppColors.borderLight, width: 1);
               }
-              final color = states.contains(MaterialState.hovered)
+              final color = states.contains(WidgetState.hovered)
                   ? AppColors.brighten(AppColors.primaryBlue, 0.10)
                   : AppColors.primaryBlue;
               return BorderSide(color: color, width: 1);
             }),
-            textStyle: MaterialStatePropertyAll(
+            textStyle: WidgetStatePropertyAll(
               AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w500),
             ),
           ),
@@ -151,29 +151,29 @@ class AppTheme {
         // Text Button Theme - Subtle, but teal-consistent
         textButtonTheme: TextButtonThemeData(
           style: ButtonStyle(
-            foregroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            foregroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return AppColors.textDisabledLight;
               }
-              if (states.contains(MaterialState.hovered)) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.brighten(AppColors.primaryBlue, 0.10);
               }
               return AppColors.primaryBlue;
             }),
-            overlayColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.hovered)) {
+            overlayColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.primaryBlue.withValues(alpha: 0.10);
               }
               return null;
             }),
-            padding: const MaterialStatePropertyAll(
+            padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(
                 horizontal: AppSpacing.sm,
                 vertical: AppSpacing.xs,
               ),
             ),
-            minimumSize: const MaterialStatePropertyAll(Size(0, 40)),
-            textStyle: MaterialStatePropertyAll(
+            minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+            textStyle: WidgetStatePropertyAll(
               AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w500),
             ),
           ),
@@ -416,38 +416,38 @@ class AppTheme {
         // Elevated Button Theme - Dark mode (Deep Teal)
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(
-            elevation: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) return 0;
-              if (states.contains(MaterialState.hovered)) return 6;
+            elevation: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) return 0;
+              if (states.contains(WidgetState.hovered)) return 6;
               return 0;
             }),
-            shadowColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.hovered)) {
+            shadowColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.primaryBlue.withValues(alpha: 0.55);
               }
               return AppColors.primaryBlue.withValues(alpha: 0.0);
             }),
-            backgroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            backgroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return AppColors.disabledDark;
               }
-              if (states.contains(MaterialState.hovered)) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.brighten(AppColors.primaryBlue, 0.10);
               }
               return AppColors.primaryBlue;
             }),
-            foregroundColor: const MaterialStatePropertyAll(Colors.white),
-            padding: const MaterialStatePropertyAll(
+            foregroundColor: const WidgetStatePropertyAll(Colors.white),
+            padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(
                 horizontal: AppSpacing.md,
                 vertical: AppSpacing.sm,
               ),
             ),
-            minimumSize: const MaterialStatePropertyAll(Size(0, 44)),
-            shape: MaterialStatePropertyAll(
+            minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+            shape: WidgetStatePropertyAll(
               RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
             ),
-            textStyle: MaterialStatePropertyAll(
+            textStyle: WidgetStatePropertyAll(
               AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w500),
             ),
           ),
@@ -456,41 +456,41 @@ class AppTheme {
         // Outlined Button Theme - Dark mode
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: ButtonStyle(
-            foregroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            foregroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return AppColors.textDisabledDark;
               }
-              if (states.contains(MaterialState.hovered)) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.brighten(AppColors.primaryBlue, 0.10);
               }
               return AppColors.primaryBlue;
             }),
-            overlayColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.hovered)) {
+            overlayColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.primaryBlue.withValues(alpha: 0.14);
               }
               return null;
             }),
-            padding: const MaterialStatePropertyAll(
+            padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(
                 horizontal: AppSpacing.md,
                 vertical: AppSpacing.sm,
               ),
             ),
-            minimumSize: const MaterialStatePropertyAll(Size(0, 44)),
-            shape: MaterialStatePropertyAll(
+            minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+            shape: WidgetStatePropertyAll(
               RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
             ),
-            side: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            side: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return BorderSide(color: AppColors.borderDark, width: 1);
               }
-              final color = states.contains(MaterialState.hovered)
+              final color = states.contains(WidgetState.hovered)
                   ? AppColors.brighten(AppColors.primaryBlue, 0.10)
                   : AppColors.primaryBlue;
               return BorderSide(color: color, width: 1);
             }),
-            textStyle: MaterialStatePropertyAll(
+            textStyle: WidgetStatePropertyAll(
               AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w500),
             ),
           ),
@@ -499,29 +499,29 @@ class AppTheme {
         // Text Button Theme - Dark mode
         textButtonTheme: TextButtonThemeData(
           style: ButtonStyle(
-            foregroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) {
+            foregroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
                 return AppColors.textDisabledDark;
               }
-              if (states.contains(MaterialState.hovered)) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.brighten(AppColors.primaryBlue, 0.10);
               }
               return AppColors.primaryBlue;
             }),
-            overlayColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.hovered)) {
+            overlayColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.hovered)) {
                 return AppColors.primaryBlue.withValues(alpha: 0.14);
               }
               return null;
             }),
-            padding: const MaterialStatePropertyAll(
+            padding: const WidgetStatePropertyAll(
               EdgeInsets.symmetric(
                 horizontal: AppSpacing.sm,
                 vertical: AppSpacing.xs,
               ),
             ),
-            minimumSize: const MaterialStatePropertyAll(Size(0, 40)),
-            textStyle: MaterialStatePropertyAll(
+            minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+            textStyle: WidgetStatePropertyAll(
               AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w500),
             ),
           ),

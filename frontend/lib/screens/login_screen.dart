@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/auth_provider.dart';
 import '../core/theme/app_theme.dart';
 import '../widgets/brand_mark.dart';
+import '../services/analytics_service.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -122,6 +123,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     if (success && mounted) {
       _saveLoginPrefs();
+      AnalyticsService.instance.track('login');
       Navigator.of(context).pushReplacementNamed('/home');
     } else if (mounted) {
       final message = authProvider.errorMessage ??

@@ -19,6 +19,7 @@ import asyncio
 import sys
 import secrets
 import hashlib
+from html import unescape
 import re
 from urllib.parse import quote_plus, urlparse, parse_qs, unquote, urljoin
 import base64
@@ -136,20 +137,19 @@ def ensure_default_admin_settings() -> None:
     defaults: List[Tuple[str, str]] = [
         # When false, users see Payments Coming Soon instead of live payment screens.
         ("enable_live_payments", "false"),
-        # Future-proof: comma-separated list of payment methods surfaced in the UI.
-        ("payment_methods_enabled", "stripe,paypal,coinbase,googlepay"),
+        # Coinbase-only rollout: keep method surface aligned across backend/frontend.
+        ("payment_methods_enabled", "coinbase"),
     ]
     for key, value in defaults:
         if not admin_setting_exists(key):
             # System bootstrap: attribute to the first admin user (id=1) by convention.
             set_admin_setting(key, value, admin_id=1)
 
-    # Ensure googlepay is in payment_methods_enabled (for existing databases).
-    current = get_admin_setting("payment_methods_enabled", "")
+    # Enforce Coinbase-only payment methods for existing databases.
+    current = get_admin_setting("payment_methods_enabled", "coinbase")
     methods = [m.strip().lower() for m in str(current).split(",") if m.strip()]
-    if "googlepay" not in methods:
-        methods.append("googlepay")
-        set_admin_setting("payment_methods_enabled", ",".join(methods), admin_id=1)
+    if methods != ["coinbase"]:
+        set_admin_setting("payment_methods_enabled", "coinbase", admin_id=1)
 
 
 def get_all_admin_settings() -> dict:
@@ -485,7 +485,7 @@ class PurchaseRequest(BaseModel):
     quantity: int = 1
     promo_code: Optional[str] = None
     # Flutter/web clients historically send `payment_provider`; keep both for compatibility.
-    provider: str = "stripe"  # 'stripe', 'coinbase', or 'paypal'
+    provider: str = "coinbase"  # Coinbase-only
     payment_provider: Optional[str] = None
     idempotency_key: str
 
@@ -890,6 +890,32 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         "is_admin": bool(user[5]),
         "role": role,
     }
+
+
+async def get_optional_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+) -> Optional[dict]:
+    """Return the current user if a valid JWT is provided, otherwise None (anonymous)."""
+    if not credentials:
+        return None
+    try:
+        payload = decode_access_token(credentials.credentials)
+        if not payload:
+            return None
+        username = payload.get("sub")
+        if not username:
+            return None
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, role, is_admin FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {"id": row[0], "username": row[1], "role": row[2] or ("admin" if bool(row[3]) else "user")}
+    except Exception:
+        return None
 
 
 async def get_admin_user(current_user: dict = Depends(get_current_user)):
@@ -1936,12 +1962,9 @@ async def get_feature_flags(current_user: dict = Depends(get_current_user)):
     enabled_raw = get_admin_setting("enable_live_payments", "false")
     enable_live_payments = str(enabled_raw).strip().lower() == "true"
 
-    methods_raw = get_admin_setting("payment_methods_enabled", "stripe,paypal,coinbase")
-    methods = [
-        m.strip().lower()
-        for m in str(methods_raw).split(",")
-        if m and str(m).strip()
-    ]
+    get_admin_setting("payment_methods_enabled", "coinbase")
+    # Coinbase-only: return a single method even if legacy settings contain others.
+    methods = ["coinbase"]
 
     return {
         "enable_live_payments": enable_live_payments,
@@ -2458,6 +2481,18 @@ async def get_user_credits_admin(user_id: int, admin: dict = Depends(get_admin_u
 
 class GoogleBusinessScraper:
     _EMAIL_REGEX = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
+    _WHATSAPP_LINK_REGEX = re.compile(
+        r"""
+        (?:
+            https?://(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)[^\s"'<>]+
+            |
+            whatsapp://send\?[^\s"'<>]+
+            |
+            (?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)[^\s"'<>]+
+        )
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
 
     def __init__(self, headless: bool = None):
         """Create scraper instance. headless defaults to env PLAYWRIGHT_HEADLESS (True)"""
@@ -2565,42 +2600,195 @@ class GoogleBusinessScraper:
             return candidate
         return ""
 
-    async def _extract_email_from_website(self, website: str) -> str:
+    @staticmethod
+    def _empty_contact_details() -> Dict[str, str]:
+        return {
+            "email": "",
+            "whatsapp": "",
+            "whatsapp_url": "",
+        }
+
+    @staticmethod
+    def _merge_contact_details(primary: Dict[str, str], secondary: Dict[str, str]) -> Dict[str, str]:
+        return {
+            "email": (primary.get("email") or secondary.get("email") or "").strip(),
+            "whatsapp": (primary.get("whatsapp") or secondary.get("whatsapp") or "").strip(),
+            "whatsapp_url": (primary.get("whatsapp_url") or secondary.get("whatsapp_url") or "").strip(),
+        }
+
+    @staticmethod
+    def _normalize_whatsapp_number(raw_number: str) -> str:
+        if not raw_number:
+            return ""
+
+        decoded = unescape(unquote(str(raw_number))).strip()
+        if not decoded:
+            return ""
+
+        candidate = re.sub(r"[^\d+]", "", decoded)
+        if not candidate:
+            return ""
+
+        if candidate.startswith("00"):
+            candidate = f"+{candidate[2:]}"
+
+        if candidate.startswith("+"):
+            digits = re.sub(r"\D", "", candidate[1:])
+            normalized = f"+{digits}" if digits else ""
+        else:
+            digits = re.sub(r"\D", "", candidate)
+            normalized = digits
+
+        if not normalized:
+            return ""
+
+        digits_only = normalized.lstrip("+")
+        if len(digits_only) < 7 or len(digits_only) > 15:
+            return ""
+
+        return normalized
+
+    @classmethod
+    def _parse_whatsapp_link(cls, raw_link: str) -> Dict[str, str]:
+        details = cls._empty_contact_details()
+        if not raw_link:
+            return details
+
+        candidate = unescape(str(raw_link)).strip(" \t\r\n\"'<>(),;")
+        if not candidate:
+            return details
+
+        lower = candidate.lower()
+        if lower.startswith(("mailto:", "tel:", "javascript:")):
+            return details
+
+        parsed = urlparse(candidate)
+        if not parsed.scheme and not candidate.startswith("//"):
+            parsed = urlparse(f"https://{candidate}")
+        elif candidate.startswith("//"):
+            parsed = urlparse(f"https:{candidate}")
+
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+        query = parse_qs(parsed.query or "")
+
+        is_whatsapp_host = host.endswith("wa.me") or host.endswith("whatsapp.com")
+        is_whatsapp_scheme = scheme == "whatsapp"
+        if not is_whatsapp_host and not is_whatsapp_scheme:
+            return details
+
+        phone_candidate = ""
+        if query.get("phone"):
+            phone_candidate = (query.get("phone") or [""])[0]
+        elif host.endswith("wa.me"):
+            segments = [segment for segment in path.split("/") if segment]
+            if segments:
+                first_segment = segments[0]
+                if first_segment.lower() not in ("send", "message"):
+                    phone_candidate = first_segment
+
+        whatsapp_number = cls._normalize_whatsapp_number(phone_candidate)
+        if whatsapp_number:
+            details["whatsapp"] = whatsapp_number
+            details["whatsapp_url"] = f"https://wa.me/{whatsapp_number.lstrip('+')}"
+            return details
+
+        if parsed.scheme and parsed.netloc:
+            details["whatsapp_url"] = parsed._replace(fragment="").geturl()
+        elif candidate:
+            if candidate.startswith("//"):
+                details["whatsapp_url"] = f"https:{candidate}"
+            elif "://" in candidate:
+                details["whatsapp_url"] = candidate
+            else:
+                details["whatsapp_url"] = f"https://{candidate.lstrip('/')}"
+        return details
+
+    @classmethod
+    def _extract_first_whatsapp(cls, raw_text: str) -> Dict[str, str]:
+        details = cls._empty_contact_details()
+        if not raw_text:
+            return details
+
+        decoded_text = unescape(raw_text)
+        for match in cls._WHATSAPP_LINK_REGEX.finditer(decoded_text):
+            whatsapp_details = cls._parse_whatsapp_link(match.group(0))
+            if whatsapp_details.get("whatsapp_url"):
+                return whatsapp_details
+        return details
+
+    @classmethod
+    def _extract_contact_details_from_page(
+        cls,
+        raw_html: str,
+        hrefs: List[str],
+        *,
+        base_url: str,
+    ) -> Dict[str, str]:
+        details = cls._empty_contact_details()
+        if raw_html:
+            details["email"] = cls._extract_first_email(raw_html)
+            details = cls._merge_contact_details(details, cls._extract_first_whatsapp(raw_html))
+
+        for href in hrefs or []:
+            href_str = str(href).strip()
+            if not href_str:
+                continue
+
+            href_lower = href_str.lower()
+            if not details["email"] and href_lower.startswith("mailto:"):
+                details["email"] = cls._extract_first_email(href_str)
+
+            if details["whatsapp_url"]:
+                continue
+
+            whatsapp_details = cls._parse_whatsapp_link(href_str)
+            if not whatsapp_details["whatsapp_url"] and base_url:
+                absolute_href = urljoin(base_url, href_str)
+                whatsapp_details = cls._parse_whatsapp_link(absolute_href)
+
+            details = cls._merge_contact_details(details, whatsapp_details)
+
+            if details["email"] and details["whatsapp_url"]:
+                break
+
+        return details
+
+    async def _extract_contact_from_website(self, website: str) -> Dict[str, str]:
         """
-        Best-effort email extraction from a business website.
+        Best-effort contact extraction from a business website.
         Tries homepage first, then at most one contact/about/support page.
         """
         if not self.page:
-            return ""
+            return self._empty_contact_details()
 
         target_url = self._normalize_website_url(website)
         if not target_url.lower().startswith(("http://", "https://")):
-            return ""
+            return self._empty_contact_details()
 
         try:
             await self.page.goto(target_url, wait_until="domcontentloaded", timeout=6000)
             page_html = await self.page.content()
-            email = self._extract_first_email(page_html)
-            if email:
-                return email
-
             hrefs = await self.page.eval_on_selector_all(
                 "a[href]",
                 "els => els.map(el => el.getAttribute('href')).filter(Boolean)",
             )
 
+            details = self._extract_contact_details_from_page(
+                page_html,
+                list(hrefs or []),
+                base_url=target_url,
+            )
+            if details["email"] and details["whatsapp_url"]:
+                return details
+
             if not hrefs:
-                return ""
+                return details
 
             for href in hrefs:
                 href_str = str(href).strip()
                 href_lower = href_str.lower()
-
-                if href_lower.startswith("mailto:"):
-                    mailto_email = self._extract_first_email(href_str)
-                    if mailto_email:
-                        return mailto_email
-                    continue
 
                 if not any(token in href_lower for token in ("contact", "about", "support")):
                     continue
@@ -2612,9 +2800,18 @@ class GoogleBusinessScraper:
                 try:
                     await self.page.goto(candidate_url, wait_until="domcontentloaded", timeout=5000)
                     candidate_html = await self.page.content()
-                    contact_email = self._extract_first_email(candidate_html)
-                    if contact_email:
-                        return contact_email
+                    candidate_hrefs = await self.page.eval_on_selector_all(
+                        "a[href]",
+                        "els => els.map(el => el.getAttribute('href')).filter(Boolean)",
+                    )
+                    candidate_details = self._extract_contact_details_from_page(
+                        candidate_html,
+                        list(candidate_hrefs or []),
+                        base_url=candidate_url,
+                    )
+                    details = self._merge_contact_details(details, candidate_details)
+                    if details["email"] and details["whatsapp_url"]:
+                        return details
                 except Exception:
                     continue
 
@@ -2622,9 +2819,9 @@ class GoogleBusinessScraper:
                 break
 
         except Exception:
-            return ""
+            return self._empty_contact_details()
 
-        return ""
+        return details
 
 
     async def scrape_location(self, category: str, city: str, state: str, max_results: int = 10) -> List[Dict]:
@@ -2741,17 +2938,19 @@ class GoogleBusinessScraper:
                     except Exception:
                         pass
 
-                    # Extract email by visiting business website (best effort).
+                    # Extract contact details by visiting business website (best effort).
                     # Run this last because it navigates away from Google Maps detail page.
-                    email = ""
+                    contact_details = self._empty_contact_details()
                     if website:
-                        email = await self._extract_email_from_website(website)
+                        contact_details = await self._extract_contact_from_website(website)
 
                     business_data = {
                         'business_name': business_name,
                         'phone': phone,
                         'website': website,
-                        'email': email,
+                        'email': contact_details.get("email", ""),
+                        'whatsapp': contact_details.get("whatsapp", ""),
+                        'whatsapp_url': contact_details.get("whatsapp_url", ""),
                         'address': address,
                         'category': category,
                         'city': city,
@@ -2952,7 +3151,9 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                                 job_id,
                                 r.get("business_name"),
                                 r.get("phone"),
+                                r.get("whatsapp"),
                                 r.get("website"),
+                                r.get("whatsapp_url"),
                                 r.get("email"),
                                 r.get("address"),
                                 r.get("category"),
@@ -2963,8 +3164,8 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                         )
                     cursor.executemany(
                         """
-                        INSERT INTO results (job_id, business_name, phone, website, email, address, category, city, state, google_maps_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO results (job_id, business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         rows,
                     )
@@ -3018,7 +3219,9 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
             fieldnames = [
                 "business_name",
                 "phone",
+                "whatsapp",
                 "website",
+                "whatsapp_url",
                 "email",
                 "address",
                 "category",
@@ -3367,7 +3570,7 @@ async def get_job_status(job_id: str, current_user: dict = Depends(get_current_u
     
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
+        SELECT business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     
@@ -3376,13 +3579,15 @@ async def get_job_status(job_id: str, current_user: dict = Depends(get_current_u
         results.append({
             "business_name": row[0],
             "phone": row[1],
-            "website": row[2],
-            "email": row[3],
-            "address": row[4],
-            "category": row[5],
-            "city": row[6],
-            "state": row[7],
-            "google_maps_url": row[8]
+            "whatsapp": row[2],
+            "website": row[3],
+            "whatsapp_url": row[4],
+            "email": row[5],
+            "address": row[6],
+            "category": row[7],
+            "city": row[8],
+            "state": row[9],
+            "google_maps_url": row[10]
         })
     
     conn.close()
@@ -3494,7 +3699,7 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
     
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
+        SELECT business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     
@@ -3503,13 +3708,15 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
         results.append({
             "business_name": row[0],
             "phone": row[1],
-            "website": row[2],
-            "email": row[3],
-            "address": row[4],
-            "category": row[5],
-            "city": row[6],
-            "state": row[7],
-            "google_maps_url": row[8]
+            "whatsapp": row[2],
+            "website": row[3],
+            "whatsapp_url": row[4],
+            "email": row[5],
+            "address": row[6],
+            "category": row[7],
+            "city": row[8],
+            "state": row[9],
+            "google_maps_url": row[10]
         })
     
     conn.close()
@@ -3550,8 +3757,20 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
     )
 
     # Define column headers and widths
-    headers = ['#', 'Business Name', 'Phone', 'Website', 'Email', 'Address', 'City', 'State', 'Google Maps']
-    col_widths = [5, 35, 18, 40, 34, 50, 20, 15, 45]
+    headers = [
+        '#',
+        'Business Name',
+        'Phone',
+        'WhatsApp',
+        'Website',
+        'WhatsApp URL',
+        'Email',
+        'Address',
+        'City',
+        'State',
+        'Google Maps',
+    ]
+    col_widths = [5, 35, 18, 20, 36, 36, 34, 50, 20, 15, 45]
 
     # Write headers
     for col, (header, width) in enumerate(zip(headers, col_widths), 1):
@@ -3586,9 +3805,16 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         cell.alignment = cell_alignment
         cell.border = thin_border
 
+        # WhatsApp number
+        whatsapp = result.get('whatsapp', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=4, value=whatsapp)
+        cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
         # Website (as hyperlink if valid)
         website = result.get('website', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=4)
+        cell = ws.cell(row=row_idx, column=5)
         if website and website != 'N/A' and website.startswith('http'):
             cell.value = website
             cell.hyperlink = website
@@ -3599,9 +3825,24 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         cell.alignment = cell_alignment
         cell.border = thin_border
 
+        # WhatsApp URL
+        whatsapp_url = result.get('whatsapp_url', '') or 'N/A'
+        cell = ws.cell(row=row_idx, column=6)
+        if whatsapp_url and whatsapp_url != 'N/A' and (
+            whatsapp_url.startswith('http') or whatsapp_url.startswith('whatsapp://')
+        ):
+            cell.value = whatsapp_url
+            cell.hyperlink = whatsapp_url
+            cell.font = link_font
+        else:
+            cell.value = whatsapp_url
+            cell.font = cell_font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+
         # Email
         email = result.get('email', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=5)
+        cell = ws.cell(row=row_idx, column=7)
         if email and email != 'N/A':
             cell.value = email
             cell.hyperlink = f"mailto:{email}"
@@ -3614,26 +3855,26 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
 
         # Address
         address = result.get('address', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=6, value=address)
+        cell = ws.cell(row=row_idx, column=8, value=address)
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # City
-        cell = ws.cell(row=row_idx, column=7, value=result.get('city', 'N/A'))
+        cell = ws.cell(row=row_idx, column=9, value=result.get('city', 'N/A'))
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # State
-        cell = ws.cell(row=row_idx, column=8, value=result.get('state', 'N/A'))
+        cell = ws.cell(row=row_idx, column=10, value=result.get('state', 'N/A'))
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # Google Maps URL (as hyperlink)
         maps_url = result.get('google_maps_url', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=9)
+        cell = ws.cell(row=row_idx, column=11)
         if maps_url and maps_url != 'N/A' and maps_url.startswith('http'):
             cell.value = 'View on Maps'
             cell.hyperlink = maps_url
@@ -3647,14 +3888,14 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         # Alternate row coloring
         if row_idx % 2 == 0:
             alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
-            for col in range(1, 10):
+            for col in range(1, 12):
                 ws.cell(row=row_idx, column=col).fill = alt_fill
 
     # Freeze the header row
     ws.freeze_panes = 'A2'
 
     # Add auto-filter
-    ws.auto_filter.ref = f"A1:I{len(results) + 1}"
+    ws.auto_filter.ref = f"A1:K{len(results) + 1}"
 
     # Save to bytes
     output = BytesIO()
@@ -3684,7 +3925,7 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
 
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
+        SELECT business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
 
@@ -3694,16 +3935,18 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
         results.append({
             "business_name": row[0],
             "phone": row[1],
-            "website": row[2],
-            "email": row[3],
-            "address": row[4],
-            "category": row[5],
-            "city": row[6],
-            "state": row[7],
-            "google_maps_url": row[8]
+            "whatsapp": row[2],
+            "website": row[3],
+            "whatsapp_url": row[4],
+            "email": row[5],
+            "address": row[6],
+            "category": row[7],
+            "city": row[8],
+            "state": row[9],
+            "google_maps_url": row[10]
         })
-        if row[6]:
-            cities_set.add(row[6])
+        if row[8]:
+            cities_set.add(row[8])
 
     conn.close()
 
@@ -3827,61 +4070,12 @@ async def calculate_price(req: PriceCalcRequest, current_user: dict = Depends(ge
 
 @app.post("/api/payments/purchase")
 async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
-    """Initiate a Stripe PaymentIntent, Coinbase charge, or PayPal order for a credit package"""
+    """Initiate a Coinbase charge for a credit package."""
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="quantity must be > 0")
 
-    provider = (req.provider or req.payment_provider or "stripe").lower()
-    # Google Pay is processed through Stripe, so treat it as a Stripe payment.
-    if provider == "googlepay":
-        provider = "stripe"
-    if provider not in ("stripe", "coinbase", "paypal"):
-        raise HTTPException(status_code=400, detail="provider must be 'stripe', 'coinbase', 'paypal', or 'googlepay'")
-
     try:
-        if provider == "stripe":
-            result = _payment_processor.initiate_stripe_package_purchase(
-                user_id=current_user["id"],
-                email=current_user["email"],
-                package_id=req.package_id,
-                quantity=req.quantity,
-                promo_code=req.promo_code,
-                idempotency_key=req.idempotency_key,
-                currency=config.PAYMENT_CONFIG.get("currency", "USD"),
-            )
-            return {
-                "transaction_id": result.transaction_id,
-                "payment_provider": result.provider,
-                "amount_cents": result.amount_cents,
-                "currency": result.currency,
-                "credits_purchased": result.credits,
-                "bonus_credits": result.bonus_credits,
-                "provider_transaction_id": result.provider_transaction_id,
-                "client_secret": result.client_secret,
-            }
-
-        if provider == "coinbase":
-            result = _payment_processor.initiate_coinbase_package_purchase(
-                user_id=current_user["id"],
-                package_id=req.package_id,
-                quantity=req.quantity,
-                promo_code=req.promo_code,
-                idempotency_key=req.idempotency_key,
-                currency=config.PAYMENT_CONFIG.get("currency", "USD"),
-            )
-            return {
-                "transaction_id": result.transaction_id,
-                "payment_provider": result.provider,
-                "amount_cents": result.amount_cents,
-                "currency": result.currency,
-                "credits_purchased": result.credits,
-                "bonus_credits": result.bonus_credits,
-                "provider_transaction_id": result.provider_transaction_id,
-                "hosted_url": result.hosted_url,
-            }
-
-        # paypal
-        result = _payment_processor.initiate_paypal_package_purchase(
+        result = _payment_processor.initiate_coinbase_package_purchase(
             user_id=current_user["id"],
             package_id=req.package_id,
             quantity=req.quantity,
@@ -3993,7 +4187,7 @@ async def simple_purchase(
     request: SimplePurchaseRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Simple credit purchase: $0.10 per credit (flat rate)"""
+    """Simple credit purchase via Coinbase Commerce: $0.10 per credit (flat rate)."""
     if request.credits < 100:
         raise HTTPException(status_code=400, detail="Minimum purchase is 100 credits")
 
@@ -4002,6 +4196,7 @@ async def simple_purchase(
     discount_cents = 0
     promo_name = ""
     bonus_credits = 0
+    promo_code_id: Optional[int] = None
 
     # Apply promo code if provided
     if request.promo_code:
@@ -4017,6 +4212,7 @@ async def simple_purchase(
                 discount_cents = int(promo_effect.discount_cents or 0)
                 bonus_credits = int(promo_effect.bonus_credits or 0)
                 promo_name = str(promo_effect.code or normalized_code)
+                promo_code_id = int(promo_effect.promo_code_id)
                 logging.info(
                     "Applied promo on simple-purchase user_id=%s code=%s discount_cents=%s bonus_credits=%s",
                     current_user["id"],
@@ -4029,45 +4225,60 @@ async def simple_purchase(
 
     total_cents = max(0, base_cents - discount_cents)
 
-    # Create Stripe checkout session
+    # Create Coinbase charge + tracked transaction so webhook completion can grant credits.
+    transaction_id: Optional[str] = None
     try:
-        import stripe
-        key = (config.STRIPE_SECRET_KEY or "").strip()
-        if (not key) or key.startswith("sk_test_...") or key.startswith("sk_live_...") or (
-            not (key.startswith("sk_test_") or key.startswith("sk_live_"))
-        ):
-            raise HTTPException(
-                status_code=503,
-                detail="Stripe is not configured (missing/invalid STRIPE_SECRET_KEY)",
-            )
-        stripe.api_key = key
+        from db.base import execute_query
+        from db.payment_crud import create_payment_transaction
 
-        session = stripe.checkout.Session.create(
-            line_items=[{
-                'price_data': {
-                    'currency': 'usd',
-                    'unit_amount': total_cents,
-                    'product_data': {'name': f'{request.credits} Credits'},
-                },
-                'quantity': 1,
-            }],
-            mode='payment',
-            # Flutter web uses hash-based routing in production (/#/wallet).
-            success_url=f'{config.FRONTEND_URL}/#/wallet?checkout=success&session_id={{CHECKOUT_SESSION_ID}}',
-            cancel_url=f'{config.FRONTEND_URL}/#/wallet?checkout=cancel',
+        transaction_id = str(uuid.uuid4())
+        idempotency_key = f"simple-{current_user['id']}-{uuid.uuid4()}"
+
+        create_payment_transaction(
+            transaction_id=transaction_id,
+            user_id=int(current_user["id"]),
+            payment_provider="coinbase",
+            amount_cents=int(total_cents),
+            currency="USD",
+            credits_purchased=int(request.credits),
+            idempotency_key=idempotency_key,
+            status="pending",
+            promo_code_id=promo_code_id,
+        )
+
+        charge = _coinbase_service.create_charge(
+            name=f"{request.credits} Credits",
+            description="Simple credit purchase",
+            amount=f"{total_cents / 100.0:.2f}",
+            currency="USD",
             metadata={
-                'user_id': str(current_user['id']),
-                'credits': str(request.credits),
-                'promo_code': (promo_name or (request.promo_code or "")).strip(),
-                'subtotal_cents': str(int(base_cents)),
-                'discount_cents': str(int(discount_cents)),
-                'bonus_credits': str(int(bonus_credits)),
-            }
+                "user_id": int(current_user["id"]),
+                "transaction_id": transaction_id,
+                "credits": int(request.credits),
+                "promo_code": (promo_name or (request.promo_code or "")).strip(),
+            },
+        )
+
+        charge_id = str(charge.get("id") or "")
+        hosted_url = str(charge.get("hosted_url") or "")
+        if not hosted_url:
+            raise ValueError("Coinbase charge did not return a hosted_url")
+
+        execute_query(
+            """
+            UPDATE payment_transactions
+            SET provider_transaction_id = ?, status = 'processing', updated_at = ?
+            WHERE transaction_id = ?
+            """,
+            (charge_id, datetime.now().isoformat(), transaction_id),
         )
 
         return {
-            "checkout_url": session.url,
-            "session_id": session.id,
+            "checkout_url": hosted_url,
+            "hosted_url": hosted_url,
+            "charge_id": charge_id,
+            "transaction_id": transaction_id,
+            "payment_provider": "coinbase",
             "credits": request.credits,
             "subtotal_cents": base_cents,
             "discount_cents": discount_cents,
@@ -4076,8 +4287,17 @@ async def simple_purchase(
             "promo_applied": promo_name if promo_name else None,
         }
     except Exception as e:
-        logging.error(f"Stripe session creation failed: {e}")
-        raise HTTPException(status_code=400, detail="Failed to create checkout session")
+        if transaction_id:
+            try:
+                from db.base import execute_query
+                execute_query(
+                    "UPDATE payment_transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?",
+                    (datetime.now().isoformat(), transaction_id),
+                )
+            except Exception:
+                pass
+        logging.error(f"Coinbase charge creation failed: {e}")
+        raise HTTPException(status_code=400, detail="Failed to create Coinbase checkout")
 
 
 @app.post("/api/payments/crypto/create-charge")
@@ -5258,21 +5478,23 @@ async def get_job_results_admin(
                 AND (
                     LOWER(COALESCE(business_name, '')) LIKE ?
                     OR LOWER(COALESCE(phone, '')) LIKE ?
+                    OR LOWER(COALESCE(whatsapp, '')) LIKE ?
                     OR LOWER(COALESCE(website, '')) LIKE ?
+                    OR LOWER(COALESCE(whatsapp_url, '')) LIKE ?
                     OR LOWER(COALESCE(email, '')) LIKE ?
                     OR LOWER(COALESCE(address, '')) LIKE ?
                     OR LOWER(COALESCE(city, '')) LIKE ?
                     OR LOWER(COALESCE(state, '')) LIKE ?
                 )
             """
-            params.extend([search_term] * 7)
+            params.extend([search_term] * 9)
 
     cursor.execute(f"SELECT COUNT(*) FROM results {where_clause}", tuple(params))
     total = int(cursor.fetchone()[0] or 0)
 
     cursor.execute(
         f"""
-        SELECT id, business_name, phone, website, email, address, category, city, state, google_maps_url
+        SELECT id, business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
         FROM results
         {where_clause}
         ORDER BY id DESC
@@ -5282,9 +5504,9 @@ async def get_job_results_admin(
     )
     results = [
         {
-            "id": r[0], "business_name": r[1], "phone": r[2], "website": r[3],
-            "email": r[4], "address": r[5], "category": r[6], "city": r[7], "state": r[8],
-            "google_maps_url": r[9],
+            "id": r[0], "business_name": r[1], "phone": r[2], "whatsapp": r[3], "website": r[4],
+            "whatsapp_url": r[5], "email": r[6], "address": r[7], "category": r[8], "city": r[9], "state": r[10],
+            "google_maps_url": r[11],
         }
         for r in cursor.fetchall()
     ]
@@ -5519,6 +5741,143 @@ async def get_cities(state: str):
     payload = {"country": country, "cities": data[state]}
     payload[_COUNTRY_REGION_FIELD.get(country, "region")] = state
     return payload
+
+# ============================================================================
+# ANALYTICS: Behavioral event ingestion + admin dashboard queries
+# ============================================================================
+
+@app.post("/api/analytics/events")
+async def ingest_analytics_events_endpoint(
+    request: Request,
+    body: dict = Body(...),
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """
+    Batch ingest frontend behavioral events from tracker.js.
+    Accepts anonymous (pre-login) and authenticated events.
+    User ID from JWT overrides any client-supplied user_id.
+    """
+    from analytics.ingest import ingest_events
+    raw_events = body.get("events", [])
+    if not raw_events or not isinstance(raw_events, list):
+        return {"ingested": 0}
+    auth_user_id = current_user["id"] if current_user else None
+    count = ingest_events(raw_events, auth_user_id=auth_user_id)
+    return {"ingested": count}
+
+
+@app.get("/api/admin/analytics/dau")
+async def analytics_dau_endpoint(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """Daily Active Users for last N days."""
+    from analytics.event_queries import get_dau
+    return {"data": get_dau(days=min(days, 365)), "days": days}
+
+
+@app.get("/api/admin/analytics/mau")
+async def analytics_mau_endpoint(
+    months: int = 12,
+    admin: dict = Depends(get_admin_user),
+):
+    """Monthly Active Users for last N months."""
+    from analytics.event_queries import get_mau
+    return {"data": get_mau(months=min(months, 24)), "months": months}
+
+
+@app.get("/api/admin/analytics/feature-adoption")
+async def analytics_feature_adoption_endpoint(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """Feature tab usage breakdown."""
+    from analytics.event_queries import get_feature_adoption
+    return {"data": get_feature_adoption(days=min(days, 365)), "days": days}
+
+
+@app.get("/api/admin/analytics/funnel")
+async def analytics_funnel_endpoint(
+    days: int = 90,
+    admin: dict = Depends(get_admin_user),
+):
+    """Conversion funnel: Landing → Registration → First Search → Credit Purchase."""
+    from analytics.event_queries import get_conversion_funnel
+    return {"data": get_conversion_funnel(days=min(days, 365)), "days": days}
+
+
+@app.get("/api/admin/analytics/top-pages")
+async def analytics_top_pages_endpoint(
+    days: int = 30,
+    limit: int = 20,
+    admin: dict = Depends(get_admin_user),
+):
+    """Most visited pages ranked by views and unique users."""
+    from analytics.event_queries import get_top_pages
+    return {"data": get_top_pages(days=min(days, 365), limit=min(limit, 50)), "days": days}
+
+
+@app.get("/api/admin/analytics/top-clicks")
+async def analytics_top_clicks_endpoint(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """Most-clicked [data-track] elements."""
+    from analytics.event_queries import get_top_clicks
+    return {"data": get_top_clicks(days=min(days, 365)), "days": days}
+
+
+@app.get("/api/admin/analytics/heatmap")
+async def analytics_heatmap_endpoint(
+    page: str,
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """Click coordinate data for a specific page route."""
+    from analytics.event_queries import get_heatmap_data
+    return {"data": get_heatmap_data(page=page, days=min(days, 365)), "page": page, "days": days}
+
+
+@app.get("/api/admin/analytics/retention")
+async def analytics_retention_endpoint(
+    days: int = 60,
+    admin: dict = Depends(get_admin_user),
+):
+    """User retention by cohort (D1/D7/D30 rates)."""
+    from analytics.event_queries import get_retention
+    return {"data": get_retention(days=min(days, 180)), "days": days}
+
+
+@app.get("/api/admin/analytics/credit-patterns")
+async def analytics_credit_patterns_endpoint(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """Daily credit consumption vs purchase from credit_ledger."""
+    from analytics.event_queries import get_credit_usage_over_time
+    return {"data": get_credit_usage_over_time(days=min(days, 365)), "days": days}
+
+
+@app.get("/api/admin/analytics/session-stats")
+async def analytics_session_stats_endpoint(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """Aggregate session metrics: bounce rate, total sessions."""
+    from analytics.event_queries import get_session_stats
+    return get_session_stats(days=min(days, 365))
+
+
+@app.get("/api/admin/analytics/user-journey/{user_id}")
+async def analytics_user_journey_endpoint(
+    user_id: int,
+    limit: int = 100,
+    admin: dict = Depends(get_admin_user),
+):
+    """Full event timeline for a single user (their journey on the platform)."""
+    from analytics.event_queries import get_user_journey
+    return {"user_id": user_id, "events": get_user_journey(user_id=user_id, limit=min(limit, 500))}
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -338,6 +338,10 @@ def init_database():
         except Exception as e:
             logger.warning(f"Results.email ensure step skipped/failed: {e}")
         try:
+            _ensure_results_whatsapp_columns(logger=logger)
+        except Exception as e:
+            logger.warning(f"Results.whatsapp ensure step skipped/failed: {e}")
+        try:
             _ensure_default_admin_user(logger=logger)
         except Exception as e:
             logger.warning(f"Default admin bootstrap skipped/failed: {e}")
@@ -409,6 +413,57 @@ def _ensure_results_email_column(logger=None) -> None:
             conn.commit()
             if logger:
                 logger.info("Added missing results.email column (SQLite).")
+    finally:
+        conn.close()
+
+
+def _ensure_results_whatsapp_columns(logger=None) -> None:
+    """Ensure results.whatsapp and results.whatsapp_url exist across databases."""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        if _get_db_type() == "mysql":
+            cursor.execute(
+                """
+                SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'results'
+                  AND COLUMN_NAME IN ('whatsapp', 'whatsapp_url')
+                """
+            )
+            existing = {
+                str(row[0]).lower()
+                for row in (cursor.fetchall() or [])
+                if row and len(row) > 0 and row[0]
+            }
+            if "whatsapp" not in existing:
+                cursor.execute("ALTER TABLE results ADD COLUMN whatsapp TEXT NULL")
+                conn.commit()
+                if logger:
+                    logger.info("Added missing results.whatsapp column (MySQL).")
+            if "whatsapp_url" not in existing:
+                cursor.execute("ALTER TABLE results ADD COLUMN whatsapp_url TEXT NULL")
+                conn.commit()
+                if logger:
+                    logger.info("Added missing results.whatsapp_url column (MySQL).")
+            return
+
+        cursor.execute("PRAGMA table_info(results)")
+        columns = {
+            str(row[1]).lower()
+            for row in (cursor.fetchall() or [])
+            if row and len(row) > 1 and row[1]
+        }
+        if "whatsapp" not in columns:
+            cursor.execute("ALTER TABLE results ADD COLUMN whatsapp TEXT")
+            conn.commit()
+            if logger:
+                logger.info("Added missing results.whatsapp column (SQLite).")
+        if "whatsapp_url" not in columns:
+            cursor.execute("ALTER TABLE results ADD COLUMN whatsapp_url TEXT")
+            conn.commit()
+            if logger:
+                logger.info("Added missing results.whatsapp_url column (SQLite).")
     finally:
         conn.close()
 

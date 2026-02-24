@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../services/analytics_service.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../widgets/brand_mark.dart';
+import '../widgets/analytics_charts.dart';
 import 'admin_jobs_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -53,6 +55,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   bool _activityInitialized = false;
   final TextEditingController _filterUserIdController = TextEditingController();
 
+  // Analytics toggle state
+  bool _showActivityAnalytics = false;
+  bool _analyticsLoading = false;
+  bool _analyticsInitialized = false;
+  List<Map<String, dynamic>> _dauData = [];
+  List<Map<String, dynamic>> _featureData = [];
+  List<Map<String, dynamic>> _funnelData = [];
+  Map<String, dynamic> _sessionStats = {};
+
   // User KPIs cache
   final Map<int, Map<String, dynamic>> _userKpis = {};
 
@@ -71,6 +82,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       curve: Curves.easeOut,
     );
     _animationController.forward();
+    AnalyticsService.instance.init();
+    AnalyticsService.instance.page('#/admin');
     _loadData();
   }
 
@@ -79,6 +92,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     _animationController.dispose();
     _filterUserIdController.dispose();
     _startingCreditsController.dispose();
+    AnalyticsService.instance.dispose();
     super.dispose();
   }
 
@@ -123,6 +137,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           _selectedCreditRequestIds.clear();
           _isLoading = false;
         });
+        // Identify the current admin user in the analytics tracker
+        final uid = stats['current_user_id'] as int?;
+        if (uid != null) AnalyticsService.instance.identify(uid);
         final starting = settings['starting_credits']?.toString();
         if (starting != null && starting.trim().isNotEmpty) {
           _startingCreditsController.text = starting.trim();
@@ -930,7 +947,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     setState(() => _selectedTab = index);
     if (index == 3) {
       _ensureActivityLoaded();
+      AnalyticsService.instance.feature(_tabLabel(index), context: 'admin');
+    } else {
+      AnalyticsService.instance.feature(_tabLabel(index), context: 'admin');
     }
+  }
+
+  String _tabLabel(int index) {
+    const labels = ['Stats', 'Users', 'Credits', 'Activity', 'Settings'];
+    return index < labels.length ? labels[index] : 'Unknown';
   }
 
   void _ensureActivityLoaded({bool force = false}) {
@@ -938,6 +963,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     _activityInitialized = true;
     _loadActivityFeed(resetOffset: true);
     _loadActivityActions();
+  }
+
+  Future<void> _loadAnalytics() async {
+    if (_analyticsLoading) return;
+    setState(() => _analyticsLoading = true);
+    try {
+      final results = await Future.wait([
+        _apiService.getAnalyticsDau(days: 30),
+        _apiService.getAnalyticsFeatureAdoption(days: 30),
+        _apiService.getAnalyticsFunnel(days: 90),
+        _apiService.getAnalyticsSessionStats(days: 30),
+      ]);
+      if (mounted) {
+        setState(() {
+          _dauData = List<Map<String, dynamic>>.from(results[0]['data'] ?? []);
+          _featureData =
+              List<Map<String, dynamic>>.from(results[1]['data'] ?? []);
+          _funnelData =
+              List<Map<String, dynamic>>.from(results[2]['data'] ?? []);
+          _sessionStats = Map<String, dynamic>.from(results[3]);
+          _analyticsLoading = false;
+          _analyticsInitialized = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _analyticsLoading = false);
+    }
   }
 
   Widget _buildStatsView(LayoutType layoutType) {
@@ -2473,141 +2525,230 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
     return Column(
       children: [
-        // Filters
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-          padding: const EdgeInsets.all(AppSpacing.sm),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceDark,
-            borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(color: AppColors.elevatedCardDark),
-          ),
-          child: Wrap(
-            spacing: AppSpacing.xs,
-            runSpacing: AppSpacing.xs,
-            crossAxisAlignment: WrapCrossAlignment.center,
+        // ── Log / Analytics toggle ──────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md, AppSpacing.xs, AppSpacing.md, 0),
+          child: Row(
             children: [
-              SizedBox(
-                width: 100,
-                child: TextField(
-                  controller: _filterUserIdController,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  decoration: InputDecoration(
-                    hintText: 'User ID',
-                    hintStyle:
-                        const TextStyle(color: Colors.white38, fontSize: 13),
-                    filled: true,
-                    fillColor: AppColors.elevatedCardDark,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.xs, vertical: AppSpacing.xs),
-                    border: OutlineInputBorder(
-                      borderRadius: AppSpacing.borderRadiusSm,
-                      borderSide: BorderSide.none,
-                    ),
+              _ActivityToggleButton(
+                label: 'Activity Log',
+                icon: Icons.history_rounded,
+                selected: !_showActivityAnalytics,
+                onTap: () => setState(() => _showActivityAnalytics = false),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              _ActivityToggleButton(
+                label: 'Analytics',
+                icon: Icons.bar_chart_rounded,
+                selected: _showActivityAnalytics,
+                onTap: () {
+                  setState(() => _showActivityAnalytics = true);
+                  if (!_analyticsInitialized) _loadAnalytics();
+                },
+              ),
+              if (_showActivityAnalytics && _analyticsLoading) ...[
+                const SizedBox(width: AppSpacing.sm),
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.brandPurple,
                   ),
                 ),
-              ),
-              _buildFilterDropdown(
-                value: _filterAction,
-                hint: 'All Events',
-                items: _activityActions,
-                onChanged: (v) => setState(() => _filterAction = v),
-                width: 160,
-              ),
-              _buildFilterDropdown(
-                value: _filterJobType,
-                hint: 'All Job Types',
-                items: _activityJobTypes,
-                onChanged: (v) => setState(() => _filterJobType = v),
-                width: 170,
-              ),
-              _buildFilterDropdown(
-                value: _filterStatus,
-                hint: 'All Statuses',
-                items: _activityStatuses,
-                onChanged: (v) => setState(() => _filterStatus = v),
-                width: 150,
-              ),
-              _buildDateChip('From', _filterDateFrom, () => _pickDate(true),
-                  () => setState(() => _filterDateFrom = null)),
-              _buildDateChip('To', _filterDateTo, () => _pickDate(false),
-                  () => setState(() => _filterDateTo = null)),
-              _smallButton(
-                label: 'Filter',
-                color: AppColors.brandPurple,
-                onTap: () => _loadActivityFeed(resetOffset: true),
-              ),
-              _smallButton(
-                label: 'Export CSV',
-                color: AppColors.elevatedCardDark,
-                textColor: Colors.white,
-                onTap: _exportCSV,
-              ),
+              ],
+              const Spacer(),
+              if (_showActivityAnalytics)
+                GestureDetector(
+                  onTap: () {
+                    setState(() => _analyticsInitialized = false);
+                    _loadAnalytics();
+                  },
+                  child: const Icon(Icons.refresh_rounded,
+                      size: 18, color: Colors.white38),
+                ),
             ],
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        // Table
-        Expanded(
-          child: _activityLoading
-              ? const Center(
-                  child: CircularProgressIndicator(
-                    valueColor:
-                        AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
-                  ),
-                )
-              : _activityEvents.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No activity events found',
-                        style: AppTypography.bodyMedium
-                            .copyWith(color: Colors.white60),
+
+        // ── Conditional body ────────────────────────────────────────────────
+        if (_showActivityAnalytics)
+          Expanded(child: _buildAnalyticsView())
+        else ...[
+          // Filters
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              borderRadius: AppSpacing.borderRadiusLg,
+              border: Border.all(color: AppColors.elevatedCardDark),
+            ),
+            child: Wrap(
+              spacing: AppSpacing.xs,
+              runSpacing: AppSpacing.xs,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 100,
+                  child: TextField(
+                    controller: _filterUserIdController,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'User ID',
+                      hintStyle:
+                          const TextStyle(color: Colors.white38, fontSize: 13),
+                      filled: true,
+                      fillColor: AppColors.elevatedCardDark,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.xs, vertical: AppSpacing.xs),
+                      border: OutlineInputBorder(
+                        borderRadius: AppSpacing.borderRadiusSm,
+                        borderSide: BorderSide.none,
                       ),
-                    )
-                  : ListView.builder(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                      itemCount: _activityEvents.length,
-                      itemBuilder: (context, index) {
-                        final e = _activityEvents[index];
-                        return _buildActivityRow(e);
-                      },
                     ),
-        ),
-        // Pagination
-        Container(
-          padding: const EdgeInsets.symmetric(
-              vertical: AppSpacing.sm, horizontal: AppSpacing.md),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+                  ),
+                ),
+                _buildFilterDropdown(
+                  value: _filterAction,
+                  hint: 'All Events',
+                  items: _activityActions,
+                  onChanged: (v) => setState(() => _filterAction = v),
+                  width: 160,
+                ),
+                _buildFilterDropdown(
+                  value: _filterJobType,
+                  hint: 'All Job Types',
+                  items: _activityJobTypes,
+                  onChanged: (v) => setState(() => _filterJobType = v),
+                  width: 170,
+                ),
+                _buildFilterDropdown(
+                  value: _filterStatus,
+                  hint: 'All Statuses',
+                  items: _activityStatuses,
+                  onChanged: (v) => setState(() => _filterStatus = v),
+                  width: 150,
+                ),
+                _buildDateChip('From', _filterDateFrom, () => _pickDate(true),
+                    () => setState(() => _filterDateFrom = null)),
+                _buildDateChip('To', _filterDateTo, () => _pickDate(false),
+                    () => setState(() => _filterDateTo = null)),
+                _smallButton(
+                  label: 'Filter',
+                  color: AppColors.brandPurple,
+                  onTap: () => _loadActivityFeed(resetOffset: true),
+                ),
+                _smallButton(
+                  label: 'Export CSV',
+                  color: AppColors.elevatedCardDark,
+                  textColor: Colors.white,
+                  onTap: _exportCSV,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // Table
+          Expanded(
+            child: _activityLoading
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
+                    ),
+                  )
+                : _activityEvents.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No activity events found',
+                          style: AppTypography.bodyMedium
+                              .copyWith(color: Colors.white60),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.md),
+                        itemCount: _activityEvents.length,
+                        itemBuilder: (context, index) {
+                          final e = _activityEvents[index];
+                          return _buildActivityRow(e);
+                        },
+                      ),
+          ),
+          // Pagination
+          Container(
+            padding: const EdgeInsets.symmetric(
+                vertical: AppSpacing.sm, horizontal: AppSpacing.md),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  onPressed: _activityOffset > 0
+                      ? () {
+                          _activityOffset =
+                              (_activityOffset - _activityPageSize)
+                                  .clamp(0, _activityTotal);
+                          _loadActivityFeed();
+                        }
+                      : null,
+                  icon: const Icon(Icons.chevron_left, color: Colors.white70),
+                ),
+                Text(
+                  'Page $currentPage of $totalPages',
+                  style:
+                      AppTypography.labelSmall.copyWith(color: Colors.white54),
+                ),
+                IconButton(
+                  onPressed:
+                      _activityOffset + _activityPageSize < _activityTotal
+                          ? () {
+                              _activityOffset += _activityPageSize;
+                              _loadActivityFeed();
+                            }
+                          : null,
+                  icon: const Icon(Icons.chevron_right, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ], // end else (activity log branch)
+      ],
+    );
+  }
+
+  Widget _buildAnalyticsView() {
+    if (_analyticsLoading && !_analyticsInitialized) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.brandPurple),
+      );
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SessionStatsRow(data: _sessionStats),
+          const SizedBox(height: AppSpacing.md),
+          DauLineChart(data: _dauData, days: 30),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              IconButton(
-                onPressed: _activityOffset > 0
-                    ? () {
-                        _activityOffset = (_activityOffset - _activityPageSize)
-                            .clamp(0, _activityTotal);
-                        _loadActivityFeed();
-                      }
-                    : null,
-                icon: const Icon(Icons.chevron_left, color: Colors.white70),
+              Expanded(
+                child: FeatureAdoptionChart(data: _featureData, days: 30),
               ),
-              Text(
-                'Page $currentPage of $totalPages',
-                style: AppTypography.labelSmall.copyWith(color: Colors.white54),
-              ),
-              IconButton(
-                onPressed: _activityOffset + _activityPageSize < _activityTotal
-                    ? () {
-                        _activityOffset += _activityPageSize;
-                        _loadActivityFeed();
-                      }
-                    : null,
-                icon: const Icon(Icons.chevron_right, color: Colors.white70),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: ConversionFunnelChart(data: _funnelData, days: 90),
               ),
             ],
           ),
-        ),
-      ],
+          const SizedBox(height: AppSpacing.md),
+        ],
+      ),
     );
   }
 
@@ -3031,6 +3172,54 @@ class _GeoPatternPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+// ─── Analytics toggle button ──────────────────────────────────────────────────
+class _ActivityToggleButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ActivityToggleButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: AppSpacing.durationFast,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.brandPurple : AppColors.elevatedCardDark,
+          borderRadius: AppSpacing.borderRadiusMd,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 14, color: selected ? Colors.white : Colors.white54),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: AppTypography.labelMedium.copyWith(
+                color: selected ? Colors.white : Colors.white54,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _JobActivityDetailsPanel extends StatefulWidget {
   final ApiService apiService;
   final Map<String, dynamic> event;
@@ -3207,7 +3396,7 @@ class _JobActivityDetailsPanelState extends State<_JobActivityDetailsPanel> {
                             const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
                           hintText:
-                              'Search leads by business, city, phone, email...',
+                              'Search leads by business, city, phone, WhatsApp, email...',
                           hintStyle: const TextStyle(
                             color: Colors.white38,
                             fontSize: 13,
@@ -3643,11 +3832,12 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
   Future<void> _load() async {
     try {
       final data = await widget.apiService.getUserKpis(widget.userId);
-      if (mounted)
+      if (mounted) {
         setState(() {
           _kpis = data;
           _loading = false;
         });
+      }
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }

@@ -700,7 +700,7 @@ class _SimpleBuyCreditsScreenState extends State<SimpleBuyCreditsScreen> {
               ),
             )
           : Text(
-              'Pay with Stripe',
+              'Pay with Coinbase',
               style: AppTypography.labelLarge.copyWith(
                 color: Colors.white,
                 fontWeight: FontWeight.w700,
