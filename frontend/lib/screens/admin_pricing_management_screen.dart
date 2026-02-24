@@ -357,8 +357,36 @@ class _AdminPricingManagementScreenState
           IconButton(
             tooltip: 'Delete',
             onPressed: () async {
-              await _api.deleteCreditPackage(id);
-              _load();
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: AppColors.surfaceDark,
+                  title: Text('Delete Package',
+                      style: AppTypography.titleMedium.copyWith(color: Colors.white)),
+                  content: Text('Delete "$name"? This cannot be undone.',
+                      style: AppTypography.bodyMedium.copyWith(color: Colors.white70)),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel')),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.dangerRed,
+                          foregroundColor: Colors.white),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm != true) return;
+              try {
+                await _api.deleteCreditPackage(id);
+                if (!mounted) return;
+                setState(() => _packages.removeWhere((p) => (p['id'] as num).toInt() == id));
+              } catch (e) {
+                _snack('Failed to delete package: $e', AppColors.dangerRed);
+              }
             },
             icon: const Icon(
               Icons.delete_outline_rounded,
@@ -412,8 +440,36 @@ class _AdminPricingManagementScreenState
           IconButton(
             tooltip: 'Delete',
             onPressed: () async {
-              await _api.deleteSubscriptionPlan(id);
-              _load();
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: AppColors.surfaceDark,
+                  title: Text('Delete Plan',
+                      style: AppTypography.titleMedium.copyWith(color: Colors.white)),
+                  content: Text('Delete "$name"? This cannot be undone.',
+                      style: AppTypography.bodyMedium.copyWith(color: Colors.white70)),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel')),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.dangerRed,
+                          foregroundColor: Colors.white),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm != true) return;
+              try {
+                await _api.deleteSubscriptionPlan(id);
+                if (!mounted) return;
+                setState(() => _plans.removeWhere((p) => (p['id'] as num).toInt() == id));
+              } catch (e) {
+                _snack('Failed to delete plan: $e', AppColors.dangerRed);
+              }
             },
             icon: const Icon(
               Icons.delete_outline_rounded,
