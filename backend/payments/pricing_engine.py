@@ -135,7 +135,7 @@ class PricingEngine:
     ) -> Dict[str, Any]:
         package = execute_query(
             """
-            SELECT id, credits, base_price_cents, discount_percentage
+            SELECT id, credits, base_price_cents, display_price_cents, discount_percentage
             FROM credit_packages
             WHERE id = ? AND is_active = 1
             """,
@@ -148,19 +148,21 @@ class PricingEngine:
 
         credits = int(package[1])
         base_price_cents = int(package[2])
-        pkg_discount_pct = float(package[3] or 0.0)
+        display_price_cents = int(package[3] or 0)
+        pkg_discount_pct = float(package[4] or 0.0)
 
         tier = self.get_user_pricing_tier(user_id)
         if tier:
-            tier_subtotal = int(round(credits * tier.price_per_credit_cents)) * quantity
+            subtotal = int(round(credits * tier.price_per_credit_cents)) * quantity
         else:
-            tier_subtotal = base_price_cents * quantity
-
-        subtotal = tier_subtotal
-
-        # Apply package discount (marketing discount)
-        if pkg_discount_pct > 0:
-            subtotal = max(0, subtotal - int(round(subtotal * (pkg_discount_pct / 100.0))))
+            # Display price is what users see in package cards, so keep checkout math in sync.
+            if display_price_cents > 0:
+                subtotal = display_price_cents * quantity
+            else:
+                subtotal = base_price_cents * quantity
+                # Legacy fallback: if display price is missing, derive final from base+package discount.
+                if pkg_discount_pct > 0:
+                    subtotal = max(0, subtotal - int(round(subtotal * (pkg_discount_pct / 100.0))))
 
         # Apply tier discount
         if tier and tier.discount_percentage > 0:
@@ -200,4 +202,3 @@ class PricingEngine:
             "promo": promo_effect,
             "tier": tier,
         }
-

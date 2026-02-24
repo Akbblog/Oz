@@ -5037,6 +5037,9 @@ async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateR
         value = getattr(req, field)
         if value is not None:
             updates[field] = value
+    # Keep base/display aligned when admin edits only the display price.
+    if "display_price_cents" in updates and "base_price_cents" not in updates:
+        updates["base_price_cents"] = updates["display_price_cents"]
     if req.is_active is not None:
         updates["is_active"] = 1 if bool(req.is_active) else 0
     if req.is_featured is not None:

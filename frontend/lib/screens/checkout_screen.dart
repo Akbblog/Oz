@@ -236,7 +236,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         : widget.item['credits'] ?? 0;
     final priceCents = widget.isSubscription
         ? widget.item['base_price_cents'] ?? 0
-        : widget.item['display_price_cents'] ??
+        : _priceBreakdown?['total_cents'] ??
+            widget.item['display_price_cents'] ??
             widget.item['base_price_cents'] ??
             0;
     final price = (priceCents / 100).toStringAsFixed(2);

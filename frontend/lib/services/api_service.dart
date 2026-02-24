@@ -827,6 +827,7 @@ class ApiService {
     int packageId, {
     String? name,
     int? credits,
+    int? basePriceCents,
     int? displayPriceCents,
     bool? isActive,
   }) async {
@@ -834,6 +835,7 @@ class ApiService {
     final body = <String, dynamic>{};
     if (name != null) body['name'] = name;
     if (credits != null) body['credits'] = credits;
+    if (basePriceCents != null) body['base_price_cents'] = basePriceCents;
     if (displayPriceCents != null) {
       body['display_price_cents'] = displayPriceCents;
     }
@@ -1930,8 +1932,8 @@ class ApiService {
       query['status'] = status.trim().toLowerCase();
     }
 
-    final uri = Uri.parse('$baseUrl/api/admin/jobs')
-        .replace(queryParameters: query);
+    final uri =
+        Uri.parse('$baseUrl/api/admin/jobs').replace(queryParameters: query);
     final response = await http.get(uri, headers: headers).timeout(timeout);
 
     if (response.statusCode == 200) {
@@ -2001,16 +2003,19 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/api/admin/analytics/dau')
         .replace(queryParameters: {'days': days.toString()});
     final response = await http.get(uri, headers: headers).timeout(timeout);
-    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200)
+      return jsonDecode(response.body) as Map<String, dynamic>;
     throw Exception('Failed to load DAU analytics');
   }
 
-  Future<Map<String, dynamic>> getAnalyticsFeatureAdoption({int days = 30}) async {
+  Future<Map<String, dynamic>> getAnalyticsFeatureAdoption(
+      {int days = 30}) async {
     final headers = await _getHeaders();
     final uri = Uri.parse('$baseUrl/api/admin/analytics/feature-adoption')
         .replace(queryParameters: {'days': days.toString()});
     final response = await http.get(uri, headers: headers).timeout(timeout);
-    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200)
+      return jsonDecode(response.body) as Map<String, dynamic>;
     throw Exception('Failed to load feature adoption analytics');
   }
 
@@ -2019,7 +2024,8 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/api/admin/analytics/funnel')
         .replace(queryParameters: {'days': days.toString()});
     final response = await http.get(uri, headers: headers).timeout(timeout);
-    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200)
+      return jsonDecode(response.body) as Map<String, dynamic>;
     throw Exception('Failed to load funnel analytics');
   }
 
@@ -2028,16 +2034,19 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/api/admin/analytics/session-stats')
         .replace(queryParameters: {'days': days.toString()});
     final response = await http.get(uri, headers: headers).timeout(timeout);
-    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200)
+      return jsonDecode(response.body) as Map<String, dynamic>;
     throw Exception('Failed to load session stats');
   }
 
-  Future<Map<String, dynamic>> getAnalyticsCreditPatterns({int days = 30}) async {
+  Future<Map<String, dynamic>> getAnalyticsCreditPatterns(
+      {int days = 30}) async {
     final headers = await _getHeaders();
     final uri = Uri.parse('$baseUrl/api/admin/analytics/credit-patterns')
         .replace(queryParameters: {'days': days.toString()});
     final response = await http.get(uri, headers: headers).timeout(timeout);
-    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200)
+      return jsonDecode(response.body) as Map<String, dynamic>;
     throw Exception('Failed to load credit pattern analytics');
   }
 

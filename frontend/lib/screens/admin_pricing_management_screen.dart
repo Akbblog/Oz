@@ -100,7 +100,8 @@ class _AdminPricingManagementScreenState
           ),
           iconTheme: const IconThemeData(color: Colors.white),
           actions: [
-            IconButton(onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+            IconButton(
+                onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
             const SizedBox(width: AppSpacing.sm),
           ],
           bottom: TabBar(
@@ -122,8 +123,8 @@ class _AdminPricingManagementScreenState
                       width: 220,
                       child: LinearProgressIndicator(
                         backgroundColor: AppColors.surfaceDark,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.primaryBlue),
                       ),
                     ),
                   )
@@ -227,7 +228,8 @@ class _AdminPricingManagementScreenState
           : ListView.separated(
               padding: const EdgeInsets.all(AppSpacing.lg),
               itemCount: _packages.length,
-              separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.md),
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: AppSpacing.md),
               itemBuilder: (context, i) => _packageTile(_packages[i]),
             ),
     );
@@ -241,12 +243,14 @@ class _AdminPricingManagementScreenState
           ? _buildEmptyState(
               icon: Icons.subscriptions_rounded,
               title: 'No plans yet',
-              subtitle: 'Create a subscription plan to offer recurring credits.',
+              subtitle:
+                  'Create a subscription plan to offer recurring credits.',
             )
           : ListView.separated(
               padding: const EdgeInsets.all(AppSpacing.lg),
               itemCount: _plans.length,
-              separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.md),
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: AppSpacing.md),
               itemBuilder: (context, i) => _planTile(_plans[i]),
             ),
     );
@@ -265,7 +269,8 @@ class _AdminPricingManagementScreenState
           : ListView.separated(
               padding: const EdgeInsets.all(AppSpacing.lg),
               itemCount: _tiers.length,
-              separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.md),
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: AppSpacing.md),
               itemBuilder: (context, i) => _tierTile(_tiers[i]),
             ),
     );
@@ -344,7 +349,8 @@ class _AdminPricingManagementScreenState
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   '$credits credits • \$${price.toStringAsFixed(2)}',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white70),
                 ),
               ],
             ),
@@ -362,9 +368,11 @@ class _AdminPricingManagementScreenState
                 builder: (ctx) => AlertDialog(
                   backgroundColor: AppColors.surfaceDark,
                   title: Text('Delete Package',
-                      style: AppTypography.titleMedium.copyWith(color: Colors.white)),
+                      style: AppTypography.titleMedium
+                          .copyWith(color: Colors.white)),
                   content: Text('Delete "$name"? This cannot be undone.',
-                      style: AppTypography.bodyMedium.copyWith(color: Colors.white70)),
+                      style: AppTypography.bodyMedium
+                          .copyWith(color: Colors.white70)),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
@@ -383,7 +391,8 @@ class _AdminPricingManagementScreenState
               try {
                 await _api.deleteCreditPackage(id);
                 if (!mounted) return;
-                setState(() => _packages.removeWhere((p) => (p['id'] as num).toInt() == id));
+                setState(() => _packages
+                    .removeWhere((p) => (p['id'] as num).toInt() == id));
               } catch (e) {
                 _snack('Failed to delete package: $e', AppColors.dangerRed);
               }
@@ -427,7 +436,8 @@ class _AdminPricingManagementScreenState
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   '$credits / $interval • \$${price.toStringAsFixed(2)}',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white70),
                 ),
               ],
             ),
@@ -445,9 +455,11 @@ class _AdminPricingManagementScreenState
                 builder: (ctx) => AlertDialog(
                   backgroundColor: AppColors.surfaceDark,
                   title: Text('Delete Plan',
-                      style: AppTypography.titleMedium.copyWith(color: Colors.white)),
+                      style: AppTypography.titleMedium
+                          .copyWith(color: Colors.white)),
                   content: Text('Delete "$name"? This cannot be undone.',
-                      style: AppTypography.bodyMedium.copyWith(color: Colors.white70)),
+                      style: AppTypography.bodyMedium
+                          .copyWith(color: Colors.white70)),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
@@ -466,7 +478,8 @@ class _AdminPricingManagementScreenState
               try {
                 await _api.deleteSubscriptionPlan(id);
                 if (!mounted) return;
-                setState(() => _plans.removeWhere((p) => (p['id'] as num).toInt() == id));
+                setState(() =>
+                    _plans.removeWhere((p) => (p['id'] as num).toInt() == id));
               } catch (e) {
                 _snack('Failed to delete plan: $e', AppColors.dangerRed);
               }
@@ -509,7 +522,8 @@ class _AdminPricingManagementScreenState
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   '$min - ${max ?? '∞'} credits/mo • $ppc¢/credit',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white70),
                 ),
               ],
             ),
@@ -525,10 +539,14 @@ class _AdminPricingManagementScreenState
   }
 
   Future<void> _showPackageDialog({Map<String, dynamic>? existing}) async {
-    final name = TextEditingController(text: existing?['name']?.toString() ?? '');
-    final credits = TextEditingController(text: (existing?['credits'] ?? '').toString());
-    final display = TextEditingController(text: (existing?['display_price_cents'] ?? '').toString());
-    final active = ValueNotifier<bool>(existing?['is_active'] == true || existing == null);
+    final name =
+        TextEditingController(text: existing?['name']?.toString() ?? '');
+    final credits =
+        TextEditingController(text: (existing?['credits'] ?? '').toString());
+    final display = TextEditingController(
+        text: (existing?['display_price_cents'] ?? '').toString());
+    final active =
+        ValueNotifier<bool>(existing?['is_active'] == true || existing == null);
 
     final ok = await _simpleDialog(
       title: existing == null ? 'Create Package' : 'Edit Package',
@@ -539,14 +557,17 @@ class _AdminPricingManagementScreenState
           const SizedBox(height: AppSpacing.sm),
           _field(credits, 'Credits', keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
-          _field(display, 'Display Price (cents)', keyboardType: TextInputType.number),
+          _field(display, 'Display Price (cents)',
+              keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
           ValueListenableBuilder<bool>(
             valueListenable: active,
             builder: (_, v, __) => SwitchListTile(
               value: v,
               onChanged: (nv) => active.value = nv,
-              title: Text('Active', style: AppTypography.bodySmall.copyWith(color: Colors.white70)),
+              title: Text('Active',
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white70)),
             ),
           ),
         ],
@@ -575,6 +596,7 @@ class _AdminPricingManagementScreenState
         id,
         name: name.text.trim(),
         credits: creditsVal,
+        basePriceCents: priceVal,
         displayPriceCents: priceVal,
         isActive: active.value,
       );
@@ -583,12 +605,18 @@ class _AdminPricingManagementScreenState
   }
 
   Future<void> _showPlanDialog({Map<String, dynamic>? existing}) async {
-    final name = TextEditingController(text: existing?['name']?.toString() ?? '');
-    final interval = ValueNotifier<String>(existing?['billing_interval']?.toString() ?? 'monthly');
-    final credits = TextEditingController(text: (existing?['credits_per_period'] ?? '').toString());
-    final price = TextEditingController(text: (existing?['base_price_cents'] ?? '').toString());
-    final stripePriceId = TextEditingController(text: existing?['stripe_price_id']?.toString() ?? '');
-    final active = ValueNotifier<bool>(existing?['is_active'] == true || existing == null);
+    final name =
+        TextEditingController(text: existing?['name']?.toString() ?? '');
+    final interval = ValueNotifier<String>(
+        existing?['billing_interval']?.toString() ?? 'monthly');
+    final credits = TextEditingController(
+        text: (existing?['credits_per_period'] ?? '').toString());
+    final price = TextEditingController(
+        text: (existing?['base_price_cents'] ?? '').toString());
+    final stripePriceId = TextEditingController(
+        text: existing?['stripe_price_id']?.toString() ?? '');
+    final active =
+        ValueNotifier<bool>(existing?['is_active'] == true || existing == null);
 
     final ok = await _simpleDialog(
       title: existing == null ? 'Create Plan' : 'Edit Plan',
@@ -611,7 +639,8 @@ class _AdminPricingManagementScreenState
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
-          _field(credits, 'Credits per period', keyboardType: TextInputType.number),
+          _field(credits, 'Credits per period',
+              keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
           _field(price, 'Price (cents)', keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
@@ -622,7 +651,9 @@ class _AdminPricingManagementScreenState
             builder: (_, v, __) => SwitchListTile(
               value: v,
               onChanged: (nv) => active.value = nv,
-              title: Text('Active', style: AppTypography.bodySmall.copyWith(color: Colors.white70)),
+              title: Text('Active',
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white70)),
             ),
           ),
         ],
@@ -637,7 +668,8 @@ class _AdminPricingManagementScreenState
       return;
     }
 
-    final stripeId = stripePriceId.text.trim().isEmpty ? null : stripePriceId.text.trim();
+    final stripeId =
+        stripePriceId.text.trim().isEmpty ? null : stripePriceId.text.trim();
     if (existing == null) {
       await _api.createSubscriptionPlan(
         name: name.text.trim(),
@@ -663,11 +695,16 @@ class _AdminPricingManagementScreenState
   }
 
   Future<void> _showTierDialog({Map<String, dynamic>? existing}) async {
-    final name = TextEditingController(text: existing?['name']?.toString() ?? '');
-    final min = TextEditingController(text: (existing?['min_monthly_credits'] ?? 0).toString());
-    final max = TextEditingController(text: (existing?['max_monthly_credits'] ?? '').toString());
-    final ppc = TextEditingController(text: (existing?['price_per_credit_cents'] ?? '').toString());
-    final active = ValueNotifier<bool>(existing?['is_active'] == true || existing == null);
+    final name =
+        TextEditingController(text: existing?['name']?.toString() ?? '');
+    final min = TextEditingController(
+        text: (existing?['min_monthly_credits'] ?? 0).toString());
+    final max = TextEditingController(
+        text: (existing?['max_monthly_credits'] ?? '').toString());
+    final ppc = TextEditingController(
+        text: (existing?['price_per_credit_cents'] ?? '').toString());
+    final active =
+        ValueNotifier<bool>(existing?['is_active'] == true || existing == null);
 
     final ok = await _simpleDialog(
       title: existing == null ? 'Create Tier' : 'Edit Tier',
@@ -676,18 +713,23 @@ class _AdminPricingManagementScreenState
         children: [
           _field(name, 'Name'),
           const SizedBox(height: AppSpacing.sm),
-          _field(min, 'Min monthly credits', keyboardType: TextInputType.number),
+          _field(min, 'Min monthly credits',
+              keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
-          _field(max, 'Max monthly credits (blank = unlimited)', keyboardType: TextInputType.number),
+          _field(max, 'Max monthly credits (blank = unlimited)',
+              keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
-          _field(ppc, 'Price per credit (cents)', keyboardType: TextInputType.number),
+          _field(ppc, 'Price per credit (cents)',
+              keyboardType: TextInputType.number),
           const SizedBox(height: AppSpacing.sm),
           ValueListenableBuilder<bool>(
             valueListenable: active,
             builder: (_, v, __) => SwitchListTile(
               value: v,
               onChanged: (nv) => active.value = nv,
-              title: Text('Active', style: AppTypography.bodySmall.copyWith(color: Colors.white70)),
+              title: Text('Active',
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white70)),
             ),
           ),
         ],
@@ -725,15 +767,19 @@ class _AdminPricingManagementScreenState
     _load();
   }
 
-  Future<bool?> _simpleDialog({required String title, required Widget content}) {
+  Future<bool?> _simpleDialog(
+      {required String title, required Widget content}) {
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.surfaceDark,
-        title: Text(title, style: AppTypography.titleMedium.copyWith(color: Colors.white)),
+        title: Text(title,
+            style: AppTypography.titleMedium.copyWith(color: Colors.white)),
         content: SizedBox(width: 520, child: content),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryBlue,
@@ -747,7 +793,8 @@ class _AdminPricingManagementScreenState
     );
   }
 
-  Widget _field(TextEditingController controller, String label, {TextInputType? keyboardType}) {
+  Widget _field(TextEditingController controller, String label,
+      {TextInputType? keyboardType}) {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
