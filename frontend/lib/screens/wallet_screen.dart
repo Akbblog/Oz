@@ -43,6 +43,7 @@ class _WalletScreenState extends State<WalletScreen>
   bool _loadingPaymentTransactions = false;
   bool _loadingInvoices = false;
   bool _loadingCreditRequests = false;
+  final bool _showWalletExtras = false;
 
   late final List<String> _historyTabs = widget.enableLivePayments
       ? const ['Credits', 'Payments', 'Invoices', 'Requests']
@@ -298,27 +299,31 @@ class _WalletScreenState extends State<WalletScreen>
                                                     _alertDismissed = true),
                                               ),
                                             _buildBalanceCard(),
-                                            const SizedBox(
-                                                height: AppSpacing.md),
-                                            SubscriptionStatusBanner(
-                                              subscription: _subscription,
-                                              onManage: () =>
-                                                  Navigator.of(context).push(
-                                                MaterialPageRoute(
-                                                  builder: (context) =>
-                                                      const SubscriptionManagementScreen(),
+                                            if (_showWalletExtras) ...[
+                                              const SizedBox(
+                                                  height: AppSpacing.md),
+                                              SubscriptionStatusBanner(
+                                                subscription: _subscription,
+                                                onManage: () =>
+                                                    Navigator.of(context).push(
+                                                  MaterialPageRoute(
+                                                    builder: (context) =>
+                                                        const SubscriptionManagementScreen(),
+                                                  ),
                                                 ),
+                                                onUpgrade: () => widget
+                                                        .enableLivePayments
+                                                    ? _navigateToPricing()
+                                                    : _showCreditRequestDialog(),
                                               ),
-                                              onUpgrade: () => widget
-                                                      .enableLivePayments
-                                                  ? _navigateToPricing()
-                                                  : _showCreditRequestDialog(),
-                                            ),
-                                            const SizedBox(
-                                                height: AppSpacing.lg),
-                                            _buildQuickActions(),
-                                            const SizedBox(
-                                                height: AppSpacing.lg),
+                                              const SizedBox(
+                                                  height: AppSpacing.lg),
+                                              _buildQuickActions(),
+                                              const SizedBox(
+                                                  height: AppSpacing.lg),
+                                            ] else
+                                              const SizedBox(
+                                                  height: AppSpacing.lg),
                                             _buildHistoryHeader(),
                                             const SizedBox(
                                                 height: AppSpacing.md),

@@ -20,6 +20,7 @@ class _PricingScreenState extends State<PricingScreen>
     with SingleTickerProviderStateMixin {
   final ApiService _apiService = ApiService();
   late TabController _tabController;
+  final bool _showSubscriptionOptions = false;
   bool _isLoading = true;
   String? _error;
   List<Map<String, dynamic>> _packages = [];
@@ -30,7 +31,8 @@ class _PricingScreenState extends State<PricingScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController =
+        TabController(length: _showSubscriptionOptions ? 2 : 1, vsync: this);
     _loadData();
   }
 
@@ -47,22 +49,33 @@ class _PricingScreenState extends State<PricingScreen>
     });
 
     try {
-      final results = await Future.wait([
-        _apiService.getCreditPackages(),
-        _apiService.getSubscriptionPlans(),
-      ]);
+      if (_showSubscriptionOptions) {
+        final results = await Future.wait([
+          _apiService.getCreditPackages(),
+          _apiService.getSubscriptionPlans(),
+        ]);
 
-      if (mounted) {
-        setState(() {
-          _packages = results[0];
-          _plans = results[1];
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _packages = results[0];
+            _plans = results[1];
+            _isLoading = false;
+          });
+        }
+      } else {
+        final packages = await _apiService.getCreditPackages();
+        if (mounted) {
+          setState(() {
+            _packages = packages;
+            _plans = [];
+            _isLoading = false;
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to load pricing: $e';
+          _error = 'Failed to load packages: $e';
           _isLoading = false;
         });
       }
@@ -70,7 +83,7 @@ class _PricingScreenState extends State<PricingScreen>
   }
 
   void _proceedToCheckout() {
-    final isPackage = _tabController.index == 0;
+    final isPackage = !_showSubscriptionOptions || _tabController.index == 0;
     final selectedId = isPackage ? _selectedPackageId : _selectedPlanId;
     if (selectedId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -113,7 +126,7 @@ class _PricingScreenState extends State<PricingScreen>
             Column(
               children: [
                 _buildHeader(),
-                _buildTabs(),
+                if (_showSubscriptionOptions) _buildTabs(),
                 Expanded(
                   child: _isLoading
                       ? const Center(
@@ -131,10 +144,17 @@ class _PricingScreenState extends State<PricingScreen>
                               onRefresh: _loadData,
                               child: TabBarView(
                                 controller: _tabController,
-                                children: [
-                                  _buildPackagesTab(layoutType),
-                                  _buildPlansTab(layoutType),
-                                ],
+                                physics: _showSubscriptionOptions
+                                    ? null
+                                    : const NeverScrollableScrollPhysics(),
+                                children: _showSubscriptionOptions
+                                    ? [
+                                        _buildPackagesTab(layoutType),
+                                        _buildPlansTab(layoutType),
+                                      ]
+                                    : [
+                                        _buildPackagesTab(layoutType),
+                                      ],
                               ),
                             ),
                 ),
@@ -186,7 +206,7 @@ class _PricingScreenState extends State<PricingScreen>
           ),
           Expanded(
             child: Text(
-              'Pricing',
+              'Packages',
               textAlign: TextAlign.center,
               style: AppTypography.titleMedium.copyWith(
                 color: Colors.white,
@@ -397,7 +417,7 @@ class _PricingScreenState extends State<PricingScreen>
   }
 
   Widget _buildBottomBar() {
-    final isPackage = _tabController.index == 0;
+    final isPackage = !_showSubscriptionOptions || _tabController.index == 0;
     final hasSelection = isPackage
         ? _selectedPackageId != null
         : _selectedPlanId != null;
