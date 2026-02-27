@@ -31,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.page('/login');
     _loadLoginPrefs();
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 800),

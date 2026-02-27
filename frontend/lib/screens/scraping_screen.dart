@@ -101,6 +101,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.page('/scraping');
     _categoryController.text = widget.initialCategory;
     _citiesController.text = widget.initialCities;
     _showCategorySuggestions = _categoryController.text.trim().isEmpty;

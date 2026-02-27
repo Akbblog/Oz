@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../services/analytics_service.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
@@ -70,6 +71,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.page('/home');
     _pageController = PageController(initialPage: _currentIndex);
     _authProvider = Provider.of<AuthProvider>(context, listen: false);
     _authProvider.addListener(_handleAuthStateChanged);

@@ -31,6 +31,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.page('/register');
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 800),
       vsync: this,
@@ -117,6 +118,9 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     if (message != null && mounted) {
       _showSnackBar(message);
+      final uid = Provider.of<AuthProvider>(context, listen: false)
+          .currentUser?['id'] as int?;
+      if (uid != null) AnalyticsService.instance.identify(uid);
       AnalyticsService.instance.track('register');
       Navigator.of(context).pop();
     } else if (mounted) {

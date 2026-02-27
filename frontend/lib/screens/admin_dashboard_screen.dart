@@ -1098,7 +1098,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   Future<void> _loadAnalytics() async {
     if (_analyticsLoading) return;
-    setState(() => _analyticsLoading = true);
+    setState(() {
+      _analyticsLoading = true;
+      _analyticsError = false;
+    });
     try {
       final results = await Future.wait([
         _apiService.getAnalyticsDau(days: 30),
@@ -1116,10 +1119,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           _sessionStats = Map<String, dynamic>.from(results[3]);
           _analyticsLoading = false;
           _analyticsInitialized = true;
+          _analyticsError = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _analyticsLoading = false);
+      if (mounted) {
+        setState(() {
+          _analyticsLoading = false;
+          _analyticsError = true;
+        });
+      }
     }
   }
 
@@ -2873,6 +2882,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     if (_analyticsLoading && !_analyticsInitialized) {
       return const Center(
         child: CircularProgressIndicator(color: AppColors.brandPurple),
+      );
+    }
+    if (_analyticsError) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.wifi_off_rounded, color: Colors.white38, size: 36),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Failed to load analytics',
+              style: AppTypography.bodyMedium.copyWith(color: Colors.white60),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextButton.icon(
+              onPressed: () {
+                setState(() => _analyticsError = false);
+                _loadAnalytics();
+              },
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Retry'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.brandPurple),
+            ),
+          ],
+        ),
       );
     }
     return SingleChildScrollView(
