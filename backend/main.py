@@ -74,6 +74,29 @@ def _approval_state_label(value: object) -> str:
     return "pending"
 
 
+def _is_suspended(value: object) -> bool:
+    try:
+        return int(value) == 1  # type: ignore[arg-type]
+    except Exception:
+        return bool(value)
+
+
+def _account_state_label(approval_value: object, suspended_value: object) -> str:
+    if _is_suspended(suspended_value):
+        return "suspended"
+    return _approval_state_label(approval_value)
+
+
+def _would_remove_last_admin_owner(cursor, role: Optional[str], is_admin: object) -> bool:
+    normalized_role = (role or "").strip().lower()
+    if not (bool(is_admin) or normalized_role in ("admin", "owner")):
+        return False
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'owner') OR is_admin = 1")
+    admin_count = int((cursor.fetchone() or [0])[0] or 0)
+    return admin_count <= 1
+
+
 def get_admin_setting(key: str, default: str = "") -> str:
     """Get admin setting value from database."""
     try:
@@ -456,6 +479,10 @@ class AdminUserProfileUpdateRequest(BaseModel):
     phone: Optional[str] = None
     is_admin: Optional[bool] = None
     role: Optional[str] = None  # 'user', 'support', 'admin', 'owner'
+
+
+class AdminUserSuspendRequest(BaseModel):
+    reason: Optional[str] = None
 
 class ScrapingRequest(BaseModel):
     category: str
@@ -862,7 +889,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, phone, is_approved, is_admin, role FROM users WHERE username = ?", (username,))
+    cursor.execute(
+        """
+        SELECT id, username, email, phone, is_approved, is_admin, role, is_suspended
+        FROM users
+        WHERE username = ?
+        """,
+        (username,),
+    )
     user = cursor.fetchone()
     conn.close()
 
@@ -878,6 +912,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         if approval_state == APPROVAL_DENIED:
             detail = "Account denied"
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+    if _is_suspended(user[7]):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
 
     # Derive role: use the role column, fall back to is_admin for backward compat
     role = user[6] if user[6] else ("admin" if bool(user[5]) else "user")
@@ -888,6 +924,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         "email": user[2],
         "phone": user[3],
         "is_admin": bool(user[5]),
+        "is_suspended": False,
         "role": role,
     }
 
@@ -908,10 +945,19 @@ async def get_optional_user(
             return None
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, role, is_admin FROM users WHERE username = ?", (username,))
+        cursor.execute(
+            """
+            SELECT id, username, role, is_admin, is_approved, is_suspended
+            FROM users
+            WHERE username = ?
+            """,
+            (username,),
+        )
         row = cursor.fetchone()
         conn.close()
         if not row:
+            return None
+        if _approval_state(row[4]) != APPROVAL_APPROVED or _is_suspended(row[5]):
             return None
         return {"id": row[0], "username": row[1], "role": row[2] or ("admin" if bool(row[3]) else "user")}
     except Exception:
@@ -1115,7 +1161,11 @@ async def login(credentials: UserLogin, request: Request):
 
         # Allow users to sign in with either their username or their email
         cursor.execute(
-            "SELECT id, username, email, phone, password_hash, is_approved, is_admin FROM users WHERE username = ? OR email = ?",
+            """
+            SELECT id, username, email, phone, password_hash, is_approved, is_admin, role, is_suspended
+            FROM users
+            WHERE username = ? OR email = ?
+            """,
             (credentials.username, credentials.username),
         )
         user = cursor.fetchone()
@@ -1156,6 +1206,8 @@ async def login(credentials: UserLogin, request: Request):
             if approval_state == APPROVAL_DENIED:
                 detail = "Account denied"
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        if _is_suspended(user[8]):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
 
         _record_login_success(conn, "ip", ip)
         if identifier_username:
@@ -1190,7 +1242,9 @@ async def login(credentials: UserLogin, request: Request):
             "username": user[1],
             "email": user[2],
             "phone": user[3],
-            "is_admin": bool(user[6])
+            "is_admin": bool(user[6]),
+            "is_suspended": False,
+            "role": user[7] if user[7] else ("admin" if bool(user[6]) else "user"),
         }
     }
 
@@ -1358,7 +1412,8 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, username, email, phone, is_approved, is_admin, credit_balance, created_at, last_login,
-               approved_at, approved_by, denied_at, denied_by, denied_reason, role
+               approved_at, approved_by, denied_at, denied_by, denied_reason, role,
+               is_suspended, suspended_at, suspended_by, suspension_reason
         FROM users ORDER BY created_at DESC
     """)
     users = cursor.fetchall()
@@ -1373,6 +1428,7 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "phone": u[3],
                 "approval_status": _approval_state(u[4]),
                 "approval_state": _approval_state_label(u[4]),
+                "account_state": _account_state_label(u[4], u[15]),
                 "is_approved": _approval_state(u[4]) == APPROVAL_APPROVED,
                 "is_denied": _approval_state(u[4]) == APPROVAL_DENIED,
                 "is_admin": bool(u[5]),
@@ -1385,6 +1441,10 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "denied_by": u[12],
                 "denied_reason": u[13],
                 "role": u[14] or ("admin" if bool(u[5]) else "user"),
+                "is_suspended": _is_suspended(u[15]),
+                "suspended_at": u[16],
+                "suspended_by": u[17],
+                "suspension_reason": u[18],
             }
             for u in users
         ]
@@ -1798,6 +1858,75 @@ async def deny_user(
     return {"message": "User registration denied"}
 
 
+@app.post("/api/admin/users/{user_id}/suspend")
+async def suspend_user(
+    user_id: int,
+    request: Request,
+    payload: Optional[AdminUserSuspendRequest] = Body(default=None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Suspend an approved user account (admin only)."""
+    if admin["id"] == user_id:
+        raise HTTPException(status_code=400, detail="You cannot suspend your own account")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT username, email, is_approved, is_admin, role, is_suspended
+        FROM users
+        WHERE id = ?
+        """,
+        (user_id,),
+    )
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    approval_state = _approval_state(user[2])
+    if approval_state != APPROVAL_APPROVED:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Only approved users can be suspended")
+    if _is_suspended(user[5]):
+        conn.close()
+        return {"message": "User already suspended"}
+    if _would_remove_last_admin_owner(cursor, user[4], user[3]):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Cannot suspend the last admin/owner")
+
+    reason = (payload.reason.strip() if payload and payload.reason else None)
+    now = datetime.now().isoformat()
+    cursor.execute(
+        """
+        UPDATE users
+        SET is_suspended = 1,
+            suspended_at = ?,
+            suspended_by = ?,
+            suspension_reason = ?
+        WHERE id = ?
+        """,
+        (now, admin["id"], reason, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+    record_audit_event(
+        "admin.user.suspend",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before={"is_suspended": False},
+        after={"is_suspended": True, "reason": reason},
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
+    return {"message": "User suspended successfully"}
+
+
 @app.post("/api/admin/users/{user_id}/restore")
 async def restore_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
     """Restore a denied user back to pending status (admin only)."""
@@ -1842,22 +1971,90 @@ async def restore_user(user_id: int, request: Request, admin: dict = Depends(get
 
     return {"message": "User restored to pending approval"}
 
+
+@app.post("/api/admin/users/{user_id}/unsuspend")
+async def unsuspend_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
+    """Restore a suspended user account (admin only)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_suspended FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not _is_suspended(row[0]):
+        conn.close()
+        raise HTTPException(status_code=400, detail="User is not suspended")
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET is_suspended = 0,
+            suspended_at = NULL,
+            suspended_by = NULL,
+            suspension_reason = NULL
+        WHERE id = ?
+        """,
+        (user_id,),
+    )
+    conn.commit()
+    conn.close()
+    record_audit_event(
+        "admin.user.unsuspend",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before={"is_suspended": True},
+        after={"is_suspended": False},
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+
+    return {"message": "User restored successfully"}
+
+
 @app.delete("/api/admin/users/{user_id}")
 async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
-    """Delete a user (admin only)"""
+    """Permanently delete a user after suspension/denial (admin only)."""
+    if admin["id"] == user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id, username, email, is_admin FROM users WHERE id = ?", (user_id,))
+    cursor.execute(
+        """
+        SELECT id, username, email, is_admin, role, is_approved, is_suspended
+        FROM users
+        WHERE id = ?
+        """,
+        (user_id,),
+    )
     existing = cursor.fetchone()
-    before_state = None
-    if existing:
-        before_state = {
-            "id": existing[0],
-            "username": existing[1],
-            "email": existing[2],
-            "is_admin": bool(existing[3]),
-        }
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    approval_state = _approval_state(existing[5])
+    is_suspended = _is_suspended(existing[6])
+    if approval_state == APPROVAL_APPROVED and not is_suspended:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Suspend the user before deleting.")
+    if _would_remove_last_admin_owner(cursor, existing[4], existing[3]):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Cannot delete the last admin/owner")
+
+    before_state = {
+        "id": existing[0],
+        "username": existing[1],
+        "email": existing[2],
+        "is_admin": bool(existing[3]),
+        "role": existing[4] or ("admin" if bool(existing[3]) else "user"),
+        "account_state": _account_state_label(existing[5], existing[6]),
+    }
 
     cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
@@ -1888,12 +2085,16 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
     total_users = cursor.fetchone()[0]
 
     # Approved users
-    cursor.execute("SELECT COUNT(*) FROM users WHERE is_approved = 1")
+    cursor.execute("SELECT COUNT(*) FROM users WHERE is_approved = 1 AND COALESCE(is_suspended, 0) = 0")
     approved_users = cursor.fetchone()[0]
 
     # Pending users
     cursor.execute("SELECT COUNT(*) FROM users WHERE is_approved = 0")
     pending_users = cursor.fetchone()[0]
+
+    # Suspended users
+    cursor.execute("SELECT COUNT(*) FROM users WHERE COALESCE(is_suspended, 0) = 1")
+    suspended_users = cursor.fetchone()[0]
 
     # Total jobs
     cursor.execute("SELECT COUNT(*) FROM jobs")
@@ -1940,6 +2141,7 @@ async def get_admin_stats(admin: dict = Depends(get_admin_user)):
         "total_users": total_users,
         "approved_users": approved_users,
         "pending_users": pending_users,
+        "suspended_users": suspended_users,
         "total_jobs": total_jobs,
         "completed_jobs": completed_jobs,
         "total_results": total_results,

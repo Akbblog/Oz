@@ -502,6 +502,40 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> suspendUser(
+    int userId, {
+    String? reason,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/suspend'),
+      headers: headers,
+      body: jsonEncode({
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to suspend user');
+    }
+  }
+
+  Future<Map<String, dynamic>> unsuspendUser(int userId) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/unsuspend'),
+      headers: headers,
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to restore suspended user');
+    }
+  }
+
   Future<void> deleteUser(int userId) async {
     final headers = await _getHeaders();
     final response = await http.delete(

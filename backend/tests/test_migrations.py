@@ -40,6 +40,7 @@ def test_migrations_applied(db_connection):
     applied = get_applied_migrations(db_connection)
     assert len(applied) > 0, "At least one migration should be applied"
     assert "004" in applied, "Migration 004 (user enhancements) should be applied"
+    assert "013" in applied, "Migration 013 (user suspension) should be applied"
 
 
 def test_migration_status():
@@ -113,6 +114,10 @@ def test_users_table_has_credit_columns(db_connection):
         "denied_at",
         "denied_by",
         "denied_reason",
+        "is_suspended",
+        "suspended_at",
+        "suspended_by",
+        "suspension_reason",
     }
 
     for column in required_columns:

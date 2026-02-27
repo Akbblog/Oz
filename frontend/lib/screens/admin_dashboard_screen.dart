@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -59,6 +57,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   bool _showActivityAnalytics = false;
   bool _analyticsLoading = false;
   bool _analyticsInitialized = false;
+  bool _analyticsError = false;
   List<Map<String, dynamic>> _dauData = [];
   List<Map<String, dynamic>> _featureData = [];
   List<Map<String, dynamic>> _funnelData = [];
@@ -82,7 +81,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       curve: Curves.easeOut,
     );
     _animationController.forward();
-    AnalyticsService.instance.init();
     AnalyticsService.instance.page('#/admin');
     _loadData();
   }
@@ -92,7 +90,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     _animationController.dispose();
     _filterUserIdController.dispose();
     _startingCreditsController.dispose();
-    AnalyticsService.instance.dispose();
     super.dispose();
   }
 
@@ -164,13 +161,47 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   String _getApprovalState(Map<String, dynamic> user) {
-    final state = user['approval_state'];
+    final state = user['account_state'] ?? user['approval_state'];
     if (state is String && state.trim().isNotEmpty) {
-      return state.trim();
+      return state.trim().toLowerCase();
     }
+    if (user['is_suspended'] == true) return 'suspended';
     final isDenied = user['is_denied'] == true;
     if (isDenied) return 'denied';
     return user['is_approved'] == true ? 'approved' : 'pending';
+  }
+
+  Color _userStatusColor(String state) {
+    switch (state) {
+      case 'approved':
+        return AppColors.successGreen;
+      case 'denied':
+        return AppColors.dangerRed;
+      case 'suspended':
+        return AppColors.brandOrange;
+      default:
+        return AppColors.warningYellow;
+    }
+  }
+
+  String _userStatusLabel(String state, {bool preview = false}) {
+    switch (state) {
+      case 'approved':
+        return preview ? 'Active' : 'Approved';
+      case 'denied':
+        return 'Denied';
+      case 'suspended':
+        return 'Suspended';
+      default:
+        return 'Pending';
+    }
+  }
+
+  String? _suspensionReason(Map<String, dynamic> user) {
+    final raw = user['suspension_reason'];
+    if (raw == null) return null;
+    final text = raw.toString().trim();
+    return text.isEmpty ? null : text;
   }
 
   Future<void> _denyUser(int userId) async {
@@ -273,6 +304,106 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
+  Future<void> _suspendUser(Map<String, dynamic> user) async {
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.surfaceDark,
+          shape:
+              RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
+          title: Text(
+            'Suspend user?',
+            style: AppTypography.titleMedium.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'This immediately blocks login and API access. You can restore the account later or permanently delete it.',
+                style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextField(
+                controller: noteController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Optional suspension reason',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: AppColors.elevatedCardDark,
+                  border: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide:
+                        BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: AppSpacing.borderRadiusMd,
+                    borderSide:
+                        BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(
+                'Cancel',
+                style: AppTypography.labelLarge.copyWith(color: Colors.white70),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.brandOrange,
+                foregroundColor: Colors.white,
+              ),
+              child: Text(
+                'Suspend',
+                style: AppTypography.labelLarge
+                    .copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      noteController.dispose();
+      return;
+    }
+
+    try {
+      final reason = noteController.text.trim().isEmpty
+          ? null
+          : noteController.text.trim();
+      await _apiService.suspendUser(user['id'], reason: reason);
+      _loadData();
+      _showSnackBar('User suspended', AppColors.brandOrange);
+    } catch (e) {
+      _showSnackBar('Error suspending user: $e', AppColors.dangerRed);
+    } finally {
+      noteController.dispose();
+    }
+  }
+
+  Future<void> _unsuspendUser(int userId) async {
+    try {
+      await _apiService.unsuspendUser(userId);
+      _loadData();
+      _showSnackBar('User restored successfully', AppColors.successGreen);
+    } catch (e) {
+      _showSnackBar('Error restoring suspended user: $e', AppColors.dangerRed);
+    }
+  }
+
   bool _settingBool(String key, {bool fallback = false}) {
     final raw = _adminSettings[key];
     if (raw is bool) return raw;
@@ -300,15 +431,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
-  Future<void> _deleteUser(int userId) async {
+  Future<void> _deleteUser(Map<String, dynamic> user) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => _buildDeleteDialog(),
+      builder: (context) => _buildDeleteDialog(user),
     );
 
     if (confirmed == true) {
       try {
-        await _apiService.deleteUser(userId);
+        await _apiService.deleteUser(user['id']);
         _loadData();
         _showSnackBar('User deleted successfully', AppColors.successGreen);
       } catch (e) {
@@ -1276,12 +1407,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final isApproved = approvalState == 'approved';
     final isPending = approvalState == 'pending';
     final isDenied = approvalState == 'denied';
+    final isSuspended = approvalState == 'suspended';
     final phone = (user['phone'] ?? '').toString().trim();
-    final statusColor = isApproved
-        ? AppColors.successGreen
-        : isDenied
-            ? AppColors.dangerRed
-            : AppColors.warningYellow;
+    final suspensionReason = _suspensionReason(user);
+    final statusColor = _userStatusColor(approvalState);
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: AppSpacing.paddingMd,
@@ -1327,6 +1456,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           color: Colors.white54,
                         ),
                       ),
+                    if (isSuspended && suspensionReason != null)
+                      Text(
+                        'Reason: $suspensionReason',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: Colors.white54,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1340,11 +1476,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   borderRadius: AppSpacing.borderRadiusRound,
                 ),
                 child: Text(
-                  isApproved
-                      ? 'Active'
-                      : isDenied
-                          ? 'Denied'
-                          : 'Pending',
+                  _userStatusLabel(approvalState, preview: true),
                   style: AppTypography.labelSmall.copyWith(
                     color: statusColor,
                   ),
@@ -1367,21 +1499,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               Expanded(
                 child: _smallButton(
                   label: isApproved
-                      ? 'Grant Credits'
-                      : isDenied
+                      ? 'Suspend'
+                      : (isSuspended || isDenied)
                           ? 'Restore'
                           : 'Deny',
                   color: isApproved
-                      ? AppColors.elevatedCardDark
-                      : isDenied
-                          ? AppColors.elevatedCardDark
-                          : AppColors.surfaceDark,
+                      ? AppColors.brandOrange
+                      : AppColors.elevatedCardDark,
                   textColor: Colors.white,
                   onTap: isApproved
-                      ? () => _showGrantCreditsDialog(user)
-                      : isDenied
-                          ? () => _restoreUser(user['id'])
-                          : () => _denyUser(user['id']),
+                      ? () => _suspendUser(user)
+                      : isSuspended
+                          ? () => _unsuspendUser(user['id'])
+                          : isDenied
+                              ? () => _restoreUser(user['id'])
+                              : () => _denyUser(user['id']),
                 ),
               ),
             ],
@@ -1520,17 +1652,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final approvalState = _getApprovalState(user);
     final isApproved = approvalState == 'approved';
     final isPending = approvalState == 'pending';
-    final isDenied = approvalState == 'denied';
+    final isSuspended = approvalState == 'suspended';
     final isAdmin = user['is_admin'] == true;
     final userId = (user['id'] as num?)?.toInt();
     final phone = (user['phone'] ?? '').toString().trim();
+    final suspensionReason = _suspensionReason(user);
     final isSelected =
         isPending && userId != null && _selectedPendingUserIds.contains(userId);
-    final statusColor = isApproved
-        ? AppColors.successGreen
-        : isDenied
-            ? AppColors.dangerRed
-            : AppColors.warningYellow;
+    final statusColor = _userStatusColor(approvalState);
 
     return Container(
       padding: AppSpacing.paddingMd,
@@ -1600,18 +1729,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                           color: Colors.white54,
                         ),
                       ),
+                    if (isSuspended && suspensionReason != null)
+                      Text(
+                        'Reason: $suspensionReason',
+                        style: AppTypography.bodySmall.copyWith(
+                          color: Colors.white54,
+                        ),
+                      ),
                     const SizedBox(height: 6),
                     Row(
                       children: [
                         _pill(
-                          isApproved
-                              ? 'Approved'
-                              : isDenied
-                                  ? 'Denied'
-                                  : 'Pending',
+                          _userStatusLabel(approvalState),
                           statusColor,
                         ),
-                        if (isApproved) ...[
+                        if (isApproved || isSuspended) ...[
                           const SizedBox(width: 6),
                           _pill(
                             '${user['credit_balance'] ?? 0} Credits',
@@ -1646,7 +1778,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
-              if (isPending)
+              if (isPending) ...[
                 Expanded(
                   child: _smallButton(
                     label: 'Approve',
@@ -1654,30 +1786,48 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     onTap: () => _approveUser(user['id']),
                   ),
                 ),
-              if (isPending) const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: _smallButton(
-                  label: isApproved
-                      ? 'Grant Credits'
-                      : isDenied
-                          ? 'Delete'
-                          : 'Deny',
-                  color: AppColors.elevatedCardDark,
-                  textColor: Colors.white,
-                  onTap: isApproved
-                      ? () => _showGrantCreditsDialog(user)
-                      : isDenied
-                          ? () => _deleteUser(user['id'])
-                          : () => _denyUser(user['id']),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _smallButton(
+                    label: 'Deny',
+                    color: AppColors.elevatedCardDark,
+                    textColor: Colors.white,
+                    onTap: () => _denyUser(user['id']),
+                  ),
                 ),
-              ),
-              if (isDenied) ...[
+              ] else if (isApproved) ...[
+                Expanded(
+                  child: _smallButton(
+                    label: 'Suspend',
+                    color: AppColors.brandOrange,
+                    onTap: () => _suspendUser(user),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _smallButton(
+                    label: 'Grant Credits',
+                    color: AppColors.elevatedCardDark,
+                    textColor: Colors.white,
+                    onTap: () => _showGrantCreditsDialog(user),
+                  ),
+                ),
+              ] else ...[
+                Expanded(
+                  child: _smallButton(
+                    label: 'Delete',
+                    color: AppColors.dangerRed,
+                    onTap: () => _deleteUser(user),
+                  ),
+                ),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: _smallButton(
                     label: 'Restore',
                     color: AppColors.brandPurple,
-                    onTap: () => _restoreUser(user['id']),
+                    onTap: () => isSuspended
+                        ? _unsuspendUser(user['id'])
+                        : _restoreUser(user['id']),
                   ),
                 ),
               ],
@@ -2971,7 +3121,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  Widget _buildDeleteDialog() {
+  Widget _buildDeleteDialog(Map<String, dynamic> user) {
+    final username = (user['username'] ?? 'this user').toString();
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
@@ -2992,7 +3143,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Are you sure you want to delete this user?',
+              'Permanently delete $username and all related data? This cannot be undone.',
               textAlign: TextAlign.center,
               style: AppTypography.bodySmall.copyWith(color: Colors.white60),
             ),
