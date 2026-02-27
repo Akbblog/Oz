@@ -342,6 +342,37 @@ def _startup_init_db() -> None:
     init_database()
     # Ensure feature flags exist for frontend gating.
     ensure_default_admin_settings()
+    # Ensure analytics tables exist even if migration runner was skipped.
+    try:
+        from db.base import execute_query
+        execute_query(
+            """
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER,
+                session_id  TEXT NOT NULL,
+                event_name  TEXT NOT NULL,
+                page        TEXT,
+                element     TEXT,
+                feature     TEXT,
+                click_x     REAL,
+                click_y     REAL,
+                viewport_w  INTEGER,
+                viewport_h  INTEGER,
+                extra_json  TEXT,
+                date_bucket TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+            """,
+            commit=True,
+        )
+        execute_query(
+            "CREATE TABLE IF NOT EXISTS analytics_daily_stats (date_bucket TEXT PRIMARY KEY, dau INTEGER NOT NULL DEFAULT 0, new_users INTEGER NOT NULL DEFAULT 0, total_sessions INTEGER NOT NULL DEFAULT 0, total_events INTEGER NOT NULL DEFAULT 0, searches_started INTEGER NOT NULL DEFAULT 0, searches_completed INTEGER NOT NULL DEFAULT 0, credits_consumed INTEGER NOT NULL DEFAULT 0, credits_purchased INTEGER NOT NULL DEFAULT 0, computed_at TEXT NOT NULL)",
+            commit=True,
+        )
+    except Exception as _e:
+        import logging
+        logging.getLogger(__name__).warning("analytics table ensure failed (non-fatal): %s", _e)
 
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))

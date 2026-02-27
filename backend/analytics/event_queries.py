@@ -7,10 +7,13 @@ Designed for the admin /api/admin/analytics/* endpoints.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from db.base import execute_query
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -20,7 +23,21 @@ def _cutoff_date(days: int) -> str:
 
 
 def _rows(sql: str, params=None, *, fetch_all: bool = True):
-    return execute_query(sql, params, fetch_all=fetch_all, commit=False) or []
+    """Return all rows for a SELECT, or [] on any error (e.g. missing table)."""
+    try:
+        return execute_query(sql, params, fetch_all=fetch_all, commit=False) or []
+    except Exception as exc:
+        logger.warning("analytics _rows failed (non-fatal): %s", exc)
+        return []
+
+
+def _row(sql: str, params=None):
+    """Return a single row for a SELECT, or None on any error."""
+    try:
+        return execute_query(sql, params, fetch_one=True, commit=False)
+    except Exception as exc:
+        logger.warning("analytics _row failed (non-fatal): %s", exc)
+        return None
 
 
 # ─── DAU / MAU ────────────────────────────────────────────────────────────────
@@ -247,35 +264,35 @@ def get_conversion_funnel(days: int = 90) -> List[Dict[str, Any]]:
     steps = [
         (
             "Landing",
-            execute_query(
+            _row(
                 """
                 SELECT COUNT(DISTINCT COALESCE(CAST(user_id AS TEXT), session_id))
                 FROM   analytics_events
                 WHERE  event_name = 'page_view'
                   AND  date_bucket >= ?
                 """,
-                (cutoff,), fetch_one=True, commit=False,
+                (cutoff,),
             ),
         ),
         (
             "Registration",
-            execute_query(
+            _row(
                 "SELECT COUNT(DISTINCT user_id) FROM analytics_events WHERE event_name = 'register' AND user_id IS NOT NULL AND date_bucket >= ?",
-                (cutoff,), fetch_one=True, commit=False,
+                (cutoff,),
             ),
         ),
         (
             "First Search",
-            execute_query(
+            _row(
                 "SELECT COUNT(DISTINCT user_id) FROM analytics_events WHERE event_name = 'search_start' AND user_id IS NOT NULL AND date_bucket >= ?",
-                (cutoff,), fetch_one=True, commit=False,
+                (cutoff,),
             ),
         ),
         (
             "Credit Purchase",
-            execute_query(
+            _row(
                 "SELECT COUNT(DISTINCT user_id) FROM analytics_events WHERE event_name = 'credit_purchase' AND user_id IS NOT NULL AND date_bucket >= ?",
-                (cutoff,), fetch_one=True, commit=False,
+                (cutoff,),
             ),
         ),
     ]
@@ -335,17 +352,17 @@ def get_session_stats(days: int = 30) -> Dict[str, Any]:
     """
     cutoff = _cutoff_date(days)
 
-    row = execute_query(
+    row = _row(
         """
         SELECT COUNT(DISTINCT session_id)  AS total_sessions,
                COUNT(*)                    AS total_events
         FROM   analytics_events
         WHERE  date_bucket >= ?
         """,
-        (cutoff,), fetch_one=True, commit=False,
+        (cutoff,),
     ) or (0, 0)
 
-    bounce_row = execute_query(
+    bounce_row = _row(
         """
         SELECT COUNT(*) FROM (
             SELECT session_id
@@ -355,7 +372,7 @@ def get_session_stats(days: int = 30) -> Dict[str, Any]:
             HAVING COUNT(*) = 1
         ) single
         """,
-        (cutoff,), fetch_one=True, commit=False,
+        (cutoff,),
     ) or (0,)
 
     total_sessions = int(row[0]) if row[0] else 0
