@@ -8,7 +8,7 @@ Backend
 - Auth with JWT, user approval, and admin roles
 - Credit system with ledgers, rate limits, and credit requests
 - Job lifecycle management with live progress + logs
-- Countries/regions data: USA, UK, UAE, KSA, Australia
+- Countries/regions data: USA, UK, UAE, KSA, Australia, Canada, India, Qatar, Indonesia, Malaysia, Singapore, China, Finland, Germany, France
 - Formatted Excel export (.xlsx) with hyperlinks
 
 Flutter App (mobile + web)

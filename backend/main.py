@@ -387,6 +387,9 @@ _COUNTRY_DATA_FILES: Dict[str, str] = {
     "India": config.INDIA_DATA_FILE,
     "Qatar": config.QATAR_DATA_FILE,
     "Indonesia": config.INDONESIA_DATA_FILE,
+    "Malaysia": config.MALAYSIA_DATA_FILE,
+    "Singapore": config.SINGAPORE_DATA_FILE,
+    "China": config.CHINA_DATA_FILE,
     "Finland": config.FINLAND_DATA_FILE,
     "Germany": config.GERMANY_DATA_FILE,
     "France": config.FRANCE_DATA_FILE,
@@ -402,6 +405,9 @@ _COUNTRY_REGION_FIELD: Dict[str, str] = {
     "India": "state",
     "Qatar": "region",
     "Indonesia": "province",
+    "Malaysia": "state",
+    "Singapore": "region",
+    "China": "province",
     "Finland": "region",
     "Germany": "state",
     "France": "region",
@@ -441,7 +447,7 @@ async def favicon():
 
 @app.get("/api/countries")
 async def get_countries():
-    """Get list of available countries (USA, UK)"""
+    """Get list of available countries."""
     return {"countries": list(_COUNTRY_DATA_FILES.keys())}
 
 # CORS middleware

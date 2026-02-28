@@ -1,0 +1,313 @@
+{
+  "Anhui": [
+    "Hefei, Anhui",
+    "Wuhu, Anhui",
+    "Bengbu, Anhui",
+    "Maanshan, Anhui",
+    "Anqing, Anhui",
+    "Fuyang, Anhui",
+    "Huangshan, Anhui",
+    "Chuzhou, Anhui"
+  ],
+  "Beijing": [
+    "Chaoyang, Beijing",
+    "Haidian, Beijing",
+    "Dongcheng, Beijing",
+    "Xicheng, Beijing",
+    "Fengtai, Beijing",
+    "Shijingshan, Beijing",
+    "Tongzhou, Beijing",
+    "Daxing, Beijing"
+  ],
+  "Chongqing": [
+    "Yuzhong, Chongqing",
+    "Jiangbei, Chongqing",
+    "Nan'an, Chongqing",
+    "Shapingba, Chongqing",
+    "Jiulongpo, Chongqing",
+    "Yubei, Chongqing",
+    "Beibei, Chongqing",
+    "Wanzhou, Chongqing"
+  ],
+  "Fujian": [
+    "Fuzhou, Fujian",
+    "Xiamen, Fujian",
+    "Quanzhou, Fujian",
+    "Zhangzhou, Fujian",
+    "Putian, Fujian",
+    "Ningde, Fujian",
+    "Sanming, Fujian",
+    "Longyan, Fujian"
+  ],
+  "Gansu": [
+    "Lanzhou, Gansu",
+    "Tianshui, Gansu",
+    "Jiuquan, Gansu",
+    "Jiayuguan, Gansu",
+    "Zhangye, Gansu",
+    "Wuwei, Gansu",
+    "Qingyang, Gansu",
+    "Baiyin, Gansu"
+  ],
+  "Guangdong": [
+    "Guangzhou, Guangdong",
+    "Shenzhen, Guangdong",
+    "Dongguan, Guangdong",
+    "Foshan, Guangdong",
+    "Zhuhai, Guangdong",
+    "Zhongshan, Guangdong",
+    "Huizhou, Guangdong",
+    "Jiangmen, Guangdong",
+    "Shantou, Guangdong",
+    "Zhanjiang, Guangdong"
+  ],
+  "Guangxi": [
+    "Nanning, Guangxi",
+    "Guilin, Guangxi",
+    "Liuzhou, Guangxi",
+    "Beihai, Guangxi",
+    "Wuzhou, Guangxi",
+    "Yulin, Guangxi",
+    "Qinzhou, Guangxi",
+    "Fangchenggang, Guangxi"
+  ],
+  "Guizhou": [
+    "Guiyang, Guizhou",
+    "Zunyi, Guizhou",
+    "Liupanshui, Guizhou",
+    "Anshun, Guizhou",
+    "Bijie, Guizhou",
+    "Kaili, Guizhou",
+    "Duyun, Guizhou",
+    "Xingyi, Guizhou"
+  ],
+  "Hainan": [
+    "Haikou, Hainan",
+    "Sanya, Hainan",
+    "Qionghai, Hainan",
+    "Wenchang, Hainan",
+    "Danzhou, Hainan",
+    "Wanning, Hainan",
+    "Lingshui, Hainan",
+    "Chengmai, Hainan"
+  ],
+  "Hebei": [
+    "Shijiazhuang, Hebei",
+    "Tangshan, Hebei",
+    "Qinhuangdao, Hebei",
+    "Baoding, Hebei",
+    "Langfang, Hebei",
+    "Handan, Hebei",
+    "Cangzhou, Hebei",
+    "Zhangjiakou, Hebei"
+  ],
+  "Heilongjiang": [
+    "Harbin, Heilongjiang",
+    "Qiqihar, Heilongjiang",
+    "Mudanjiang, Heilongjiang",
+    "Jiamusi, Heilongjiang",
+    "Daqing, Heilongjiang",
+    "Heihe, Heilongjiang",
+    "Yichun, Heilongjiang",
+    "Jixi, Heilongjiang"
+  ],
+  "Henan": [
+    "Zhengzhou, Henan",
+    "Luoyang, Henan",
+    "Kaifeng, Henan",
+    "Xinxiang, Henan",
+    "Nanyang, Henan",
+    "Xuchang, Henan",
+    "Anyang, Henan",
+    "Shangqiu, Henan"
+  ],
+  "Hubei": [
+    "Wuhan, Hubei",
+    "Yichang, Hubei",
+    "Xiangyang, Hubei",
+    "Jingzhou, Hubei",
+    "Huangshi, Hubei",
+    "Shiyan, Hubei",
+    "Ezhou, Hubei",
+    "Xiaogan, Hubei"
+  ],
+  "Hunan": [
+    "Changsha, Hunan",
+    "Zhuzhou, Hunan",
+    "Xiangtan, Hunan",
+    "Yueyang, Hunan",
+    "Changde, Hunan",
+    "Hengyang, Hunan",
+    "Chenzhou, Hunan",
+    "Yongzhou, Hunan"
+  ],
+  "Inner Mongolia": [
+    "Hohhot, Inner Mongolia",
+    "Baotou, Inner Mongolia",
+    "Ordos, Inner Mongolia",
+    "Chifeng, Inner Mongolia",
+    "Tongliao, Inner Mongolia",
+    "Hulunbuir, Inner Mongolia",
+    "Ulanqab, Inner Mongolia",
+    "Bayannur, Inner Mongolia"
+  ],
+  "Jiangsu": [
+    "Nanjing, Jiangsu",
+    "Suzhou, Jiangsu",
+    "Wuxi, Jiangsu",
+    "Changzhou, Jiangsu",
+    "Nantong, Jiangsu",
+    "Yangzhou, Jiangsu",
+    "Xuzhou, Jiangsu",
+    "Kunshan, Jiangsu",
+    "Yancheng, Jiangsu",
+    "Taizhou, Jiangsu"
+  ],
+  "Jiangxi": [
+    "Nanchang, Jiangxi",
+    "Ganzhou, Jiangxi",
+    "Jiujiang, Jiangxi",
+    "Jingdezhen, Jiangxi",
+    "Yichun, Jiangxi",
+    "Shangrao, Jiangxi",
+    "Pingxiang, Jiangxi",
+    "Fuzhou, Jiangxi"
+  ],
+  "Jilin": [
+    "Changchun, Jilin",
+    "Jilin City, Jilin",
+    "Yanji, Jilin",
+    "Siping, Jilin",
+    "Tonghua, Jilin",
+    "Baishan, Jilin",
+    "Liaoyuan, Jilin",
+    "Baicheng, Jilin"
+  ],
+  "Liaoning": [
+    "Shenyang, Liaoning",
+    "Dalian, Liaoning",
+    "Anshan, Liaoning",
+    "Jinzhou, Liaoning",
+    "Yingkou, Liaoning",
+    "Panjin, Liaoning",
+    "Fushun, Liaoning",
+    "Dandong, Liaoning"
+  ],
+  "Ningxia": [
+    "Yinchuan, Ningxia",
+    "Shizuishan, Ningxia",
+    "Wuzhong, Ningxia",
+    "Guyuan, Ningxia",
+    "Zhongwei, Ningxia"
+  ],
+  "Qinghai": [
+    "Xining, Qinghai",
+    "Golmud, Qinghai",
+    "Delingha, Qinghai",
+    "Haidong, Qinghai",
+    "Yushu, Qinghai",
+    "Tongren, Qinghai"
+  ],
+  "Shaanxi": [
+    "Xi'an, Shaanxi",
+    "Xianyang, Shaanxi",
+    "Baoji, Shaanxi",
+    "Weinan, Shaanxi",
+    "Yulin, Shaanxi",
+    "Hanzhong, Shaanxi",
+    "Ankang, Shaanxi",
+    "Yan'an, Shaanxi"
+  ],
+  "Shandong": [
+    "Jinan, Shandong",
+    "Qingdao, Shandong",
+    "Yantai, Shandong",
+    "Weihai, Shandong",
+    "Weifang, Shandong",
+    "Zibo, Shandong",
+    "Linyi, Shandong",
+    "Jining, Shandong"
+  ],
+  "Shanghai": [
+    "Pudong, Shanghai",
+    "Huangpu, Shanghai",
+    "Jing'an, Shanghai",
+    "Xuhui, Shanghai",
+    "Changning, Shanghai",
+    "Putuo, Shanghai",
+    "Minhang, Shanghai",
+    "Baoshan, Shanghai"
+  ],
+  "Shanxi": [
+    "Taiyuan, Shanxi",
+    "Datong, Shanxi",
+    "Changzhi, Shanxi",
+    "Jincheng, Shanxi",
+    "Yuncheng, Shanxi",
+    "Linfen, Shanxi",
+    "Jinzhong, Shanxi",
+    "Xinzhou, Shanxi"
+  ],
+  "Sichuan": [
+    "Chengdu, Sichuan",
+    "Mianyang, Sichuan",
+    "Deyang, Sichuan",
+    "Nanchong, Sichuan",
+    "Yibin, Sichuan",
+    "Leshan, Sichuan",
+    "Luzhou, Sichuan",
+    "Dujiangyan, Sichuan",
+    "Meishan, Sichuan",
+    "Zigong, Sichuan"
+  ],
+  "Tianjin": [
+    "Heping, Tianjin",
+    "Hexi, Tianjin",
+    "Nankai, Tianjin",
+    "Hebei, Tianjin",
+    "Hongqiao, Tianjin",
+    "Binhai, Tianjin",
+    "Dongli, Tianjin",
+    "Xiqing, Tianjin"
+  ],
+  "Tibet": [
+    "Lhasa, Tibet",
+    "Shigatse, Tibet",
+    "Nyingchi, Tibet",
+    "Qamdo, Tibet",
+    "Nagqu, Tibet",
+    "Shannan, Tibet"
+  ],
+  "Xinjiang": [
+    "Urumqi, Xinjiang",
+    "Kashgar, Xinjiang",
+    "Korla, Xinjiang",
+    "Karamay, Xinjiang",
+    "Yining, Xinjiang",
+    "Turpan, Xinjiang",
+    "Aksu, Xinjiang",
+    "Shihezi, Xinjiang"
+  ],
+  "Yunnan": [
+    "Kunming, Yunnan",
+    "Dali, Yunnan",
+    "Lijiang, Yunnan",
+    "Yuxi, Yunnan",
+    "Qujing, Yunnan",
+    "Jinghong, Yunnan",
+    "Baoshan, Yunnan",
+    "Zhaotong, Yunnan"
+  ],
+  "Zhejiang": [
+    "Hangzhou, Zhejiang",
+    "Ningbo, Zhejiang",
+    "Wenzhou, Zhejiang",
+    "Jiaxing, Zhejiang",
+    "Huzhou, Zhejiang",
+    "Shaoxing, Zhejiang",
+    "Jinhua, Zhejiang",
+    "Taizhou, Zhejiang",
+    "Yiwu, Zhejiang",
+    "Zhoushan, Zhejiang"
+  ]
+}

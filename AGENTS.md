@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Infinity Leads Pro** is a global business lead discovery platform that scrapes Google Business listings from multiple countries (USA, UK, UAE, KSA, Australia). The application consists of:
+**Infinity Leads Pro** is a global business lead discovery platform that scrapes Google Business listings from multiple countries (USA, UK, UAE, KSA, Australia, Canada, India, Qatar, Indonesia, Malaysia, Singapore, China, Finland, Germany, France). The application consists of:
 
 - **Backend**: FastAPI (Python) with Playwright for web scraping
 - **Frontend**: Flutter web application with modern glassmorphic UI

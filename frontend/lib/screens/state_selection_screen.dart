@@ -197,7 +197,23 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
       debugPrint('Error loading initial data: $e');
       if (mounted) {
         setState(() {
-          _availableCountries = ['USA', 'UK', 'UAE', 'KSA', 'Australia'];
+          _availableCountries = [
+            'USA',
+            'UK',
+            'UAE',
+            'KSA',
+            'Australia',
+            'Canada',
+            'India',
+            'Qatar',
+            'Indonesia',
+            'Malaysia',
+            'Singapore',
+            'China',
+            'Finland',
+            'Germany',
+            'France',
+          ];
           // Keep fallback data minimal; only show regions/cities once a country is selected.
           _statesAndCities = _selectedCountry == null
               ? <String, List<String>>{}
@@ -945,6 +961,12 @@ class _StateSelectionScreenState extends State<StateSelectionScreen>
         return 'QA';
       case 'Indonesia':
         return 'ID';
+      case 'Malaysia':
+        return 'MY';
+      case 'Singapore':
+        return 'SG';
+      case 'China':
+        return 'CN';
       case 'Finland':
         return 'FI';
       case 'Germany':

@@ -1,0 +1,155 @@
+{
+  "Johor": [
+    "Johor Bahru, Johor",
+    "Iskandar Puteri, Johor",
+    "Pasir Gudang, Johor",
+    "Batu Pahat, Johor",
+    "Muar, Johor",
+    "Kluang, Johor",
+    "Segamat, Johor",
+    "Pontian, Johor",
+    "Kulai, Johor",
+    "Skudai, Johor"
+  ],
+  "Kedah": [
+    "Alor Setar, Kedah",
+    "Sungai Petani, Kedah",
+    "Kulim, Kedah",
+    "Langkawi, Kedah",
+    "Jitra, Kedah",
+    "Baling, Kedah",
+    "Gurun, Kedah",
+    "Pendang, Kedah"
+  ],
+  "Kelantan": [
+    "Kota Bharu, Kelantan",
+    "Pasir Mas, Kelantan",
+    "Tanah Merah, Kelantan",
+    "Kuala Krai, Kelantan",
+    "Machang, Kelantan",
+    "Tumpat, Kelantan",
+    "Gua Musang, Kelantan",
+    "Bachok, Kelantan"
+  ],
+  "Kuala Lumpur": [
+    "Kuala Lumpur, Kuala Lumpur",
+    "Bukit Bintang, Kuala Lumpur",
+    "Cheras, Kuala Lumpur",
+    "Setapak, Kuala Lumpur",
+    "Mont Kiara, Kuala Lumpur",
+    "Sri Hartamas, Kuala Lumpur",
+    "Wangsa Maju, Kuala Lumpur",
+    "Kepong, Kuala Lumpur",
+    "Bangsar, Kuala Lumpur",
+    "KL Sentral, Kuala Lumpur"
+  ],
+  "Labuan": [
+    "Labuan, Labuan",
+    "Victoria, Labuan",
+    "Rancha-Rancha, Labuan",
+    "Kiamsam, Labuan",
+    "Pohon Batu, Labuan"
+  ],
+  "Melaka": [
+    "Melaka City, Melaka",
+    "Ayer Keroh, Melaka",
+    "Alor Gajah, Melaka",
+    "Jasin, Melaka",
+    "Masjid Tanah, Melaka",
+    "Batu Berendam, Melaka",
+    "Merlimau, Melaka"
+  ],
+  "Negeri Sembilan": [
+    "Seremban, Negeri Sembilan",
+    "Port Dickson, Negeri Sembilan",
+    "Nilai, Negeri Sembilan",
+    "Bahau, Negeri Sembilan",
+    "Tampin, Negeri Sembilan",
+    "Kuala Pilah, Negeri Sembilan",
+    "Rembau, Negeri Sembilan"
+  ],
+  "Pahang": [
+    "Kuantan, Pahang",
+    "Temerloh, Pahang",
+    "Bentong, Pahang",
+    "Raub, Pahang",
+    "Cameron Highlands, Pahang",
+    "Pekan, Pahang",
+    "Jerantut, Pahang",
+    "Rompin, Pahang"
+  ],
+  "Penang": [
+    "George Town, Penang",
+    "Butterworth, Penang",
+    "Bukit Mertajam, Penang",
+    "Bayan Lepas, Penang",
+    "Seberang Jaya, Penang",
+    "Tanjung Tokong, Penang",
+    "Air Itam, Penang",
+    "Batu Ferringhi, Penang"
+  ],
+  "Perak": [
+    "Ipoh, Perak",
+    "Taiping, Perak",
+    "Teluk Intan, Perak",
+    "Sitiawan, Perak",
+    "Lumut, Perak",
+    "Kampar, Perak",
+    "Tapah, Perak",
+    "Seri Manjung, Perak"
+  ],
+  "Perlis": [
+    "Kangar, Perlis",
+    "Arau, Perlis",
+    "Kuala Perlis, Perlis",
+    "Padang Besar, Perlis"
+  ],
+  "Putrajaya": [
+    "Putrajaya, Putrajaya",
+    "Presint 1, Putrajaya",
+    "Presint 8, Putrajaya",
+    "Presint 14, Putrajaya",
+    "Presint 15, Putrajaya"
+  ],
+  "Sabah": [
+    "Kota Kinabalu, Sabah",
+    "Sandakan, Sabah",
+    "Tawau, Sabah",
+    "Lahad Datu, Sabah",
+    "Keningau, Sabah",
+    "Kudat, Sabah",
+    "Semporna, Sabah",
+    "Kota Belud, Sabah"
+  ],
+  "Sarawak": [
+    "Kuching, Sarawak",
+    "Miri, Sarawak",
+    "Sibu, Sarawak",
+    "Bintulu, Sarawak",
+    "Kota Samarahan, Sarawak",
+    "Sri Aman, Sarawak",
+    "Sarikei, Sarawak",
+    "Limbang, Sarawak"
+  ],
+  "Selangor": [
+    "Shah Alam, Selangor",
+    "Petaling Jaya, Selangor",
+    "Subang Jaya, Selangor",
+    "Klang, Selangor",
+    "Puchong, Selangor",
+    "Cyberjaya, Selangor",
+    "Kajang, Selangor",
+    "Ampang Jaya, Selangor",
+    "Sepang, Selangor",
+    "Rawang, Selangor"
+  ],
+  "Terengganu": [
+    "Kuala Terengganu, Terengganu",
+    "Dungun, Terengganu",
+    "Kemaman, Terengganu",
+    "Kuala Nerus, Terengganu",
+    "Besut, Terengganu",
+    "Marang, Terengganu",
+    "Setiu, Terengganu"
+  ]
+}
