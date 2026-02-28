@@ -3211,108 +3211,119 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Future<void> _showGrantCreditsDialog(Map<String, dynamic> user) async {
     final amountController = TextEditingController();
     final reasonController = TextEditingController();
+    bool isGranting = false;
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          padding: AppSpacing.paddingMd,
-          decoration: BoxDecoration(
-            color: AppColors.surfaceDark,
-            borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(color: AppColors.elevatedCardDark),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.add_card, color: AppColors.successGreen, size: 32),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                'Grant Credits',
-                style: AppTypography.titleMedium.copyWith(color: Colors.white),
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                'to ${user['username']}',
-                style: AppTypography.bodySmall.copyWith(color: Colors.white60),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              TextField(
-                controller: amountController,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Amount',
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: AppColors.elevatedCardDark,
-                  border: OutlineInputBorder(
-                    borderRadius: AppSpacing.borderRadiusMd,
-                    borderSide: BorderSide.none,
-                  ),
-                  prefixIcon: const Icon(Icons.monetization_on,
-                      color: AppColors.successGreen),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            padding: AppSpacing.paddingMd,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              borderRadius: AppSpacing.borderRadiusLg,
+              border: Border.all(color: AppColors.elevatedCardDark),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add_card, color: AppColors.successGreen, size: 32),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  'Grant Credits',
+                  style: AppTypography.titleMedium.copyWith(color: Colors.white),
                 ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              TextField(
-                controller: reasonController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Reason (optional)',
-                  labelStyle: const TextStyle(color: Colors.white60),
-                  filled: true,
-                  fillColor: AppColors.elevatedCardDark,
-                  border: OutlineInputBorder(
-                    borderRadius: AppSpacing.borderRadiusMd,
-                    borderSide: BorderSide.none,
-                  ),
-                  prefixIcon: const Icon(Icons.note, color: Colors.white54),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  'to ${user['username']}',
+                  style: AppTypography.bodySmall.copyWith(color: Colors.white60),
                 ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Row(
-                children: [
-                  Expanded(
-                    child: _smallButton(
-                      label: 'Cancel',
-                      color: AppColors.elevatedCardDark,
-                      textColor: Colors.white,
-                      onTap: () => Navigator.pop(context, false),
+                const SizedBox(height: AppSpacing.md),
+                TextField(
+                  controller: amountController,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Amount',
+                    labelStyle: const TextStyle(color: Colors.white60),
+                    filled: true,
+                    fillColor: AppColors.elevatedCardDark,
+                    border: OutlineInputBorder(
+                      borderRadius: AppSpacing.borderRadiusMd,
+                      borderSide: BorderSide.none,
                     ),
+                    prefixIcon: const Icon(Icons.monetization_on,
+                        color: AppColors.successGreen),
                   ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: _smallButton(
-                      label: 'Grant',
-                      color: AppColors.successGreen,
-                      onTap: () async {
-                        final amount = int.tryParse(amountController.text);
-                        if (amount == null || amount <= 0) {
-                          _showSnackBar('Please enter a valid amount',
-                              AppColors.dangerRed);
-                          return;
-                        }
-                        try {
-                          await _apiService.grantCredits(
-                            userId: user['id'],
-                            amount: amount,
-                            reason: reasonController.text.isEmpty
-                                ? null
-                                : reasonController.text,
-                          );
-                          if (context.mounted) Navigator.pop(context, true);
-                        } catch (e) {
-                          _showSnackBar('Error granting credits: $e',
-                              AppColors.dangerRed);
-                        }
-                      },
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextField(
+                  controller: reasonController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Reason (optional)',
+                    labelStyle: const TextStyle(color: Colors.white60),
+                    filled: true,
+                    fillColor: AppColors.elevatedCardDark,
+                    border: OutlineInputBorder(
+                      borderRadius: AppSpacing.borderRadiusMd,
+                      borderSide: BorderSide.none,
                     ),
+                    prefixIcon: const Icon(Icons.note, color: Colors.white54),
                   ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _smallButton(
+                        label: 'Cancel',
+                        color: AppColors.elevatedCardDark,
+                        textColor: Colors.white,
+                        onTap: isGranting ? () {} : () => Navigator.pop(context, false),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: _smallButton(
+                        label: isGranting ? 'Granting...' : 'Grant',
+                        color: isGranting
+                            ? AppColors.successGreen.withValues(alpha: 0.5)
+                            : AppColors.successGreen,
+                        onTap: isGranting
+                            ? () {}
+                            : () async {
+                                final amount = int.tryParse(amountController.text);
+                                if (amount == null || amount <= 0) {
+                                  _showSnackBar('Please enter a valid amount',
+                                      AppColors.dangerRed);
+                                  return;
+                                }
+                                setDialogState(() => isGranting = true);
+                                try {
+                                  await _apiService.grantCredits(
+                                    userId: user['id'],
+                                    amount: amount,
+                                    reason: reasonController.text.isEmpty
+                                        ? null
+                                        : reasonController.text,
+                                  );
+                                  if (context.mounted) Navigator.pop(context, true);
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    setDialogState(() => isGranting = false);
+                                    _showSnackBar('Error granting credits: $e',
+                                        AppColors.dangerRed);
+                                  }
+                                }
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
