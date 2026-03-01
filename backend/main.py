@@ -342,6 +342,34 @@ def _startup_init_db() -> None:
     init_database()
     # Ensure feature flags exist for frontend gating.
     ensure_default_admin_settings()
+
+    # ── Startup recovery ────────────────────────────────────────────────────
+    # Any job still in 'running' or 'pending' when the server (re)starts was
+    # interrupted mid-flight.  Mark them failed so they never stay stuck.
+    try:
+        _conn = get_db()
+        _cur = _conn.cursor()
+        _cur.execute(
+            """
+            UPDATE jobs
+               SET status      = 'failed',
+                   error       = 'Job interrupted: server restarted',
+                   completed_at = ?
+             WHERE status IN ('running', 'pending')
+            """,
+            (datetime.now().isoformat(),),
+        )
+        _recovered = _cur.rowcount
+        _conn.commit()
+        _conn.close()
+        if _recovered:
+            logging.getLogger(__name__).warning(
+                "Startup recovery: marked %d interrupted job(s) as failed.", _recovered
+            )
+    except Exception as _e:
+        logging.getLogger(__name__).error(
+            "Startup recovery failed (non-fatal): %s", _e
+        )
     # Ensure analytics tables exist even if migration runner was skipped.
     try:
         from db.base import execute_query
@@ -434,6 +462,58 @@ def _find_country_for_region(region: str) -> Optional[str]:
 # Audit middleware (attaches request_id, client_ip, user_agent to request.state)
 from audit.middleware import AuditMiddleware
 app.add_middleware(AuditMiddleware)
+
+# ── Stuck-job watchdog ───────────────────────────────────────────────────────
+# Any job in 'running' or 'pending' for longer than JOB_WATCHDOG_HOURS is
+# considered hung and is automatically marked as failed.  This is a last-resort
+# safety net on top of the per-city timeout and startup recovery.
+_JOB_WATCHDOG_HOURS = int(os.getenv("JOB_WATCHDOG_HOURS", "2"))
+_JOB_WATCHDOG_INTERVAL = int(os.getenv("JOB_WATCHDOG_INTERVAL_SECS", "300"))  # every 5 min
+
+
+async def _stuck_job_watchdog():
+    """Background coroutine that periodically reaps stuck jobs."""
+    _wlog = logging.getLogger(__name__ + ".watchdog")
+    _wlog.info(
+        "Stuck-job watchdog started (threshold=%dh, interval=%ds)",
+        _JOB_WATCHDOG_HOURS,
+        _JOB_WATCHDOG_INTERVAL,
+    )
+    while True:
+        await asyncio.sleep(_JOB_WATCHDOG_INTERVAL)
+        try:
+            _threshold = (
+                datetime.now() - timedelta(hours=_JOB_WATCHDOG_HOURS)
+            ).isoformat()
+            _conn = get_db()
+            try:
+                _cur = _conn.cursor()
+                _cur.execute(
+                    """
+                    UPDATE jobs
+                       SET status       = 'failed',
+                           error        = 'Job timed out: exceeded maximum allowed duration',
+                           completed_at = ?
+                     WHERE status IN ('running', 'pending')
+                       AND created_at  < ?
+                    """,
+                    (datetime.now().isoformat(), _threshold),
+                )
+                _reaped = _cur.rowcount
+                _conn.commit()
+            finally:
+                _conn.close()
+
+            if _reaped:
+                _wlog.warning("Watchdog reaped %d stuck job(s).", _reaped)
+        except Exception as _we:
+            _wlog.error("Watchdog error (non-fatal): %s", _we)
+
+
+@app.on_event("startup")
+async def _startup_watchdog():
+    asyncio.create_task(_stuck_job_watchdog())
+
 
 @app.get("/")
 async def root():
@@ -3083,8 +3163,11 @@ class GoogleBusinessScraper:
             search_url = f"https://www.google.com/maps/search/{quote_plus(search_term)}"
             logger.info(f"Searching Google Maps for: {search_term}")
 
-            # Navigate to search page
-            await self.page.goto(search_url, wait_until="networkidle", timeout=30000)
+            # Navigate to search page.
+            # Use "domcontentloaded" instead of "networkidle": Google Maps keeps
+            # background XHRs alive indefinitely, so "networkidle" can hang for
+            # the full 30 s on every request (or forever if throttled).
+            await self.page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
 
             # Wait for results to load
             try:
@@ -3371,12 +3454,41 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
             logger.info(f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}")
 
             # Scrape location (no DB connection held across this await).
-            results = await scraper.scrape_location(
-                request.category,
-                city,
-                state,
-                request.max_results_per_city,
-            )
+            # Hard per-city timeout: 3 min covers even slow connections; if the
+            # browser hangs past that we skip the city rather than blocking forever.
+            _PER_CITY_TIMEOUT = 180.0
+            try:
+                results = await asyncio.wait_for(
+                    scraper.scrape_location(
+                        request.category,
+                        city,
+                        state,
+                        request.max_results_per_city,
+                    ),
+                    timeout=_PER_CITY_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"City scraping timed out after {int(_PER_CITY_TIMEOUT)}s "
+                    f"for {city}, {state} — skipping city"
+                )
+                results = []
+
+                def _timeout_log(conn, cursor):
+                    cursor.execute(
+                        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                        (
+                            job_id,
+                            f"Timeout scraping {city}, {state} — city skipped",
+                            datetime.now().isoformat(),
+                        ),
+                    )
+                    conn.commit()
+
+                try:
+                    _run_db_block("timeout log", _timeout_log)
+                except Exception:
+                    pass
 
             all_results.extend(results)
 
@@ -3517,48 +3629,85 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
     except Exception as e:
         # Log full traceback for diagnostics
         logger.exception(f"Job {job_id} failed with error: {repr(e)}")
-        
-        # Get fresh connection for error handling (original connection may be stale)
-        try:
-            error_conn = get_db()
-            try:
-                error_cursor = error_conn.cursor()
-                error_cursor.execute("""
-                    UPDATE jobs SET status = ?, error = ?, completed_at = ?
-                    WHERE job_id = ?
-                """, ("failed", repr(e), datetime.now().isoformat(), job_id))
-                error_conn.commit()
-                
-                error_cursor.execute("INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                                  (job_id, f"Job failed with error: {repr(e)}", datetime.now().isoformat()))
-                error_conn.commit()
-            finally:
-                error_conn.close()
-        except Exception as db_error:
-            logger.error(f"Failed to record job error to database: {repr(db_error)}")
 
-        record_job_activity_event(
-            job_id=job_id,
-            user_id=user_id,
-            event_type="job_failed",
-            job_status="failed",
-            job_type=request.category,
-            result_count=len(all_results),
-            error_message=repr(e),
-            metadata={
-                "total_cities": len(request.cities_data),
-                "max_results_per_city": request.max_results_per_city,
-            },
-        )
-        record_audit_event(
-            "job.failed",
-            actor_user_id=user_id,
-            target_type="job",
-            target_id=job_id,
-            status="failure",
-            failure_reason=repr(e),
-            after={"status": "failed"},
-        )
+        # ── Bulletproof DB status update ─────────────────────────────────────
+        # Attempt up to 3 times with a small back-off so transient DB locks /
+        # connection drops don't leave the job perpetually stuck as 'running'.
+        _fail_recorded = False
+        _error_msg = repr(e)
+        _completed_ts = datetime.now().isoformat()
+        for _attempt in range(3):
+            try:
+                _ec = get_db()
+                try:
+                    _ecur = _ec.cursor()
+                    _ecur.execute(
+                        """
+                        UPDATE jobs
+                           SET status      = 'failed',
+                               error       = ?,
+                               completed_at = ?
+                         WHERE job_id = ?
+                        """,
+                        (_error_msg, _completed_ts, job_id),
+                    )
+                    _ec.commit()
+                    _ecur.execute(
+                        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+                        (job_id, f"Job failed: {_error_msg}", _completed_ts),
+                    )
+                    _ec.commit()
+                    _fail_recorded = True
+                finally:
+                    try:
+                        _ec.close()
+                    except Exception:
+                        pass
+                break  # success — stop retrying
+            except Exception as _db_err:
+                logger.error(
+                    f"Failed to record job failure to DB (attempt {_attempt + 1}/3): {repr(_db_err)}"
+                )
+                import time as _time
+                _time.sleep(0.5 * (_attempt + 1))
+
+        if not _fail_recorded:
+            logger.critical(
+                f"CRITICAL: could not mark job {job_id} as failed after 3 attempts — "
+                f"it may remain stuck as 'running' in the database."
+            )
+
+        # Record activity / audit events AFTER the DB update so these never
+        # shadow a DB error (they run in a separate try block).
+        try:
+            record_job_activity_event(
+                job_id=job_id,
+                user_id=user_id,
+                event_type="job_failed",
+                job_status="failed",
+                job_type=request.category,
+                result_count=len(all_results),
+                error_message=_error_msg,
+                metadata={
+                    "total_cities": len(request.cities_data),
+                    "max_results_per_city": request.max_results_per_city,
+                },
+            )
+        except Exception as _ae:
+            logger.error(f"Failed to record job_failed activity event: {repr(_ae)}")
+
+        try:
+            record_audit_event(
+                "job.failed",
+                actor_user_id=user_id,
+                target_type="job",
+                target_id=job_id,
+                status="failure",
+                failure_reason=_error_msg,
+                after={"status": "failed"},
+            )
+        except Exception as _ae:
+            logger.error(f"Failed to record job.failed audit event: {repr(_ae)}")
     
     finally:
         await scraper.close()
