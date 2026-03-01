@@ -2359,24 +2359,18 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         ),
         const SizedBox(width: AppSpacing.sm),
         if (isRunning)
-          OutlinedButton.icon(
+          IconButton(
             onPressed: () => _confirmCancel(scraperProvider),
-            style: OutlinedButton.styleFrom(
+            tooltip: 'Cancel job',
+            style: IconButton.styleFrom(
               side:
                   BorderSide(color: _ScrapeColors.rose.withValues(alpha: 0.7)),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.xs,
-              ),
+              foregroundColor: _ScrapeColors.rose,
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              minimumSize: const Size(36, 36),
+              maximumSize: const Size(36, 36),
             ),
-            icon: const Icon(Icons.stop_circle_rounded, size: 18),
-            label: Text(
-              'Cancel',
-              style: AppTypography.labelSmall.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            icon: const Icon(Icons.stop_circle_rounded, size: 20),
           ),
       ],
     );

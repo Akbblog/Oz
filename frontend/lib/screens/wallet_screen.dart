@@ -752,11 +752,42 @@ class _WalletScreenState extends State<WalletScreen>
       itemCount: _creditHistory.length,
       itemBuilder: (context, index) {
         final tx = _creditHistory[index];
-        final type = tx['type'] ?? '';
-        final isCredit = type == 'credit';
-        final amount = tx['amount'] ?? 0;
-        final description = tx['description'] ?? '';
+        final rawAmount = tx['amount'] ?? 0;
+        final amount = rawAmount is num ? rawAmount.toInt() : 0;
+        final isCredit = amount > 0;
+        final absAmount = amount.abs();
+        final reason = (tx['reason'] ?? tx['description'] ?? '') as String;
+        final txType = (tx['transaction_type'] ?? tx['type'] ?? '') as String;
         final createdAt = tx['created_at'] ?? '';
+
+        // Build a human-readable label from reason + transaction type.
+        String label;
+        if (reason.isNotEmpty) {
+          label = reason;
+        } else {
+          const typeLabels = {
+            'debit': 'Job charge',
+            'credit': 'Credit added',
+            'refund': 'Refund',
+            'bonus': 'Bonus credits',
+            'promotional': 'Promotional credits',
+          };
+          label = typeLabels[txType] ?? (isCredit ? 'Credit' : 'Debit');
+        }
+
+        // Format date: "Mar 01, 19:35" style.
+        String formattedDate = createdAt;
+        try {
+          final dt = DateTime.parse(createdAt).toLocal();
+          const months = [
+            '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+          ];
+          formattedDate =
+              '${months[dt.month]} ${dt.day.toString().padLeft(2, '0')}, '
+              '${dt.hour.toString().padLeft(2, '0')}:'
+              '${dt.minute.toString().padLeft(2, '0')}';
+        } catch (_) {}
 
         return Container(
           margin: const EdgeInsets.only(bottom: AppSpacing.xs),
@@ -789,7 +820,7 @@ class _WalletScreenState extends State<WalletScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      description,
+                      label,
                       style: AppTypography.labelMedium.copyWith(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,
@@ -798,7 +829,7 @@ class _WalletScreenState extends State<WalletScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
-                      createdAt,
+                      formattedDate,
                       style: AppTypography.bodySmall.copyWith(
                         color: Colors.white38,
                         fontSize: 11,
@@ -808,7 +839,7 @@ class _WalletScreenState extends State<WalletScreen>
                 ),
               ),
               Text(
-                '${isCredit ? '+' : '-'}$amount',
+                '${isCredit ? '+' : '−'}$absAmount',
                 style: AppTypography.labelLarge.copyWith(
                   color:
                       isCredit ? AppColors.successGreen : AppColors.dangerRed,

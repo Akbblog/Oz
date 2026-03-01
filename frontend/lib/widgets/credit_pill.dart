@@ -256,4 +256,3 @@ class _CreditPillState extends State<CreditPill> with TickerProviderStateMixin {
     );
   }
 }
-
