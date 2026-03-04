@@ -23,7 +23,7 @@ class Environment {
     }
 
     // Production mobile/desktop fallback: use deployed Railway backend.
-    return 'https://oz-production.up.railway.app';
+    return 'https://oz-production-2309.up.railway.app';
   }
 
   /// Check if we're in production mode
