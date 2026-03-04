@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 /// Environment configuration for API endpoints
 /// Automatically detects localhost for development or uses production URL
 class Environment {
+  static const String _productionApiFallback =
+      'https://oz-production-2309.up.railway.app';
+
   /// Get the appropriate API URL based on the environment
   static String get apiUrl {
     // Allow override via const environment variable (for build-time config)
@@ -17,13 +20,14 @@ class Environment {
       return 'http://localhost:8001';
     }
 
-    // Production web: use same-origin so hosting rewrites/proxy can route /api.
+    // Production web fallback: call Railway directly when no build-time API_URL
+    // was provided, avoiding 404s from missing host rewrites.
     if (kIsWeb) {
-      return '';
+      return _productionApiFallback;
     }
 
     // Production mobile/desktop fallback: use deployed Railway backend.
-    return 'https://oz-production-2309.up.railway.app';
+    return _productionApiFallback;
   }
 
   /// Check if we're in production mode
