@@ -2798,6 +2798,9 @@ async def get_user_credits_admin(user_id: int, admin: dict = Depends(get_admin_u
 # ==================== SCRAPER ====================
 
 class GoogleBusinessScraper:
+    # Disable WhatsApp scraping to reduce per-site parsing overhead.
+    _COLLECT_WHATSAPP = False
+
     _EMAIL_REGEX = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
     _WHATSAPP_LINK_REGEX = re.compile(
         r"""
@@ -2926,6 +2929,14 @@ class GoogleBusinessScraper:
             "whatsapp_url": "",
         }
 
+    @classmethod
+    def _has_required_contact_details(cls, details: Dict[str, str]) -> bool:
+        if (details.get("email") or "").strip():
+            return True
+        if cls._COLLECT_WHATSAPP and (details.get("whatsapp_url") or "").strip():
+            return True
+        return False
+
     @staticmethod
     def _merge_contact_details(primary: Dict[str, str], secondary: Dict[str, str]) -> Dict[str, str]:
         return {
@@ -3047,7 +3058,11 @@ class GoogleBusinessScraper:
         details = cls._empty_contact_details()
         if raw_html:
             details["email"] = cls._extract_first_email(raw_html)
-            details = cls._merge_contact_details(details, cls._extract_first_whatsapp(raw_html))
+            if cls._COLLECT_WHATSAPP:
+                details = cls._merge_contact_details(details, cls._extract_first_whatsapp(raw_html))
+
+        if cls._has_required_contact_details(details):
+            return details
 
         for href in hrefs or []:
             href_str = str(href).strip()
@@ -3057,8 +3072,10 @@ class GoogleBusinessScraper:
             href_lower = href_str.lower()
             if not details["email"] and href_lower.startswith("mailto:"):
                 details["email"] = cls._extract_first_email(href_str)
+                if cls._has_required_contact_details(details):
+                    break
 
-            if details["whatsapp_url"]:
+            if not cls._COLLECT_WHATSAPP or details["whatsapp_url"]:
                 continue
 
             whatsapp_details = cls._parse_whatsapp_link(href_str)
@@ -3068,7 +3085,7 @@ class GoogleBusinessScraper:
 
             details = cls._merge_contact_details(details, whatsapp_details)
 
-            if details["email"] and details["whatsapp_url"]:
+            if cls._has_required_contact_details(details):
                 break
 
         return details
@@ -3098,7 +3115,7 @@ class GoogleBusinessScraper:
                 list(hrefs or []),
                 base_url=target_url,
             )
-            if details["email"] and details["whatsapp_url"]:
+            if self._has_required_contact_details(details):
                 return details
 
             if not hrefs:
@@ -3128,7 +3145,7 @@ class GoogleBusinessScraper:
                         base_url=candidate_url,
                     )
                     details = self._merge_contact_details(details, candidate_details)
-                    if details["email"] and details["whatsapp_url"]:
+                    if self._has_required_contact_details(details):
                         return details
                 except Exception:
                     continue
@@ -3270,8 +3287,6 @@ class GoogleBusinessScraper:
                         'phone': phone,
                         'website': website,
                         'email': contact_details.get("email", ""),
-                        'whatsapp': contact_details.get("whatsapp", ""),
-                        'whatsapp_url': contact_details.get("whatsapp_url", ""),
                         'address': address,
                         'category': category,
                         'city': city,
@@ -3501,9 +3516,7 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                                 job_id,
                                 r.get("business_name"),
                                 r.get("phone"),
-                                r.get("whatsapp"),
                                 r.get("website"),
-                                r.get("whatsapp_url"),
                                 r.get("email"),
                                 r.get("address"),
                                 r.get("category"),
@@ -3514,8 +3527,8 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
                         )
                     cursor.executemany(
                         """
-                        INSERT INTO results (job_id, business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO results (job_id, business_name, phone, website, email, address, category, city, state, google_maps_url)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         rows,
                     )
@@ -3569,9 +3582,7 @@ async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
             fieldnames = [
                 "business_name",
                 "phone",
-                "whatsapp",
                 "website",
-                "whatsapp_url",
                 "email",
                 "address",
                 "category",
