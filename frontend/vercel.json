@@ -4,7 +4,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://sku-returned-preview-forest.trycloudflare.com/api/$1"
+      "destination": "https://dev.progresslms.io/server/api/$1"
     },
     {
       "source": "/(.*)",
