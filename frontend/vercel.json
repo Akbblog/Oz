@@ -4,7 +4,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://dev.progresslms.io/server/api/$1"
+      "destination": "https://server.dev.progresslms.io/api/$1"
     },
     {
       "source": "/(.*)",

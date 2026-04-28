@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 /// Automatically detects localhost for development or uses production URL
 class Environment {
   static const String _productionApiFallback =
-      'https://oz-production-2309.up.railway.app';
+      'https://server.dev.progresslms.io';
 
   /// Get the appropriate API URL based on the environment
   static String get apiUrl {

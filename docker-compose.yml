@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -31,6 +33,15 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=eyJhIjoiYTZiMjAxZjc1ZTVhOThjYTFiM2ZiNjM4N2RhMjQ0OGUiLCJ0IjoiMzBiYzAzYWMtY2ZhMS00NWJmLTg2ZGUtZDNiYjJhZTEzNjM5IiwicyI6Ik9HRm1NVGhrTURjdFlqUmxNUzAwWVRFMExUZzRZVE10T1RRM04yVTFZVGN5WkRNdyJ9
+    restart: unless-stopped
+    depends_on:
+      - backend
 
 volumes:
   mysql_data:
