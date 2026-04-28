@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 /// Environment configuration for API endpoints
 /// Automatically detects localhost for development or uses production URL
 class Environment {
+  static const String _legacyRailwayApiUrl =
+      'https://oz-production-2309.up.railway.app';
   static const String _productionApiFallback =
       'https://server.dev.progresslms.io';
 
@@ -10,8 +12,11 @@ class Environment {
   static String get apiUrl {
     // Allow override via const environment variable (for build-time config)
     const envApiUrl = String.fromEnvironment('API_URL', defaultValue: '');
-    if (envApiUrl.isNotEmpty) {
-      return envApiUrl;
+    final normalizedEnvApiUrl =
+        envApiUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+    if (normalizedEnvApiUrl.isNotEmpty &&
+        normalizedEnvApiUrl != _legacyRailwayApiUrl) {
+      return normalizedEnvApiUrl;
     }
 
     // Development fallback: point to local backend.
@@ -20,13 +25,14 @@ class Environment {
       return 'http://localhost:8001';
     }
 
-    // Production web fallback: call Railway directly when no build-time API_URL
-    // was provided, avoiding 404s from missing host rewrites.
+    // Production web fallback: use the current frontend origin and let the host
+    // rewrite /api to the active backend. This avoids stale compiled backend URLs
+    // and browser CORS preflights for normal Vercel deployments.
     if (kIsWeb) {
-      return _productionApiFallback;
+      return '';
     }
 
-    // Production mobile/desktop fallback: use deployed Railway backend.
+    // Production mobile/desktop fallback: use deployed backend directly.
     return _productionApiFallback;
   }
 
