@@ -4,7 +4,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "http://localhost:8000/api/$1"
+      "destination": "https://sku-returned-preview-forest.trycloudflare.com/api/$1"
     },
     {
       "source": "/(.*)",
