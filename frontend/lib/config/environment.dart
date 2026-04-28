@@ -5,8 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 class Environment {
   static const String _legacyRailwayApiUrl =
       'https://oz-production-2309.up.railway.app';
-  static const String _productionApiFallback =
-      'https://server.dev.progresslms.io';
+  static const String _productionApiFallback = 'https://server.progresslms.io';
 
   /// Get the appropriate API URL based on the environment
   static String get apiUrl {
