@@ -19,7 +19,6 @@ import asyncio
 import sys
 import secrets
 import hashlib
-from html import unescape
 import re
 from urllib.parse import quote_plus, urlparse, parse_qs, unquote, urljoin
 import base64
@@ -2798,22 +2797,7 @@ async def get_user_credits_admin(user_id: int, admin: dict = Depends(get_admin_u
 # ==================== SCRAPER ====================
 
 class GoogleBusinessScraper:
-    # Disable WhatsApp scraping to reduce per-site parsing overhead.
-    _COLLECT_WHATSAPP = False
-
     _EMAIL_REGEX = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
-    _WHATSAPP_LINK_REGEX = re.compile(
-        r"""
-        (?:
-            https?://(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)[^\s"'<>]+
-            |
-            whatsapp://send\?[^\s"'<>]+
-            |
-            (?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)[^\s"'<>]+
-        )
-        """,
-        re.IGNORECASE | re.VERBOSE,
-    )
 
     def __init__(self, headless: bool = None):
         """Create scraper instance. headless defaults to env PLAYWRIGHT_HEADLESS (True)"""
@@ -2925,127 +2909,17 @@ class GoogleBusinessScraper:
     def _empty_contact_details() -> Dict[str, str]:
         return {
             "email": "",
-            "whatsapp": "",
-            "whatsapp_url": "",
         }
 
     @classmethod
     def _has_required_contact_details(cls, details: Dict[str, str]) -> bool:
-        if (details.get("email") or "").strip():
-            return True
-        if cls._COLLECT_WHATSAPP and (details.get("whatsapp_url") or "").strip():
-            return True
-        return False
+        return bool((details.get("email") or "").strip())
 
     @staticmethod
     def _merge_contact_details(primary: Dict[str, str], secondary: Dict[str, str]) -> Dict[str, str]:
         return {
             "email": (primary.get("email") or secondary.get("email") or "").strip(),
-            "whatsapp": (primary.get("whatsapp") or secondary.get("whatsapp") or "").strip(),
-            "whatsapp_url": (primary.get("whatsapp_url") or secondary.get("whatsapp_url") or "").strip(),
         }
-
-    @staticmethod
-    def _normalize_whatsapp_number(raw_number: str) -> str:
-        if not raw_number:
-            return ""
-
-        decoded = unescape(unquote(str(raw_number))).strip()
-        if not decoded:
-            return ""
-
-        candidate = re.sub(r"[^\d+]", "", decoded)
-        if not candidate:
-            return ""
-
-        if candidate.startswith("00"):
-            candidate = f"+{candidate[2:]}"
-
-        if candidate.startswith("+"):
-            digits = re.sub(r"\D", "", candidate[1:])
-            normalized = f"+{digits}" if digits else ""
-        else:
-            digits = re.sub(r"\D", "", candidate)
-            normalized = digits
-
-        if not normalized:
-            return ""
-
-        digits_only = normalized.lstrip("+")
-        if len(digits_only) < 7 or len(digits_only) > 15:
-            return ""
-
-        return normalized
-
-    @classmethod
-    def _parse_whatsapp_link(cls, raw_link: str) -> Dict[str, str]:
-        details = cls._empty_contact_details()
-        if not raw_link:
-            return details
-
-        candidate = unescape(str(raw_link)).strip(" \t\r\n\"'<>(),;")
-        if not candidate:
-            return details
-
-        lower = candidate.lower()
-        if lower.startswith(("mailto:", "tel:", "javascript:")):
-            return details
-
-        parsed = urlparse(candidate)
-        if not parsed.scheme and not candidate.startswith("//"):
-            parsed = urlparse(f"https://{candidate}")
-        elif candidate.startswith("//"):
-            parsed = urlparse(f"https:{candidate}")
-
-        scheme = (parsed.scheme or "").lower()
-        host = (parsed.netloc or "").lower()
-        path = parsed.path or ""
-        query = parse_qs(parsed.query or "")
-
-        is_whatsapp_host = host.endswith("wa.me") or host.endswith("whatsapp.com")
-        is_whatsapp_scheme = scheme == "whatsapp"
-        if not is_whatsapp_host and not is_whatsapp_scheme:
-            return details
-
-        phone_candidate = ""
-        if query.get("phone"):
-            phone_candidate = (query.get("phone") or [""])[0]
-        elif host.endswith("wa.me"):
-            segments = [segment for segment in path.split("/") if segment]
-            if segments:
-                first_segment = segments[0]
-                if first_segment.lower() not in ("send", "message"):
-                    phone_candidate = first_segment
-
-        whatsapp_number = cls._normalize_whatsapp_number(phone_candidate)
-        if whatsapp_number:
-            details["whatsapp"] = whatsapp_number
-            details["whatsapp_url"] = f"https://wa.me/{whatsapp_number.lstrip('+')}"
-            return details
-
-        if parsed.scheme and parsed.netloc:
-            details["whatsapp_url"] = parsed._replace(fragment="").geturl()
-        elif candidate:
-            if candidate.startswith("//"):
-                details["whatsapp_url"] = f"https:{candidate}"
-            elif "://" in candidate:
-                details["whatsapp_url"] = candidate
-            else:
-                details["whatsapp_url"] = f"https://{candidate.lstrip('/')}"
-        return details
-
-    @classmethod
-    def _extract_first_whatsapp(cls, raw_text: str) -> Dict[str, str]:
-        details = cls._empty_contact_details()
-        if not raw_text:
-            return details
-
-        decoded_text = unescape(raw_text)
-        for match in cls._WHATSAPP_LINK_REGEX.finditer(decoded_text):
-            whatsapp_details = cls._parse_whatsapp_link(match.group(0))
-            if whatsapp_details.get("whatsapp_url"):
-                return whatsapp_details
-        return details
 
     @classmethod
     def _extract_contact_details_from_page(
@@ -3058,8 +2932,6 @@ class GoogleBusinessScraper:
         details = cls._empty_contact_details()
         if raw_html:
             details["email"] = cls._extract_first_email(raw_html)
-            if cls._COLLECT_WHATSAPP:
-                details = cls._merge_contact_details(details, cls._extract_first_whatsapp(raw_html))
 
         if cls._has_required_contact_details(details):
             return details
@@ -3074,19 +2946,6 @@ class GoogleBusinessScraper:
                 details["email"] = cls._extract_first_email(href_str)
                 if cls._has_required_contact_details(details):
                     break
-
-            if not cls._COLLECT_WHATSAPP or details["whatsapp_url"]:
-                continue
-
-            whatsapp_details = cls._parse_whatsapp_link(href_str)
-            if not whatsapp_details["whatsapp_url"] and base_url:
-                absolute_href = urljoin(base_url, href_str)
-                whatsapp_details = cls._parse_whatsapp_link(absolute_href)
-
-            details = cls._merge_contact_details(details, whatsapp_details)
-
-            if cls._has_required_contact_details(details):
-                break
 
         return details
 
@@ -3968,7 +3827,7 @@ async def get_job_status(job_id: str, current_user: dict = Depends(get_current_u
     
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
+        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     
@@ -3977,15 +3836,13 @@ async def get_job_status(job_id: str, current_user: dict = Depends(get_current_u
         results.append({
             "business_name": row[0],
             "phone": row[1],
-            "whatsapp": row[2],
-            "website": row[3],
-            "whatsapp_url": row[4],
-            "email": row[5],
-            "address": row[6],
-            "category": row[7],
-            "city": row[8],
-            "state": row[9],
-            "google_maps_url": row[10]
+            "website": row[2],
+            "email": row[3],
+            "address": row[4],
+            "category": row[5],
+            "city": row[6],
+            "state": row[7],
+            "google_maps_url": row[8]
         })
     
     conn.close()
@@ -4097,7 +3954,7 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
     
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
+        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
     
@@ -4106,15 +3963,13 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
         results.append({
             "business_name": row[0],
             "phone": row[1],
-            "whatsapp": row[2],
-            "website": row[3],
-            "whatsapp_url": row[4],
-            "email": row[5],
-            "address": row[6],
-            "category": row[7],
-            "city": row[8],
-            "state": row[9],
-            "google_maps_url": row[10]
+            "website": row[2],
+            "email": row[3],
+            "address": row[4],
+            "category": row[5],
+            "city": row[6],
+            "state": row[7],
+            "google_maps_url": row[8]
         })
     
     conn.close()
@@ -4159,16 +4014,14 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         '#',
         'Business Name',
         'Phone',
-        'WhatsApp',
         'Website',
-        'WhatsApp URL',
         'Email',
         'Address',
         'City',
         'State',
         'Google Maps',
     ]
-    col_widths = [5, 35, 18, 20, 36, 36, 34, 50, 20, 15, 45]
+    col_widths = [5, 35, 18, 36, 34, 50, 20, 15, 45]
 
     # Write headers
     for col, (header, width) in enumerate(zip(headers, col_widths), 1):
@@ -4203,16 +4056,9 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         cell.alignment = cell_alignment
         cell.border = thin_border
 
-        # WhatsApp number
-        whatsapp = result.get('whatsapp', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=4, value=whatsapp)
-        cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
-
         # Website (as hyperlink if valid)
         website = result.get('website', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=5)
+        cell = ws.cell(row=row_idx, column=4)
         if website and website != 'N/A' and website.startswith('http'):
             cell.value = website
             cell.hyperlink = website
@@ -4223,24 +4069,9 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         cell.alignment = cell_alignment
         cell.border = thin_border
 
-        # WhatsApp URL
-        whatsapp_url = result.get('whatsapp_url', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=6)
-        if whatsapp_url and whatsapp_url != 'N/A' and (
-            whatsapp_url.startswith('http') or whatsapp_url.startswith('whatsapp://')
-        ):
-            cell.value = whatsapp_url
-            cell.hyperlink = whatsapp_url
-            cell.font = link_font
-        else:
-            cell.value = whatsapp_url
-            cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
-
         # Email
         email = result.get('email', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=7)
+        cell = ws.cell(row=row_idx, column=5)
         if email and email != 'N/A':
             cell.value = email
             cell.hyperlink = f"mailto:{email}"
@@ -4253,26 +4084,26 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
 
         # Address
         address = result.get('address', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=8, value=address)
+        cell = ws.cell(row=row_idx, column=6, value=address)
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # City
-        cell = ws.cell(row=row_idx, column=9, value=result.get('city', 'N/A'))
+        cell = ws.cell(row=row_idx, column=7, value=result.get('city', 'N/A'))
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # State
-        cell = ws.cell(row=row_idx, column=10, value=result.get('state', 'N/A'))
+        cell = ws.cell(row=row_idx, column=8, value=result.get('state', 'N/A'))
         cell.font = cell_font
         cell.alignment = cell_alignment
         cell.border = thin_border
 
         # Google Maps URL (as hyperlink)
         maps_url = result.get('google_maps_url', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=11)
+        cell = ws.cell(row=row_idx, column=9)
         if maps_url and maps_url != 'N/A' and maps_url.startswith('http'):
             cell.value = 'View on Maps'
             cell.hyperlink = maps_url
@@ -4286,14 +4117,14 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         # Alternate row coloring
         if row_idx % 2 == 0:
             alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
-            for col in range(1, 12):
+            for col in range(1, 10):
                 ws.cell(row=row_idx, column=col).fill = alt_fill
 
     # Freeze the header row
     ws.freeze_panes = 'A2'
 
     # Add auto-filter
-    ws.auto_filter.ref = f"A1:K{len(results) + 1}"
+    ws.auto_filter.ref = f"A1:I{len(results) + 1}"
 
     # Save to bytes
     output = BytesIO()
@@ -4323,7 +4154,7 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
 
     # Get results
     cursor.execute("""
-        SELECT business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
+        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results WHERE job_id = ?
     """, (job_id,))
 
@@ -4333,18 +4164,16 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
         results.append({
             "business_name": row[0],
             "phone": row[1],
-            "whatsapp": row[2],
-            "website": row[3],
-            "whatsapp_url": row[4],
-            "email": row[5],
-            "address": row[6],
-            "category": row[7],
-            "city": row[8],
-            "state": row[9],
-            "google_maps_url": row[10]
+            "website": row[2],
+            "email": row[3],
+            "address": row[4],
+            "category": row[5],
+            "city": row[6],
+            "state": row[7],
+            "google_maps_url": row[8]
         })
-        if row[8]:
-            cities_set.add(row[8])
+        if row[6]:
+            cities_set.add(row[6])
 
     conn.close()
 
@@ -5879,23 +5708,21 @@ async def get_job_results_admin(
                 AND (
                     LOWER(COALESCE(business_name, '')) LIKE ?
                     OR LOWER(COALESCE(phone, '')) LIKE ?
-                    OR LOWER(COALESCE(whatsapp, '')) LIKE ?
                     OR LOWER(COALESCE(website, '')) LIKE ?
-                    OR LOWER(COALESCE(whatsapp_url, '')) LIKE ?
                     OR LOWER(COALESCE(email, '')) LIKE ?
                     OR LOWER(COALESCE(address, '')) LIKE ?
                     OR LOWER(COALESCE(city, '')) LIKE ?
                     OR LOWER(COALESCE(state, '')) LIKE ?
                 )
             """
-            params.extend([search_term] * 9)
+            params.extend([search_term] * 7)
 
     cursor.execute(f"SELECT COUNT(*) FROM results {where_clause}", tuple(params))
     total = int(cursor.fetchone()[0] or 0)
 
     cursor.execute(
         f"""
-        SELECT id, business_name, phone, whatsapp, website, whatsapp_url, email, address, category, city, state, google_maps_url
+        SELECT id, business_name, phone, website, email, address, category, city, state, google_maps_url
         FROM results
         {where_clause}
         ORDER BY id DESC
@@ -5905,9 +5732,9 @@ async def get_job_results_admin(
     )
     results = [
         {
-            "id": r[0], "business_name": r[1], "phone": r[2], "whatsapp": r[3], "website": r[4],
-            "whatsapp_url": r[5], "email": r[6], "address": r[7], "category": r[8], "city": r[9], "state": r[10],
-            "google_maps_url": r[11],
+            "id": r[0], "business_name": r[1], "phone": r[2], "website": r[3],
+            "email": r[4], "address": r[5], "category": r[6], "city": r[7], "state": r[8],
+            "google_maps_url": r[9],
         }
         for r in cursor.fetchall()
     ]

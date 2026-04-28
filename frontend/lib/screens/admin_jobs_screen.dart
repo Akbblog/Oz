@@ -271,7 +271,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
       final rows = await _fetchAllResultsForJob(jobId);
       final csv = StringBuffer();
       csv.writeln(
-        'job_id,username,business_name,phone,whatsapp,website,whatsapp_url,email,address,category,city,state,google_maps_url',
+        'job_id,username,business_name,phone,website,email,address,category,city,state,google_maps_url',
       );
       for (final row in rows) {
         csv.writeln(
@@ -280,9 +280,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
             _escapeCsvValue(username),
             _escapeCsvValue(row['business_name']),
             _escapeCsvValue(row['phone']),
-            _escapeCsvValue(row['whatsapp']),
             _escapeCsvValue(row['website']),
-            _escapeCsvValue(row['whatsapp_url']),
             _escapeCsvValue(row['email']),
             _escapeCsvValue(row['address']),
             _escapeCsvValue(row['category']),
@@ -326,7 +324,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
 
       final csv = StringBuffer();
       csv.writeln(
-        'job_id,username,business_name,phone,whatsapp,website,whatsapp_url,email,address,category,city,state,google_maps_url',
+        'job_id,username,business_name,phone,website,email,address,category,city,state,google_maps_url',
       );
 
       for (final job in selectedJobs) {
@@ -342,9 +340,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
               _escapeCsvValue(username),
               _escapeCsvValue(row['business_name']),
               _escapeCsvValue(row['phone']),
-              _escapeCsvValue(row['whatsapp']),
               _escapeCsvValue(row['website']),
-              _escapeCsvValue(row['whatsapp_url']),
               _escapeCsvValue(row['email']),
               _escapeCsvValue(row['address']),
               _escapeCsvValue(row['category']),

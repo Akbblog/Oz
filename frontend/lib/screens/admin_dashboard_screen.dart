@@ -2903,7 +2903,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               },
               icon: const Icon(Icons.refresh_rounded, size: 16),
               label: const Text('Retry'),
-              style: TextButton.styleFrom(foregroundColor: AppColors.brandPurple),
+              style:
+                  TextButton.styleFrom(foregroundColor: AppColors.brandPurple),
             ),
           ],
         ),
@@ -3232,12 +3233,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 const SizedBox(height: AppSpacing.md),
                 Text(
                   'Grant Credits',
-                  style: AppTypography.titleMedium.copyWith(color: Colors.white),
+                  style:
+                      AppTypography.titleMedium.copyWith(color: Colors.white),
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   'to ${user['username']}',
-                  style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white60),
                 ),
                 const SizedBox(height: AppSpacing.md),
                 TextField(
@@ -3281,7 +3284,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         label: 'Cancel',
                         color: AppColors.elevatedCardDark,
                         textColor: Colors.white,
-                        onTap: isGranting ? () {} : () => Navigator.pop(context, false),
+                        onTap: isGranting
+                            ? () {}
+                            : () => Navigator.pop(context, false),
                       ),
                     ),
                     const SizedBox(width: AppSpacing.sm),
@@ -3294,7 +3299,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         onTap: isGranting
                             ? () {}
                             : () async {
-                                final amount = int.tryParse(amountController.text);
+                                final amount =
+                                    int.tryParse(amountController.text);
                                 if (amount == null || amount <= 0) {
                                   _showSnackBar('Please enter a valid amount',
                                       AppColors.dangerRed);
@@ -3309,7 +3315,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                         ? null
                                         : reasonController.text,
                                   );
-                                  if (context.mounted) Navigator.pop(context, true);
+                                  if (context.mounted)
+                                    Navigator.pop(context, true);
                                 } catch (e) {
                                   if (context.mounted) {
                                     setDialogState(() => isGranting = false);
@@ -3592,7 +3599,7 @@ class _JobActivityDetailsPanelState extends State<_JobActivityDetailsPanel> {
                             const TextStyle(color: Colors.white, fontSize: 13),
                         decoration: InputDecoration(
                           hintText:
-                              'Search leads by business, city, phone, WhatsApp, email...',
+                              'Search leads by business, city, phone, email...',
                           hintStyle: const TextStyle(
                             color: Colors.white38,
                             fontSize: 13,

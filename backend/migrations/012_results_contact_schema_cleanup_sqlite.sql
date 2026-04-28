@@ -1,0 +1,3 @@
+-- 012_results_contact_schema_cleanup_sqlite.sql
+-- Reserved migration slot kept for historical version continuity.
+-- No schema change required.

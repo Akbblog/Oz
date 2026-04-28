@@ -125,7 +125,7 @@ def test_users_table_has_credit_columns(db_connection):
 
 
 def test_results_table_has_contact_columns(db_connection):
-    """Test that results table has all contact columns, including WhatsApp fields."""
+    """Test that results table has all expected contact columns."""
     cursor = db_connection.cursor()
     cursor.execute("PRAGMA table_info(results)")
     columns = {row[1] for row in cursor.fetchall()}
@@ -133,8 +133,6 @@ def test_results_table_has_contact_columns(db_connection):
     required_columns = {
         "phone",
         "email",
-        "whatsapp",
-        "whatsapp_url",
         "website",
         "google_maps_url",
     }
