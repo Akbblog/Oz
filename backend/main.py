@@ -25,7 +25,11 @@ import base64
 from io import BytesIO
 import config
 
-from payments.coinbase_service import CoinbaseCommerceService
+from payments.coinbase_service import (
+    CoinbaseCommerceService,
+    CoinbaseProviderUnavailableError,
+    CoinbaseServiceError,
+)
 from payments.payment_processor import PaymentProcessor
 from payments.pricing_engine import PricingEngine
 from payments.webhook_handler import WebhookHandler
@@ -4324,6 +4328,10 @@ async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(ge
     except ValueError as e:
         # Idempotency conflict etc
         raise HTTPException(status_code=409, detail=str(e))
+    except CoinbaseProviderUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except CoinbaseServiceError:
+        raise HTTPException(status_code=502, detail="Coinbase Commerce request failed. Please try again.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -4513,6 +4521,30 @@ async def simple_purchase(
             "bonus_credits": bonus_credits,
             "promo_applied": promo_name if promo_name else None,
         }
+    except CoinbaseProviderUnavailableError as e:
+        if transaction_id:
+            try:
+                from db.base import execute_query
+                execute_query(
+                    "UPDATE payment_transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?",
+                    (datetime.now().isoformat(), transaction_id),
+                )
+            except Exception:
+                pass
+        logging.error(f"Coinbase charge creation temporarily unavailable: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except CoinbaseServiceError:
+        if transaction_id:
+            try:
+                from db.base import execute_query
+                execute_query(
+                    "UPDATE payment_transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?",
+                    (datetime.now().isoformat(), transaction_id),
+                )
+            except Exception:
+                pass
+        logging.error("Coinbase charge creation failed due to provider error")
+        raise HTTPException(status_code=502, detail="Failed to create Coinbase checkout")
     except Exception as e:
         if transaction_id:
             try:

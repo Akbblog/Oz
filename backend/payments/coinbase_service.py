@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -11,6 +12,14 @@ import requests
 import config
 
 logger = logging.getLogger(__name__)
+
+
+class CoinbaseServiceError(Exception):
+    """Base exception for Coinbase Commerce integration failures."""
+
+
+class CoinbaseProviderUnavailableError(CoinbaseServiceError):
+    """Raised when Coinbase Commerce is temporarily unavailable."""
 
 
 class CoinbaseCommerceService:
@@ -52,6 +61,78 @@ class CoinbaseCommerceService:
             "Accept": "application/json",
         }
 
+    def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+        url = f"{self.API_BASE}{path}"
+        max_attempts = 3
+        backoff_seconds = 1.0
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    timeout=30,
+                    **kwargs,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                logger.warning(
+                    "Coinbase Commerce request failed on attempt %s/%s for %s %s: %s",
+                    attempt,
+                    max_attempts,
+                    method,
+                    path,
+                    exc,
+                )
+                if attempt == max_attempts:
+                    raise CoinbaseProviderUnavailableError(
+                        "Coinbase Commerce is temporarily unavailable. Please try again shortly."
+                    ) from exc
+                time.sleep(backoff_seconds)
+                backoff_seconds *= 2
+                continue
+
+            if resp.status_code >= 500:
+                last_error = requests.HTTPError(
+                    f"Coinbase Commerce {resp.status_code} for {method} {url}",
+                    response=resp,
+                )
+                logger.warning(
+                    "Coinbase Commerce returned %s on attempt %s/%s for %s %s",
+                    resp.status_code,
+                    attempt,
+                    max_attempts,
+                    method,
+                    path,
+                )
+                if attempt == max_attempts:
+                    raise CoinbaseProviderUnavailableError(
+                        "Coinbase Commerce is temporarily unavailable. Please try again shortly."
+                    ) from last_error
+                time.sleep(backoff_seconds)
+                backoff_seconds *= 2
+                continue
+
+            try:
+                resp.raise_for_status()
+            except requests.HTTPError as exc:
+                logger.error(
+                    "Coinbase Commerce request failed with status %s for %s %s: %s",
+                    resp.status_code,
+                    method,
+                    path,
+                    resp.text[:500],
+                )
+                raise CoinbaseServiceError("Coinbase Commerce request failed.") from exc
+
+            return resp
+
+        raise CoinbaseProviderUnavailableError(
+            "Coinbase Commerce is temporarily unavailable. Please try again shortly."
+        ) from last_error
+
     def create_charge(
         self,
         *,
@@ -71,23 +152,12 @@ class CoinbaseCommerceService:
         if metadata:
             payload["metadata"] = metadata
 
-        resp = requests.post(
-            f"{self.API_BASE}/charges",
-            headers=self._headers(),
-            data=json.dumps(payload),
-            timeout=30,
-        )
-        resp.raise_for_status()
+        resp = self._request("POST", "/charges", data=json.dumps(payload))
         return resp.json()["data"]
 
     def get_charge(self, charge_id: str) -> Dict[str, Any]:
         self._ensure_configured()
-        resp = requests.get(
-            f"{self.API_BASE}/charges/{charge_id}",
-            headers=self._headers(),
-            timeout=30,
-        )
-        resp.raise_for_status()
+        resp = self._request("GET", f"/charges/{charge_id}")
         return resp.json()["data"]
 
     def verify_webhook(self, raw_body: bytes, signature_header: str) -> bool:

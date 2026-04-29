@@ -287,17 +287,28 @@ class PaymentProcessor:
                 promo_code_id=promo_code_id,
             )
 
-        charge = self._coinbase.create_charge(
-            name="Credit Purchase",
-            description=f"Package {package_id} x{quantity}",
-            amount=f"{total_cents / 100.0:.2f}",
-            currency=currency,
-            metadata={
-                "user_id": user_id,
-                "transaction_id": transaction_id,
-                "package_id": package_id,
-            },
-        )
+        try:
+            charge = self._coinbase.create_charge(
+                name="Credit Purchase",
+                description=f"Package {package_id} x{quantity}",
+                amount=f"{total_cents / 100.0:.2f}",
+                currency=currency,
+                metadata={
+                    "user_id": user_id,
+                    "transaction_id": transaction_id,
+                    "package_id": package_id,
+                },
+            )
+        except Exception:
+            execute_query(
+                """
+                UPDATE payment_transactions
+                SET status = 'failed', updated_at = ?
+                WHERE transaction_id = ?
+                """,
+                (now_db_string(), transaction_id),
+            )
+            raise
 
         charge_id = str(charge["id"])
         hosted_url = str(charge.get("hosted_url") or "")
