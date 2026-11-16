@@ -2,11 +2,179 @@
 
 Branch `fix/job-durability-audit` (git worktree `F:\webTest\scraper\il-fix-worktree`), based on
 `f60ec53` plus the uncommitted security fixes that were in the main checkout (commit `1434809`).
-Nothing was deployed. The live checkout, its containers, the Cloudflare tunnel, the live MySQL
-database and `.env` were not read or modified. All testing used temporary SQLite files and
-ports 8098/8099.
+Nothing was deployed or merged. The live database was never migrated or written: round 2 took one
+read-only snapshot (approved by the owner) and tested only against isolated copies. `.env` was not
+read; live credentials were never printed. Note: production runs **MariaDB 11.8**, not MySQL.
 
 Line numbers in the inventory refer to the **baseline** (`1434809`) unless marked "now".
+
+---
+
+## 0. Verification round 2 — status before manual QA (2026-11-16)
+
+**Not production-ready yet.** Everything below marked ✅ was executed and observed; ⏳ was still
+running when this section was written; ❌ is a known gap. Sections 3–5 further down are from round 1
+and are superseded by this section where they differ.
+
+### 0.1 Verified / unverified checklist
+
+| # | Area | Status | Evidence |
+|---|---|---|---|
+| V1 | Production DB engine identified | ✅ | Read-only query: **MariaDB 11.8.9** (not MySQL 8), 29 tables, schema 013, 22 jobs (20 completed, 2 failed, 0 running) |
+| V2 | Read-only production snapshot | ✅ | `mariadb-dump --single-transaction --skip-lock-tables` via a separate client container; credentials piped container→volume, never printed; volume deleted after use. 636 KB, 29 tables |
+| V3 | Restore into isolated containers | ✅ | `il-qa-mariadb` (MariaDB 11.8, 127.0.0.1:13306) and `il-qa-mysql8` (MySQL 8.0.46, 127.0.0.1:13307); row counts match (4 users, 22 jobs, 789 results, 46 ledger rows) |
+| V4 | Migration 014 on the production copy | ✅ 13/13 on MariaDB, 13/13 on MySQL 8 | Applies once; all columns/indexes present; no job, result, ledger or balance row changed; all 22 historical jobs marked `pre-014`; settlement sweep refunds 0; second start applies nothing; partially-applied 014 re-runs cleanly |
+| V5 | Migration 015 on the production copy | ✅ | Applied by the new backend during V7 on both engines |
+| V6 | Backend test suite on SQLite | ✅ 94/94 | `pytest tests` |
+| V7 | Backend test suite on MariaDB 11.8 and MySQL 8 | ⏳ PENDING | Chunked runner (one process per module) — results in 0.4 |
+| V8 | Real Google Maps scraping (MariaDB copy) | ✅ 41/41 | 3 real jobs, Qatar, headless Chromium — see 0.3 |
+| V9 | Cancellation during a real job | ✅ | Settled 6 s after cancel; ≤1 lead written after cancel; no writes after settlement |
+| V10 | Backend crash/restart during a real job | ✅ | Process tree killed after city 1; DB stayed `running`; restarted server resumed (attempt 2) and completed; 2 pre-crash leads kept, 6 total, no duplicates |
+| V11 | DB ↔ API (=UI data) consistency | ✅ | For every real job: status, lead count, results list, completed cities, log lines, refund and ledger all equal |
+| V12 | Rollback: live (old) backend on migrated schema | ✅ 25/25 | Old code starts on 015 schema, logs in, reads new jobs, creates/completes/cancels jobs (new unique index OK), accepts new tokens |
+| V13 | Roll-forward after rollback | ✅ | Jobs billed by old code are not refunded retroactively (bug found and fixed, F2) |
+| V14 | Deployed (current Vercel) frontend vs new backend | ✅ | Old client contract (create without key, default status payload, field types) + browser smoke of the old web build: loads signed in, History lists jobs, 0 API errors, 0 page errors |
+| V15 | Browser: network outage, refresh, mobile↔desktop, reattach | ✅ 15/15 (round 1) | Unchanged since |
+| V16 | Browser: double clicks, lost create response, slow/timeout responses, multiple tabs, session expiry + re-login, server-side failure | ⏳ / partial | Run 2: 13/17 — every product assertion that ran passed; the 4 failures were harness timing/parsing (jobs finished before the step; status parser). Run 3 with fixed harness: results in 0.4 |
+| V17 | "Never Failed unless the server says failed" | ✅ | Sampled UI vs DB throughout run 2: 0 violations; positive control shows Failed + server reason |
+| V18 | Refund policies × job outcomes | ✅ 21/21 + default test | Exact outcomes in 0.5 |
+| V19 | Security: roles/auth | ✅ | 12 security tests incl. support cannot mutate, password policy, reset revokes sessions, XFF rotation locked out, SECRET_KEY fail-fast, templates tracked |
+| V20 | Flutter `analyze` / `test` / web build | ✅ | 0 errors (50 pre-existing infos/warnings) / 11/11 / bundle verified |
+| V21 | CI | ✅ written, ❌ not executed | `.github/workflows/test.yml` now runs pytest on SQLite + MariaDB 11.8 + MySQL 8 and Flutter analyze/test/build. Not run on GitHub (branch not pushed) |
+| V22 | Production config: SMTP | ❌ not configured in live env | Live container has no SMTP user ⇒ forgot-password returns 503 (feature unavailable) |
+| V23 | Load / concurrency at production scale | ❌ | Not tested beyond 2 concurrent jobs and 6 concurrent creates |
+| V24 | Real email delivery, payments (Coinbase), PWA install | ❌ | Not exercised |
+
+### 0.2 Failures found in this round (all fixed on the branch)
+
+**F1 — On MySQL/MariaDB a healthy worker could think it lost its job (critical).**
+*Repro:* `IL_TEST_MYSQL_URL=…13306… pytest tests/test_job_durability.py::test_runner_dedupes_across_cities_and_keeps_timeout_partials` → job left `running`, only first lead saved.
+*Root cause:* PyMySQL reports rows **changed**, SQLite reports rows **matched**. Ownership/heartbeat/settlement checks use `rowcount == 1`; an UPDATE writing an identical value (two heartbeats within one clock tick) returns 0 on MySQL ⇒ `_LostOwnership`.
+*Fix:* `client_flag=CLIENT.FOUND_ROWS` on every MySQL connection (`backend/database.py`).
+*Evidence:* `test_heartbeat_with_identical_timestamp_keeps_ownership` **fails on MariaDB without the fix, passes with it** (verified both ways).
+
+**F2 — Roll-forward after a rollback could refund old jobs retroactively (high, money).**
+*Repro:* deploy new → roll back (old code finishes jobs: `settled_at NULL`, `attempts 0`) → deploy new again → settlement sweep refunds those jobs.
+*Fix:* sweep only settles jobs the durable runner ran (`attempts > 0`).
+*Evidence:* `test_sweep_never_refunds_jobs_finished_by_old_code`; V13 on MySQL 8 (balance 938 → 938).
+
+**F3 — Silent billing change (high, business).** Round 1 defaulted `JOB_REFUND_POLICY` to `delivered`, which on historical data refunds ~51 % of revenue (0.5). *Fix:* default `none` (today's billing) + startup warning when unset/invalid; refunds are an explicit choice. *Evidence:* `test_refund_policy_default_is_none`.
+
+**F4 — Password reset did not end existing sessions (high, audit M-9).** *Fix:* migration 015 `users.password_changed_at`; tokens carry `iat`; tokens issued before the change are rejected; the admin reset script stamps it too. *Evidence:* `test_password_reset_revokes_existing_sessions`.
+
+**F5 — Login lockout bypass by rotating `X-Forwarded-For` (high, audit H-6).** *Fix:* second lockout scope keyed on Cloudflare's `CF-Connecting-IP` (not settable through the tunnel; API is bound to 127.0.0.1). *Evidence:* `test_rotating_x_forwarded_for_does_not_bypass_lockout`. *Residual:* traffic proxied by Vercel shares Vercel egress IPs, so this scope uses a higher threshold (`LOGIN_EDGE_MAX_ATTEMPTS`, default 60/10 min); a spray attack through Vercel could temporarily block logins from that egress IP.
+
+**F6 — No password policy (high, audit H-5).** *Fix:* ≥ 8 chars, ≤ 72 bytes (bcrypt limit), not blank — on register and reset (API 422) and in the register/reset forms. Existing passwords are unaffected. *Evidence:* `test_password_policy_on_register_and_reset`.
+
+**F7 — Weak/missing `SECRET_KEY` silently fell back to a public constant (high, audit M-10).** *Fix:* `auth.py` loads config first and refuses to start with an empty, short (<16) or placeholder key. Live env checked (boolean only): key set, ≥ 32 chars, not a placeholder. *Evidence:* `test_missing_or_placeholder_secret_key_refuses_to_start`.
+
+**F8 — Email templates were git-ignored (high, audit H-7).** *Fix:* `.gitignore` exception + 6 templates committed (contain only placeholders, no secrets). *Evidence:* `test_every_email_template_referenced_by_code_is_tracked_in_git`.
+
+**F9 — CI never ran the tests (audit L-2).** *Fix:* see V21.
+
+**F10 — Admin password-reset script left sessions valid.** *Fix:* stamps `password_changed_at`.
+
+Test-harness-only problems fixed (not product bugs): MySQL test mode needed autocommit on the long-lived test connection (REPEATABLE READ snapshot hid app writes), tuple-vs-list comparisons, SQLite-catalog tests skipped on MySQL, test helper typo, too-tight timeout for Docker-hosted DB, browser status parser.
+
+### 0.3 Real scraping run (MariaDB copy of production, headless Chromium, Google Maps)
+
+| Job | Scenario | Result |
+|---|---|---|
+| A | "coffee shop", Doha + Lusail, 3/city | completed in 63 s; 6 leads (6 with phone, 4 with website); 15 log lines; charged 26, refunded 0 |
+| B | "restaurant", 3 cities, cancel after first lead | cancelled; settled 6 s after cancel; 1 lead; charged 34, refunded 19 (run used the then-default `delivered`) |
+| C | "pharmacy", 3 cities, process tree killed after city 1 | resumed on attempt 2, completed; 6 leads (2 pre-crash kept); charged 31, refunded 0 |
+| — | User balance vs ledger | 928 = 1000 + (−72) ✅; balance API = DB ✅ |
+
+### 0.4 Pending results (filled in when available)
+
+_Runs in progress — see the final summary of this round; this placeholder is replaced when results arrive._
+
+### 0.5 Refund policy — exact outcomes and recommendation
+
+Credit config: base 10, per city 5, per result 1, minimum 15. Every case runs the real runner + settlement
+(`backend/tests/test_refund_policy_matrix.py`); ledger == balance and exactly-once settlement asserted in all 21.
+
+| Scenario (cities × max results) | Leads | Charged | `delivered` refund | `unattempted` refund | `none` refund |
+|---|---|---|---|---|---|
+| Completed, full (2×3) | 6 | 26 | 0 | 0 | 0 |
+| Completed, partial: one city short, one city timed out (3×3) | 5 | 34 | 4 | 0 | 0 |
+| Cancelled during city 2 (3×3) | 4 | 34 | 15 | 16 | 0 |
+| Failed, no leads (3×3) | 0 | 34 | 34 | 34 | 0 |
+| Failed after city 1 (3×3) | 3 | 34 | 16 | 16 | 0 |
+| Every city timed out → failed (3×3) | 0 | 34 | 34 | 34 | 0 |
+| Retried after crash, completed (2×3) | 6 | 26 | 0 | 0 | 0 |
+
+Applied to the **22 real historical jobs** in the production snapshot (2,890 credits charged; 789 leads
+delivered against 2,060 requested result slots = 38 % fill):
+
+| Policy | Would have refunded | Share of charges |
+|---|---|---|
+| `delivered` | 1,461 | 50.6 % |
+| `unattempted` | 375 | 13.0 % |
+| `none` (today) | 0 | 0 % |
+
+Largest cases: the live-incident job (460 charged, failed after 6 of 30 cities, 56 leads) → 364 / 360;
+a completed 7-city × 50 job with 81 leads → 269 / 0; 3 completed jobs delivered **zero** leads (e.g. 55
+charged) → refunded under `delivered`, kept under `unattempted`.
+
+**Recommendation (your decision):** launch with **`unattempted`** — it fixes the clearly unfair cases
+(failed/cancelled jobs, cities never searched) at ~13 % of historical revenue — and treat the 38 % fill
+rate as the real problem: either price per delivered lead (`delivered`, ~51 % less revenue at today's
+fill rate) together with a price change, or improve fill. Note `unattempted` still charges in full for a
+*completed* job that found nothing; if that is unacceptable, ask for a small policy change
+("refund fully when zero leads"), which is not implemented. Set `JOB_REFUND_POLICY` explicitly; unset
+means `none`.
+
+### 0.6 Exact commands used (reproducible)
+
+```bash
+# Isolated DBs (never the live one)
+docker run -d --name il-qa-mariadb -e MARIADB_ROOT_PASSWORD=qa_root_only -e MARIADB_DATABASE=il_qa -p 127.0.0.1:13306:3306 mariadb:11.8
+docker run -d --name il-qa-mysql8  -e MYSQL_ROOT_PASSWORD=qa_root_only   -e MYSQL_DATABASE=il_qa   -p 127.0.0.1:13307:3306 mysql:8.0
+docker exec -i il-qa-mariadb mariadb -uroot -pqa_root_only il_qa < prod_snapshot.sql
+sed 's/utf8mb4_uca1400_ai_ci/utf8mb4_unicode_ci/g' prod_snapshot.sql | docker exec -i il-qa-mysql8 mysql -uroot -pqa_root_only il_qa
+
+# Backend tests
+cd backend
+SECRET_KEY=test-secret-key-0123456789 python -m pytest tests -q                       # SQLite
+IL_TEST_MYSQL_URL=mysql://root:qa_root_only@127.0.0.1:13306/il_test_mariadb \
+SECRET_KEY=test-secret-key-0123456789 python -m pytest tests/<module>.py -q          # MariaDB, per module
+IL_TEST_MYSQL_URL=mysql://root:qa_root_only@127.0.0.1:13307/il_test_mysql8 ...        # MySQL 8
+
+# Frontend
+cd frontend && flutter analyze && flutter test && bash build_web.sh
+```
+The migration-verification, real-scrape, rollback/compatibility and browser harnesses
+(`verify_migration.py`, `e2e_real.py`, `e2e_compat.py`, `e2e_browser.py`, `e2e_browser2.py`) live in the
+session scratchpad, not in the repo; they target only 127.0.0.1:13306/13307, temp SQLite, and ports 8098/8099.
+
+### 0.7 Manual QA plan (≈45 min, on a staging copy — not production)
+
+Setup: backend from this branch against a **restored copy** of production, `JOB_REFUND_POLICY` set to the
+policy you choose, frontend built with `API_URL` pointing at it. Use a test account with ~500 credits.
+
+1. **Sign in / refresh** — sign in, refresh twice. Expect: still signed in, balance identical in top bar,
+   Credit Balance card and Wallet.
+2. **Small real job** — Cities → Qatar → Doha + Lusail → category "coffee shop", 3 results → Review & Start
+   (double-click it). Expect: one job in History, one debit in Wallet history, panel shows Queued→Running,
+   one log line per lead, Elapsed counts from 0s (not hours).
+3. **Refresh mid-job** — press F5. Expect: app returns to the live job panel, form shows "coffee shop".
+4. **Network cut** — DevTools → Network → Offline for 20 s, then Online. Expect: amber "Connection
+   problem… job keeps running" banner, never "Failed"; recovers within ~10 s; Cancel stays visible.
+5. **Mobile ↔ desktop** — DevTools device toolbar to 390 px and back. Expect: same tab, job panel and
+   category text unchanged.
+6. **Second tab** — open the app in a 2nd tab. Expect: same running job. Cancel it there. Expect: first tab
+   shows Cancelled within ~10 s; leads found so far downloadable; refund shown per chosen policy.
+7. **Completion** — run another 1-city job to completion. Expect: Completed, Download Excel works, lead
+   count in panel = History = Results page = rows in the file.
+8. **Backend restart** — start a 3-city job; restart the backend container after the first city. Expect:
+   UI shows "Connection problem" while down, then the job resumes ("Resuming job at city 2" in the log)
+   and completes; no duplicate leads.
+9. **Password reset** — (needs SMTP on staging) request reset, set an 8+ char password; a session in
+   another browser must be signed out.
+10. **Roles** — sign in as a support user: admin lists visible; granting credits / deleting users fails.
+11. **Wallet** — after all of the above, sum of Wallet ledger = shown balance.
+Record any step that deviates, with a screenshot and the job id.
 
 ---
 
