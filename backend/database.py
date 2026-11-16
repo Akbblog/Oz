@@ -26,11 +26,23 @@ def _infer_db_type_from_url(database_url: str) -> str:
     return "sqlite"
 
 
+def _database_url() -> str:
+    """Resolve DATABASE_URL at call time so tests/tools can redirect it safely."""
+    return os.getenv("DATABASE_URL") or config.DATABASE_URL
+
+
+def _sqlite_path(database_url: str) -> str:
+    # sqlite:///relative.db, sqlite:////abs/path.db, sqlite:///C:/path.db
+    if "///" in database_url:
+        return database_url.split("///", 1)[1]
+    return database_url.replace("sqlite:", "", 1) or "scraper.db"
+
+
 def _get_db_type() -> str:
     explicit = os.getenv("DB_TYPE", "").strip().lower()
     if explicit in ("sqlite", "mysql"):
         return explicit
-    return _infer_db_type_from_url(config.DATABASE_URL)
+    return _infer_db_type_from_url(_database_url())
 
 
 def _ensure_pymysql():
@@ -185,7 +197,7 @@ def _create_mysql_connection():
     from urllib.parse import unquote
 
     mysql_client = _ensure_pymysql()
-    parsed_url = urlparse(config.DATABASE_URL)
+    parsed_url = urlparse(_database_url())
 
     # Keep timeouts low so "new connection per request" doesn't become catastrophic
     # when a remote DB is slow/unreachable.
@@ -482,7 +494,7 @@ def get_db():
     db_type = _get_db_type()
     if db_type == "sqlite":
         import sqlite3
-        conn = sqlite3.connect(config.DATABASE_URL.split("///")[1])
+        conn = sqlite3.connect(_sqlite_path(_database_url()), timeout=15)
         try:
             conn.execute("PRAGMA foreign_keys = ON")
         except Exception:

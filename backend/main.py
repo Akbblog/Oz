@@ -202,10 +202,15 @@ def _get_starting_credits() -> int:
 # ==================== CREDIT SYSTEM UTILITIES ====================
 
 def estimate_credit_cost(num_cities: int, max_results_per_city: int) -> int:
-    """Calculate estimated credit cost for a job"""
-    credit_config = get_credit_config()
-    cost = credit_config["base"] + (num_cities * credit_config["per_city"]) + (num_cities * max_results_per_city * credit_config["per_result"])
-    return max(cost, credit_config["min_job"])
+    """Calculate estimated credit cost for a job (inputs clamped at 0)."""
+    from job_service import estimate_cost
+    return estimate_cost(num_cities, max_results_per_city, get_credit_config())
+
+
+def _api_ts(value):
+    """Stored naive server-local timestamp -> explicit UTC ISO string."""
+    from job_service import to_api_ts
+    return to_api_ts(value)
 
 
 def get_user_credit_balance(user_id: int) -> int:
@@ -232,34 +237,60 @@ def record_credit_transaction(user_id: int, amount: int, balance_after: int,
     conn.close()
 
 
-def deduct_credits(user_id: int, amount: int, job_id: str = None, reason: str = None) -> int:
-    """Deduct credits from user. Returns new balance."""
+def _apply_credit_delta(user_id: int, delta: int, transaction_type: str, reason: str,
+                        job_id: str = None, created_by: int = None, allow_negative: bool = False) -> int:
+    """Change a balance and write its ledger row in ONE transaction.
+
+    Uses ``credit_balance = credit_balance + ?`` (no read-modify-write race).
+    Debits fail with ValueError instead of silently clamping at zero.
+    """
+    now = datetime.now().isoformat()
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT credit_balance FROM users WHERE id = ?", (user_id,))
-    current = cursor.fetchone()[0] or 0
-    new_balance = max(0, current - amount)
-    cursor.execute("UPDATE users SET credit_balance = ?, credit_updated_at = ? WHERE id = ?",
-                   (new_balance, datetime.now().isoformat(), user_id))
-    conn.commit()
-    conn.close()
-    record_credit_transaction(user_id, -amount, new_balance, "debit", reason or "Job charge", job_id)
-    return new_balance
+    try:
+        cursor = conn.cursor()
+        if delta < 0 and not allow_negative:
+            cursor.execute(
+                "UPDATE users SET credit_balance = credit_balance + ?, credit_updated_at = ? "
+                "WHERE id = ? AND credit_balance >= ?",
+                (delta, now, user_id, -delta),
+            )
+        else:
+            cursor.execute(
+                "UPDATE users SET credit_balance = credit_balance + ?, credit_updated_at = ? WHERE id = ?",
+                (delta, now, user_id),
+            )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError("Insufficient credits" if delta < 0 else "User not found")
+        cursor.execute("SELECT credit_balance FROM users WHERE id = ?", (user_id,))
+        new_balance = int((cursor.fetchone() or [0])[0] or 0)
+        cursor.execute(
+            """
+            INSERT INTO credit_ledger (user_id, job_id, amount, balance_after, transaction_type, reason, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, job_id, delta, new_balance, transaction_type, reason, now, created_by),
+        )
+        conn.commit()
+        return new_balance
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def deduct_credits(user_id: int, amount: int, job_id: str = None, reason: str = None) -> int:
+    """Deduct credits atomically. Raises ValueError if the balance is too low."""
+    return _apply_credit_delta(user_id, -abs(int(amount)), "debit", reason or "Job charge", job_id)
 
 
 def add_credits(user_id: int, amount: int, reason: str = None, created_by: int = None) -> int:
-    """Add credits to user. Returns new balance."""
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT credit_balance FROM users WHERE id = ?", (user_id,))
-    current = cursor.fetchone()[0] or 0
-    new_balance = current + amount
-    cursor.execute("UPDATE users SET credit_balance = ?, credit_updated_at = ? WHERE id = ?",
-                   (new_balance, datetime.now().isoformat(), user_id))
-    conn.commit()
-    conn.close()
-    record_credit_transaction(user_id, amount, new_balance, "credit", reason or "Admin grant", None, created_by)
-    return new_balance
+    """Add credits atomically. Returns new balance."""
+    return _apply_credit_delta(user_id, abs(int(amount)), "credit", reason or "Admin grant", None, created_by)
 
 
 def check_rate_limits(user_id: int) -> dict:
@@ -347,32 +378,9 @@ def _startup_init_db() -> None:
     ensure_default_admin_settings()
 
     # ── Startup recovery ────────────────────────────────────────────────────
-    # Any job still in 'running' or 'pending' when the server (re)starts was
-    # interrupted mid-flight.  Mark them failed so they never stay stuck.
-    try:
-        _conn = get_db()
-        _cur = _conn.cursor()
-        _cur.execute(
-            """
-            UPDATE jobs
-               SET status      = 'failed',
-                   error       = 'Job interrupted: server restarted',
-                   completed_at = ?
-             WHERE status IN ('running', 'pending')
-            """,
-            (datetime.now().isoformat(),),
-        )
-        _recovered = _cur.rowcount
-        _conn.commit()
-        _conn.close()
-        if _recovered:
-            logging.getLogger(__name__).warning(
-                "Startup recovery: marked %d interrupted job(s) as failed.", _recovered
-            )
-    except Exception as _e:
-        logging.getLogger(__name__).error(
-            "Startup recovery failed (non-fatal): %s", _e
-        )
+    # Jobs left 'running' by a previous process are NOT failed here. The job
+    # runner's first sweep requeues any job whose heartbeat is stale and
+    # resumes it from its last completed city (see job_service.requeue_stale_jobs).
     # Ensure analytics tables exist even if migration runner was skipped.
     try:
         from db.base import execute_query
@@ -465,56 +473,32 @@ def _find_country_for_region(region: str) -> Optional[str]:
 from audit.middleware import AuditMiddleware
 app.add_middleware(AuditMiddleware)
 
-# ── Stuck-job watchdog ───────────────────────────────────────────────────────
-# Any job in 'running' or 'pending' for longer than JOB_WATCHDOG_HOURS is
-# considered hung and is automatically marked as failed.  This is a last-resort
-# safety net on top of the per-city timeout and startup recovery.
-_JOB_WATCHDOG_HOURS = int(os.getenv("JOB_WATCHDOG_HOURS", "2"))
-_JOB_WATCHDOG_INTERVAL = int(os.getenv("JOB_WATCHDOG_INTERVAL_SECS", "300"))  # every 5 min
-
-
-async def _stuck_job_watchdog():
-    """Background coroutine that periodically reaps stuck jobs."""
-    _wlog = logging.getLogger(__name__ + ".watchdog")
-    _wlog.info(
-        "Stuck-job watchdog started (threshold=%dh, interval=%ds)",
-        _JOB_WATCHDOG_HOURS,
-        _JOB_WATCHDOG_INTERVAL,
-    )
-    while True:
-        await asyncio.sleep(_JOB_WATCHDOG_INTERVAL)
-        try:
-            _threshold = (
-                datetime.now() - timedelta(hours=_JOB_WATCHDOG_HOURS)
-            ).isoformat()
-            _conn = get_db()
-            try:
-                _cur = _conn.cursor()
-                _cur.execute(
-                    """
-                    UPDATE jobs
-                       SET status       = 'failed',
-                           error        = 'Job timed out: exceeded maximum allowed duration',
-                           completed_at = ?
-                     WHERE status IN ('running', 'pending')
-                       AND created_at  < ?
-                    """,
-                    (datetime.now().isoformat(), _threshold),
-                )
-                _reaped = _cur.rowcount
-                _conn.commit()
-            finally:
-                _conn.close()
-
-            if _reaped:
-                _wlog.warning("Watchdog reaped %d stuck job(s).", _reaped)
-        except Exception as _we:
-            _wlog.error("Watchdog error (non-fatal): %s", _we)
+# ── Durable job runner ───────────────────────────────────────────────────────
+# Replaces the old created_at-based watchdog (which failed any job older than
+# 2h even while it was healthy). Liveness is now heartbeat based; see
+# job_runner.py / job_service.py. JOB_RUNNER_MODE=external lets a separate
+# `python job_worker.py` process run scraping instead of the API process.
 
 
 @app.on_event("startup")
-async def _startup_watchdog():
-    asyncio.create_task(_stuck_job_watchdog())
+async def _startup_job_runner():
+    global _job_runner
+    from job_runner import JobRunner, runner_mode
+
+    if os.getenv("SKIP_DB_INIT", "").strip().lower() in ("1", "true", "t", "yes", "y"):
+        return
+    mode = runner_mode()
+    if mode != "inprocess":
+        logging.getLogger(__name__).info("Job runner mode=%s: API will not execute jobs", mode)
+        return
+    _job_runner = JobRunner(run_job_by_id)
+    _job_runner.start()
+
+
+@app.on_event("shutdown")
+async def _shutdown_job_runner():
+    if _job_runner is not None:
+        await _job_runner.stop()
 
 
 @app.get("/")
@@ -607,6 +591,7 @@ class ScrapingRequest(BaseModel):
     category: str = Field(min_length=1, max_length=120)
     cities_data: List[str] = Field(min_length=1, max_length=500)
     max_results_per_city: int = Field(default=10, ge=1, le=100)
+    idempotency_key: Optional[str] = Field(default=None, max_length=64)
 
 class ScrapingJob(BaseModel):
     job_id: str
@@ -3035,8 +3020,29 @@ class GoogleBusinessScraper:
         return details
 
 
-    async def scrape_location(self, category: str, city: str, state: str, max_results: int = 10) -> List[Dict]:
-        """Scrape businesses for a specific location using Playwright"""
+    async def scrape_location(
+        self,
+        category: str,
+        city: str,
+        state: str,
+        max_results: int = 10,
+        *,
+        on_result=None,
+        should_stop=None,
+        exclude_keys=None,
+    ) -> List[Dict]:
+        """Scrape businesses for a specific location using Playwright.
+
+        on_result(index, total, business) -> awaitable, called as soon as each
+            business is scraped so callers can persist it immediately (a later
+            timeout or crash then loses nothing already found).
+        should_stop() -> awaitable bool, polled between businesses so a
+            cancellation takes effect within one business page.
+        exclude_keys: set of job_service.dedupe_key_for() values already saved
+            for this job; those listings are skipped without visiting them.
+        """
+        from job_service import dedupe_key_for
+        exclude_keys = exclude_keys if exclude_keys is not None else set()
         if not self.page:
             await self.init_browser()
 
@@ -3084,22 +3090,32 @@ class GoogleBusinessScraper:
             # Get unique business URLs (avoid duplicates)
             business_urls = []
             seen_urls = set()
-            for link in business_links[:max_results * 2]:  # Get extra in case of duplicates
+            skipped_known = 0
+            for link in business_links:
                 try:
                     href = await link.get_attribute('href')
                     if href and href not in seen_urls and '/maps/place/' in href:
-                        business_urls.append(href)
                         seen_urls.add(href)
+                        if dedupe_key_for({"google_maps_url": href}) in exclude_keys:
+                            skipped_known += 1
+                            continue
+                        business_urls.append(href)
                         if len(business_urls) >= max_results:
                             break
                 except Exception as e:
                     logger.debug(f"Error getting link href: {e}")
                     continue
 
-            logger.info(f"Processing {len(business_urls)} unique businesses")
+            logger.info(
+                f"Processing {len(business_urls)} unique businesses "
+                f"({skipped_known} already collected from earlier cities skipped)"
+            )
 
             # Visit each business page to get details
             for idx, url in enumerate(business_urls):
+                if should_stop is not None and await should_stop():
+                    logger.info(f"Stop requested while scraping {city}, {state}")
+                    break
                 try:
                     logger.info(f"Scraping business {idx + 1}/{len(business_urls)}")
 
@@ -3172,6 +3188,8 @@ class GoogleBusinessScraper:
 
                     results.append(business_data)
                     logger.info(f"Scraped: {business_name}")
+                    if on_result is not None:
+                        await on_result(idx, len(business_urls), business_data)
 
                 except PlaywrightTimeout:
                     logger.warning(f"Timeout loading business page: {url}")
@@ -3203,500 +3221,445 @@ class GoogleBusinessScraper:
         except Exception as e:
             logger.debug(f"Error closing browser: {e}")
 
-async def run_scraping_job(job_id: str, request: ScrapingRequest, user_id: int):
-    """Background task for running scraping jobs"""
-    scraper = GoogleBusinessScraper()
-    all_results = []
-    
+_PER_CITY_TIMEOUT = float(os.getenv("JOB_CITY_TIMEOUT_SECONDS", "180"))
+_HEARTBEAT_SECONDS = float(os.getenv("JOB_HEARTBEAT_SECONDS", "20"))
+
+
+class _LostOwnership(Exception):
+    """Another worker took over this job (our lease expired)."""
+
+
+def _db_block(fn):
+    """Run a short DB block on its own connection (never held across awaits)."""
+    conn = get_db()
     try:
-        def _is_transient_db_disconnect(exc: Exception) -> bool:
-            # PyMySQL uses OperationalError codes:
-            # 2006: MySQL server has gone away
-            # 2013: Lost connection to MySQL server during query
+        cur = conn.cursor()
+        result = fn(conn, cur)
+        conn.commit()
+        return result
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+async def _db(fn, retries: int = 3):
+    """Run a DB block in a thread with retry on transient errors."""
+    delay = 0.5
+    for attempt in range(retries):
+        try:
+            return await asyncio.to_thread(_db_block, fn)
+        except _LostOwnership:
+            raise
+        except Exception as exc:
+            if attempt == retries - 1:
+                raise
+            logger.warning("Transient DB error (attempt %d/%d): %r", attempt + 1, retries, exc)
+            await asyncio.sleep(delay)
+            delay *= 2
+
+
+async def run_job_by_id(job_id: str, worker_id: str) -> None:
+    """Run (or resume) one claimed job. Never raises.
+
+    State lives in the database, not in this coroutine: cities before
+    ``completed_cities`` are skipped, results are de-duplicated per job, and
+    every write is conditional on ``worker_id`` still owning the job.
+    """
+    import job_service
+
+    def _load(conn, cur):
+        job = job_service.fetch_job_row(cur, job_id)
+        if not job:
+            return None
+        cur.execute("SELECT dedupe_key FROM results WHERE job_id = ? AND dedupe_key IS NOT NULL", (job_id,))
+        keys = {r[0] for r in cur.fetchall()}
+        cur.execute("SELECT google_maps_url FROM results WHERE job_id = ? AND dedupe_key IS NULL", (job_id,))
+        for (url,) in cur.fetchall():  # legacy rows saved before migration 014
+            keys.add(job_service.dedupe_key_for({"google_maps_url": url}))
+        cur.execute("SELECT COUNT(*) FROM results WHERE job_id = ?", (job_id,))
+        job["_result_count"] = int((cur.fetchone() or [0])[0] or 0)
+        job["_keys"] = keys
+        return job
+
+    try:
+        job = await _db(_load)
+    except Exception as exc:
+        logger.error("Job %s: could not load state: %r", job_id, exc)
+        return
+    if not job:
+        return
+    if job.get("worker_id") not in (None, worker_id) or job.get("status") != "running":
+        return
+
+    user_id = job["user_id"]
+    category = job["category"]
+    cities = job_service.parse_cities(job.get("cities_data"))
+    total = len(cities)
+    max_results = int(job.get("max_results_per_city") or 10)
+    start_index = min(int(job.get("completed_cities") or 0), total)
+    seen_keys = job["_keys"]
+    result_count = job["_result_count"]
+    failed_cities = int(job.get("failed_cities") or 0)
+    attempts = int(job.get("attempts") or 1)
+
+    owned_sql = " WHERE job_id = ? AND worker_id = ? AND status = 'running'"
+
+    def _owned_update(cur, set_sql: str, params: tuple) -> None:
+        cur.execute("UPDATE jobs SET " + set_sql + owned_sql, params + (job_id, worker_id))
+        if cur.rowcount != 1:
+            raise _LostOwnership()
+
+    def _status(cur) -> str:
+        cur.execute("SELECT status, worker_id FROM jobs WHERE job_id = ?", (job_id,))
+        row = cur.fetchone()
+        if not row:
+            return "deleted"
+        status_value = str(row[0] or "")
+        if status_value in ("cancelled", "failed"):
+            return status_value
+        if status_value == "running" and row[1] == worker_id:
+            return "running"
+        return "lost"  # requeued, completed elsewhere, or owned by another worker
+
+    scraper = GoogleBusinessScraper()
+    stop_reason: Optional[str] = None  # "cancelled" | "failed" | "deleted" | "lost"
+    hb_task: Optional[asyncio.Task] = None
+
+    async def _heartbeat_loop():
+        nonlocal stop_reason
+        while True:
+            await asyncio.sleep(_HEARTBEAT_SECONDS)
             try:
-                code = int(getattr(exc, "args", [None])[0])
-                if code in (2006, 2013):
-                    return True
-            except Exception:
-                pass
+                ok = await asyncio.to_thread(job_service.heartbeat, job_id, worker_id)
+                if not ok and stop_reason is None:
+                    st = await _db(lambda c, cur: _status(cur))
+                    stop_reason = st if st in ("cancelled", "failed", "deleted") else "lost"
+            except Exception as exc:
+                logger.warning("Heartbeat failed for job %s: %r", job_id, exc)
 
-            msg = str(exc).lower()
-            return (
-                "mysql server has gone away" in msg
-                or "lost connection to mysql server" in msg
-                or "connection reset by peer" in msg
+    try:
+        resumed = start_index > 0 or attempts > 1
+
+        def _startup(conn, cur):
+            _owned_update(cur, "heartbeat_at = ?, error = NULL", (job_service.now_iso(),))
+            msg = (
+                f"Resuming job at city {start_index + 1}/{total} (attempt {attempts}, {result_count} leads kept)"
+                if resumed else f"Starting scraping job for category: {category}"
             )
+            job_service.add_log(job_id, msg, cur)
 
-        def _run_db_block(label: str, fn):
-            """Run a short DB block without holding connections across awaits."""
-            last_exc = None
-            for attempt in range(2):
-                conn = get_db()
-                try:
-                    cur = conn.cursor()
-                    result = fn(conn, cur)
-                    return result
-                except Exception as e:
-                    last_exc = e
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    if attempt == 0 and _is_transient_db_disconnect(e):
-                        logger.warning(f"Transient DB error during {label}: {repr(e)}. Retrying once...")
-                        continue
-                    raise
-                finally:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-            if last_exc is not None:
-                raise last_exc
+        await _db(_startup)
+        hb_task = asyncio.create_task(_heartbeat_loop())
 
-        logger.info(f"Starting scraping job {job_id}")
-        # Debug: log the incoming list of city/state strings
-        logger.debug(f"Received {len(request.cities_data)} city/state entries: {request.cities_data}")
-        
-        # Startup DB updates (do not keep a connection while scraping).
-        def _startup(conn, cursor):
-            cursor.execute("UPDATE jobs SET status = ? WHERE job_id = ?", ("running", job_id))
-            cursor.execute(
-                "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                (
-                    job_id,
-                    f"Starting scraping job for category: {request.category}",
-                    datetime.now().isoformat(),
-                ),
+        if not resumed:
+            record_job_activity_event(
+                job_id=job_id, user_id=user_id, event_type="job_started", job_status="running",
+                job_type=category, metadata={"total_cities": total, "max_results_per_city": max_results},
             )
-            conn.commit()
+            record_audit_event("job.start", actor_user_id=user_id, target_type="job",
+                               target_id=job_id, after={"status": "running"})
 
-        _run_db_block("job startup", _startup)
-
-        record_job_activity_event(
-            job_id=job_id,
-            user_id=user_id,
-            event_type="job_started",
-            job_status="running",
-            job_type=request.category,
-            metadata={
-                "total_cities": len(request.cities_data),
-                "max_results_per_city": request.max_results_per_city,
-            },
-        )
-        record_audit_event(
-            "job.start",
-            actor_user_id=user_id,
-            target_type="job",
-            target_id=job_id,
-            after={"status": "running"},
-        )
-        
-        for idx, city_state in enumerate(request.cities_data):
-            # Parse city and state (no DB required).
-            logger.debug(f"Raw city_state entry: '{city_state}'")
+        for idx in range(start_index, total):
+            if stop_reason:
+                break
+            city_state = cities[idx]
             parts = city_state.split(",")
             if len(parts) < 2:
-                logger.warning(f"Skipping invalid city entry (expected 'City, State'): '{city_state}'")
+                def _skip(conn, cur, i=idx, raw=city_state):
+                    _owned_update(cur, "completed_cities = ?, heartbeat_at = ?", (i + 1, job_service.now_iso()))
+                    job_service.add_log(job_id, f"Skipped invalid city entry (expected 'City, State'): {raw}", cur)
+                await _db(_skip)
                 continue
+            city, state = parts[0].strip(), parts[1].strip()
 
-            city = parts[0].strip()
-            state = parts[1].strip()
-            logger.debug(f"Parsed city: '{city}', state: '{state}'")
-
-            current_city = f"{city}, {state}"
-            progress = int((idx + 1) / len(request.cities_data) * 100)
-
-            # Update progress/logs and check cancellation with a short-lived connection.
-            cancelled_before_scrape = False
-
-            def _pre_city(conn, cursor):
-                nonlocal cancelled_before_scrape
-                cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
-                row = cursor.fetchone()
-                status = (row[0] if row else "") or ""
-                status = str(status).lower().strip()
-                if status in ("failed", "cancelled"):
-                    cancelled_before_scrape = True
-                    return
-
-                cursor.execute(
-                    """
-                    UPDATE jobs SET current_city = ?, progress = ?
-                    WHERE job_id = ?
-                    """,
-                    (current_city, progress, job_id),
+            def _pre_city(conn, cur, i=idx, c=city, s=state):
+                st = _status(cur)
+                if st != "running":
+                    return st
+                _owned_update(
+                    cur, "current_city = ?, progress = ?, heartbeat_at = ?",
+                    (f"{c}, {s}", min(99, int(i / max(1, total) * 100)), job_service.now_iso()),
                 )
-                cursor.execute(
-                    "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                    (
-                        job_id,
-                        f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}",
-                        datetime.now().isoformat(),
-                    ),
-                )
-                conn.commit()
+                job_service.add_log(job_id, f"Processing city {i + 1}/{total}: {c}, {s}", cur)
+                return "running"
 
-            _run_db_block("pre-city update", _pre_city)
-            if cancelled_before_scrape:
+            st = await _db(_pre_city)
+            if st != "running":
+                stop_reason = st
                 break
 
-            logger.info(f"Processing city {idx + 1}/{len(request.cities_data)}: {city}, {state}")
+            city_new = 0
+            city_dupes = 0
 
-            # Scrape location (no DB connection held across this await).
-            # Hard per-city timeout: 3 min covers even slow connections; if the
-            # browser hangs past that we skip the city rather than blocking forever.
-            _PER_CITY_TIMEOUT = 180.0
+            async def _on_result(b_idx, b_total, data, i=idx, c=city, s=state):
+                nonlocal city_new, city_dupes, result_count, stop_reason
+                key = job_service.dedupe_key_for(data)
+                if key in seen_keys:
+                    city_dupes += 1
+                    return
+
+                def _save(conn, cur):
+                    st2 = _status(cur)
+                    if st2 != "running":
+                        return st2, False
+                    cur.execute(
+                        job_service.insert_ignore_sql(
+                            "results (job_id, business_name, phone, website, email, address, category, "
+                            "city, state, google_maps_url, dedupe_key)",
+                            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+                        ),
+                        (job_id, data.get("business_name"), data.get("phone"), data.get("website"),
+                         data.get("email"), data.get("address"), data.get("category"), data.get("city"),
+                         data.get("state"), data.get("google_maps_url"), key),
+                    )
+                    inserted = cur.rowcount == 1
+                    frac = (i + (b_idx + 1) / max(1, b_total)) / max(1, total)
+                    _owned_update(cur, "progress = ?, heartbeat_at = ?",
+                                  (min(99, int(frac * 100)), job_service.now_iso()))
+                    if inserted:
+                        job_service.add_log(
+                            job_id,
+                            f"Lead {b_idx + 1}/{b_total} in {c}, {s}: {data.get('business_name') or 'Unknown'}",
+                            cur,
+                        )
+                    return "running", inserted
+
+                st2, inserted = await _db(_save)
+                if st2 != "running":
+                    stop_reason = st2
+                    return
+                seen_keys.add(key)
+                if inserted:
+                    city_new += 1
+                    result_count += 1
+                else:
+                    city_dupes += 1
+
+            async def _should_stop():
+                return stop_reason is not None
+
+            timed_out = False
             try:
-                results = await asyncio.wait_for(
+                await asyncio.wait_for(
                     scraper.scrape_location(
-                        request.category,
-                        city,
-                        state,
-                        request.max_results_per_city,
+                        category, city, state, max_results,
+                        on_result=_on_result, should_stop=_should_stop, exclude_keys=seen_keys,
                     ),
                     timeout=_PER_CITY_TIMEOUT,
                 )
             except asyncio.TimeoutError:
-                logger.error(
-                    f"City scraping timed out after {int(_PER_CITY_TIMEOUT)}s "
-                    f"for {city}, {state} — skipping city"
+                timed_out = True
+                logger.error(f"City scraping timed out after {int(_PER_CITY_TIMEOUT)}s for {city}, {state}")
+
+            if stop_reason:
+                break
+
+            def _post_city(conn, cur, i=idx, c=city, s=state, to=timed_out, new=city_new, dup=city_dupes):
+                nonlocal failed_cities
+                fails = failed_cities + (1 if to else 0)
+                _owned_update(
+                    cur, "completed_cities = ?, failed_cities = ?, progress = ?, heartbeat_at = ?",
+                    (i + 1, fails, min(99, int((i + 1) / max(1, total) * 100)), job_service.now_iso()),
                 )
-                results = []
-
-                def _timeout_log(conn, cursor):
-                    cursor.execute(
-                        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                        (
-                            job_id,
-                            f"Timeout scraping {city}, {state} — city skipped",
-                            datetime.now().isoformat(),
-                        ),
-                    )
-                    conn.commit()
-
-                try:
-                    _run_db_block("timeout log", _timeout_log)
-                except Exception:
-                    pass
-
-            all_results.extend(results)
-
-            # Persist results/logs with a short-lived connection (and fewer round trips).
-            def _post_city(conn, cursor):
-                if results:
-                    rows = []
-                    for r in results:
-                        rows.append(
-                            (
-                                job_id,
-                                r.get("business_name"),
-                                r.get("phone"),
-                                r.get("website"),
-                                r.get("email"),
-                                r.get("address"),
-                                r.get("category"),
-                                r.get("city"),
-                                r.get("state"),
-                                r.get("google_maps_url"),
-                            )
-                        )
-                    cursor.executemany(
-                        """
-                        INSERT INTO results (job_id, business_name, phone, website, email, address, category, city, state, google_maps_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        rows,
-                    )
-
-                cursor.execute(
-                    "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                    (
+                if to:
+                    job_service.add_log(
                         job_id,
-                        f"Found {len(results)} businesses in {city}, {state}",
-                        datetime.now().isoformat(),
-                    ),
-                )
-                conn.commit()
-
-            _run_db_block("post-city persist", _post_city)
-
-            logger.info(f"Found {len(results)} businesses in {city}, {state}")
-
-            await asyncio.sleep(1)
-        
-        # Final status check and completion (short-lived connection).
-        final_should_return = False
-        final_status_value = None
-
-        def _fetch_final_status(conn, cursor):
-            nonlocal final_should_return, final_status_value
-            cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
-            row = cursor.fetchone()
-            final_status_value = (row[0] if row else None)
-            if row and row[0] in ("failed", "cancelled"):
-                if row[0] == "cancelled":
-                    cursor.execute(
-                        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                        (job_id, "Job cancelled by user", datetime.now().isoformat()),
+                        f"Timeout scraping {c}, {s} after {int(_PER_CITY_TIMEOUT)}s - kept {new} leads found before the timeout",
+                        cur,
                     )
-                    conn.commit()
-                final_should_return = True
-
-        _run_db_block("final status check", _fetch_final_status)
-        if final_should_return:
-            return
-
-        # Save results to CSV file (filesystem only, no DB needed).
-        if all_results:
-            filename = os.path.join(
-                RESULTS_DIR,
-                f"results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            )
-            import csv
-
-            fieldnames = [
-                "business_name",
-                "phone",
-                "website",
-                "email",
-                "address",
-                "category",
-                "city",
-                "state",
-                "google_maps_url",
-            ]
-            with open(filename, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(all_results)
-            logger.info(f"Saved {len(all_results)} results to {filename}")
-
-        def _mark_completed(conn, cursor):
-            cursor.execute(
-                """
-                UPDATE jobs SET status = ?, progress = ?, completed_at = ?
-                WHERE job_id = ?
-                """,
-                ("completed", 100, datetime.now().isoformat(), job_id),
-            )
-            cursor.execute(
-                "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                (
+                # NOTE: "Found N businesses in" is parsed by requeue for legacy jobs; keep the prefix.
+                job_service.add_log(
                     job_id,
-                    f"Job completed successfully. Total businesses found: {len(all_results)}",
-                    datetime.now().isoformat(),
-                ),
-            )
-            conn.commit()
-
-        _run_db_block("mark completed", _mark_completed)
-        record_job_activity_event(
-            job_id=job_id,
-            user_id=user_id,
-            event_type="job_completed",
-            job_status="completed",
-            job_type=request.category,
-            result_count=len(all_results),
-            metadata={
-                "total_cities": len(request.cities_data),
-                "max_results_per_city": request.max_results_per_city,
-            },
-        )
-        record_audit_event(
-            "job.complete",
-            actor_user_id=user_id,
-            target_type="job",
-            target_id=job_id,
-            after={"status": "completed", "results": len(all_results)},
-        )
-        logger.info(f"Job {job_id} completed successfully. Total businesses found: {len(all_results)}")
-        
-    except Exception as e:
-        # Log full traceback for diagnostics
-        logger.exception(f"Job {job_id} failed with error: {repr(e)}")
-
-        # ── Bulletproof DB status update ─────────────────────────────────────
-        # Attempt up to 3 times with a small back-off so transient DB locks /
-        # connection drops don't leave the job perpetually stuck as 'running'.
-        _fail_recorded = False
-        _error_msg = repr(e)
-        _completed_ts = datetime.now().isoformat()
-        for _attempt in range(3):
-            try:
-                _ec = get_db()
-                try:
-                    _ecur = _ec.cursor()
-                    _ecur.execute(
-                        """
-                        UPDATE jobs
-                           SET status      = 'failed',
-                               error       = ?,
-                               completed_at = ?
-                         WHERE job_id = ?
-                        """,
-                        (_error_msg, _completed_ts, job_id),
-                    )
-                    _ec.commit()
-                    _ecur.execute(
-                        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-                        (job_id, f"Job failed: {_error_msg}", _completed_ts),
-                    )
-                    _ec.commit()
-                    _fail_recorded = True
-                finally:
-                    try:
-                        _ec.close()
-                    except Exception:
-                        pass
-                break  # success — stop retrying
-            except Exception as _db_err:
-                logger.error(
-                    f"Failed to record job failure to DB (attempt {_attempt + 1}/3): {repr(_db_err)}"
+                    f"Found {new} businesses in {c}, {s}" + (f" ({dup} duplicates skipped)" if dup else ""),
+                    cur,
                 )
-                import time as _time
-                _time.sleep(0.5 * (_attempt + 1))
+                failed_cities = fails
 
-        if not _fail_recorded:
-            logger.critical(
-                f"CRITICAL: could not mark job {job_id} as failed after 3 attempts — "
-                f"it may remain stuck as 'running' in the database."
-            )
+            await _db(_post_city)
+            logger.info(f"Job {job_id}: {city}, {state} done ({city_new} new, {city_dupes} duplicates)")
+            await asyncio.sleep(1)
 
-        # Record activity / audit events AFTER the DB update so these never
-        # shadow a DB error (they run in a separate try block).
-        try:
+        # ---- terminal state -------------------------------------------------
+        if stop_reason == "lost":
+            logger.warning("Job %s: lease lost; another worker continues it", job_id)
+            return
+        if stop_reason == "deleted":
+            return
+        if stop_reason in ("cancelled", "failed"):
+            def _stopped_log(conn, cur):
+                job_service.add_log(job_id, f"Job stopped ({stop_reason}). {result_count} leads kept.", cur)
+            await _db(_stopped_log)
+        else:
+            all_failed = total > 0 and failed_cities >= total and result_count == 0
+            final_status = "failed" if all_failed else "completed"
+
+            def _finish(conn, cur):
+                now_s = job_service.now_iso()
+                if all_failed:
+                    _owned_update(
+                        cur, "status = 'failed', error = ?, completed_at = ?, heartbeat_at = ?",
+                        ("Every city timed out without results", now_s, now_s),
+                    )
+                    job_service.add_log(job_id, "Job failed: every city timed out without results", cur)
+                else:
+                    _owned_update(cur, "status = 'completed', progress = 100, completed_at = ?, heartbeat_at = ?",
+                                  (now_s, now_s))
+                    summary = f"Job completed. Total businesses found: {result_count}"
+                    if failed_cities:
+                        summary += f" ({failed_cities} of {total} cities timed out)"
+                    job_service.add_log(job_id, summary, cur)
+
+            await _db(_finish)
             record_job_activity_event(
-                job_id=job_id,
-                user_id=user_id,
-                event_type="job_failed",
-                job_status="failed",
-                job_type=request.category,
-                result_count=len(all_results),
-                error_message=_error_msg,
-                metadata={
-                    "total_cities": len(request.cities_data),
-                    "max_results_per_city": request.max_results_per_city,
-                },
+                job_id=job_id, user_id=user_id,
+                event_type="job_completed" if final_status == "completed" else "job_failed",
+                job_status=final_status, job_type=category, result_count=result_count,
+                metadata={"total_cities": total, "failed_cities": failed_cities,
+                          "max_results_per_city": max_results},
             )
-        except Exception as _ae:
-            logger.error(f"Failed to record job_failed activity event: {repr(_ae)}")
+            record_audit_event(f"job.{'complete' if final_status == 'completed' else 'failed'}",
+                               actor_user_id=user_id, target_type="job", target_id=job_id,
+                               after={"status": final_status, "results": result_count})
+            logger.info(f"Job {job_id} {final_status}. Leads: {result_count}")
+
+    except _LostOwnership:
+        logger.warning("Job %s: lease lost mid-write; another worker continues it", job_id)
+        return
+    except Exception as e:
+        logger.exception(f"Job {job_id} failed with error: {repr(e)}")
+        err = f"{type(e).__name__}: {str(e)[:500]}"
+
+        def _fail(conn, cur):
+            now_s = job_service.now_iso()
+            cur.execute(
+                "UPDATE jobs SET status = 'failed', error = ?, completed_at = ? " + owned_sql,
+                (err, now_s, job_id, worker_id),
+            )
+            if cur.rowcount == 1:
+                job_service.add_log(job_id, f"Job failed: {err}", cur)
 
         try:
-            record_audit_event(
-                "job.failed",
-                actor_user_id=user_id,
-                target_type="job",
-                target_id=job_id,
-                status="failure",
-                failure_reason=_error_msg,
-                after={"status": "failed"},
-            )
+            await _db(_fail, retries=5)
+        except Exception as db_err:
+            # Leave it 'running': the heartbeat stops, and the recovery sweep
+            # requeues or fails it. Never strand it silently.
+            logger.critical(f"Could not record failure for job {job_id}: {db_err!r}")
+        try:
+            record_job_activity_event(job_id=job_id, user_id=user_id, event_type="job_failed",
+                                      job_status="failed", job_type=category, result_count=result_count,
+                                      error_message=err)
+            record_audit_event("job.failed", actor_user_id=user_id, target_type="job", target_id=job_id,
+                               status="failure", failure_reason=err, after={"status": "failed"})
         except Exception as _ae:
-            logger.error(f"Failed to record job.failed audit event: {repr(_ae)}")
-    
+            logger.error(f"Failed to record job failure events: {repr(_ae)}")
     finally:
-        await scraper.close()
-        logger.info(f"Closed browser for job {job_id}")
+        if hb_task:
+            hb_task.cancel()
+        try:
+            await scraper.close()
+        except Exception:
+            pass
+        if stop_reason != "lost":
+            try:
+                await asyncio.to_thread(job_service.settle_job_credits, job_id)
+            except Exception as exc:
+                logger.error("Settlement for job %s failed (sweep will retry): %r", job_id, exc)
 
 # ==================== JOB ENDPOINTS ====================
 
-@app.post("/api/jobs", response_model=ScrapingJob)
+_job_runner = None  # set at startup when JOB_RUNNER_MODE=inprocess
+
+
+def _clean_cities(raw: List[str]) -> List[str]:
+    cities = [str(c).strip() for c in raw if str(c).strip()]
+    if not cities:
+        raise HTTPException(status_code=422, detail="Add at least one target city")
+    too_long = [c for c in cities if len(c) > 200]
+    if too_long:
+        raise HTTPException(status_code=422, detail="City entries must be 200 characters or fewer")
+    return cities
+
+
+@app.post("/api/jobs")
 async def create_scraping_job(
     job_request: ScrapingRequest,
     req: Request,
-    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new scraping job with credit check and rate limiting"""
+    """Create a scraping job: charge credits and enqueue in one transaction.
+
+    Send an ``Idempotency-Key`` header (8-64 chars). Retrying with the same key
+    returns the originally created job and never charges twice, so clients can
+    safely retry after a timeout or dropped connection.
+    """
+    import job_service
+
     user_id = current_user["id"]
+    category = job_request.category.strip()
+    if not category:
+        raise HTTPException(status_code=422, detail="Enter a lead category")
+    cities = _clean_cities(job_request.cities_data)
 
-    # Check rate limits
-    rate_status = check_rate_limits(user_id)
-    if not rate_status["can_proceed"]:
-        raise HTTPException(status_code=429, detail=rate_status["reason"])
-
-    # Calculate credit cost
-    num_cities = len(job_request.cities_data)
-    credit_cost = estimate_credit_cost(num_cities, job_request.max_results_per_city)
-    current_balance = get_user_credit_balance(user_id)
-
-    # Check sufficient credits
-    if current_balance < credit_cost:
-        raise HTTPException(
-            status_code=402,  # Payment Required
-            detail=f"Insufficient credits. Required: {credit_cost}, Available: {current_balance}"
+    try:
+        key = job_service.normalize_idempotency_key(
+            req.headers.get("idempotency-key") or job_request.idempotency_key
         )
+        outcome = await asyncio.to_thread(
+            job_service.create_job_atomic,
+            user_id=user_id,
+            category=category,
+            cities=cities,
+            max_results_per_city=job_request.max_results_per_city,
+            idempotency_key=key,
+        )
+    except job_service.JobCreateError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
-    # Deduct credits upfront
-    new_balance = deduct_credits(user_id, credit_cost, reason=f"Job charge: {job_request.category}")
+    job_id = outcome["job_id"]
+    if not outcome["replayed"]:
+        credit_cost = outcome["credit_cost"]
+        record_job_activity_event(
+            job_id=job_id, user_id=user_id, event_type="job_created", job_status="pending",
+            job_type=category, result_count=0,
+            metadata={"cities": len(cities), "max_results_per_city": job_request.max_results_per_city,
+                      "credit_cost": credit_cost, "credit_balance_after": outcome["balance_after"]},
+        )
+        try:
+            increment_rate_limit(user_id)  # informational counter for admin views
+        except Exception:
+            pass
+        record_audit_event(
+            "job.create", request_id=req.state.request_id, actor_user_id=user_id,
+            actor_username=current_user["username"], target_type="job", target_id=job_id,
+            after={"category": category, "cities": len(cities), "credit_cost": credit_cost},
+            ip_address=req.state.client_ip, user_agent=req.state.user_agent,
+        )
+        if _job_runner is not None:
+            _job_runner.notify()
 
-    job_id = str(uuid.uuid4())
+    def _read(conn, cur):
+        job = job_service.fetch_job_row(cur, job_id, user_id)
+        return job_service.job_payload(cur, job, include_results=False) if job else None
 
-    conn = get_db()
-    cursor = conn.cursor()
+    payload = await asyncio.to_thread(_db_block, _read)
+    if payload is None:
+        raise HTTPException(status_code=500, detail="Job was created but could not be read back")
+    payload["idempotent_replay"] = bool(outcome["replayed"])
+    payload["credit_balance"] = outcome["balance_after"]
+    payload["credit_cost"] = payload["credit_charged"]
+    return payload
 
-    # Create job in database with credit info
-    cursor.execute("""
-        INSERT INTO jobs (job_id, user_id, category, cities_data, max_results_per_city, status, total_cities, credit_estimate, credit_charged, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        job_id, user_id, job_request.category,
-        json.dumps(job_request.cities_data), job_request.max_results_per_city,
-        "pending", num_cities, credit_cost, credit_cost, datetime.now().isoformat()
-    ))
-    conn.commit()
 
-    # Update the credit ledger with job_id
-    cursor.execute("""
-        UPDATE credit_ledger SET job_id = ?
-        WHERE user_id = ? AND job_id IS NULL
-        ORDER BY created_at DESC LIMIT 1
-    """, (job_id, user_id))
-    conn.commit()
-    conn.close()
-
-    record_job_activity_event(
-        job_id=job_id,
-        user_id=user_id,
-        event_type="job_created",
-        job_status="pending",
-        job_type=job_request.category,
-        result_count=0,
-        metadata={
-            "cities": num_cities,
-            "max_results_per_city": job_request.max_results_per_city,
-            "credit_cost": credit_cost,
-            "credit_balance_after": new_balance,
-        },
-    )
-
-    # Increment rate limit counter
-    increment_rate_limit(user_id)
-
-    # Start background task
-    background_tasks.add_task(run_scraping_job, job_id, job_request, user_id)
-
-    # Audit: job create
-    record_audit_event(
-        "job.create",
-        request_id=req.state.request_id,
-        actor_user_id=current_user["id"],
-        actor_username=current_user["username"],
-        target_type="job",
-        target_id=job_id,
-        after={"category": job_request.category, "cities": num_cities, "credit_cost": credit_cost},
-        ip_address=req.state.client_ip,
-        user_agent=req.state.user_agent,
-    )
-
-    # Return job
-    return ScrapingJob(
-        job_id=job_id,
-        status=ScrapingStatus.PENDING,
-        created_at=datetime.now().isoformat(),
-        logs=[f"Job created for category: {job_request.category}", f"Credits charged: {credit_cost}"]
-    )
+def _can_manage_job(job_user_id, current_user: dict) -> bool:
+    return job_user_id == current_user["id"] or _user_role_level(current_user) >= ROLE_HIERARCHY["admin"]
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -3705,7 +3668,13 @@ async def cancel_scraping_job(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
-    """Cancel a pending/running scraping job (best-effort)."""
+    """Cancel a pending/running job.
+
+    The worker notices within one business page (or one heartbeat) and stops;
+    leads already found are kept and undelivered work is refunded once.
+    """
+    import job_service
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -3716,58 +3685,52 @@ async def cancel_scraping_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     job_user_id, status_value, job_category = row[0], row[1], (row[2] or "unknown")
-    if job_user_id != current_user["id"] and current_user.get("is_admin") is not True:
+    if not _can_manage_job(job_user_id, current_user):
         conn.close()
-        raise HTTPException(status_code=403, detail="Not authorized to cancel this job")
+        raise HTTPException(status_code=404, detail="Job not found")
 
     if status_value in ("completed", "failed", "cancelled"):
         conn.close()
-        return {"message": f"Job already {status_value}"}
+        return {"message": f"Job already {status_value}", "status": status_value}
 
     now = datetime.now().isoformat()
     cursor.execute(
-        """
-        UPDATE jobs
-        SET status = ?, error = ?, completed_at = ?
-        WHERE job_id = ?
-        """,
-        ("cancelled", "Cancelled by user", now, job_id),
+        "UPDATE jobs SET status = 'cancelled', error = ?, completed_at = ? "
+        "WHERE job_id = ? AND status IN ('pending', 'running')",
+        ("Cancelled by user", now, job_id),
     )
-    cursor.execute(
-        "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
-        (job_id, "Cancellation requested by user", now),
-    )
-
+    changed = cursor.rowcount == 1
+    if changed:
+        cursor.execute(
+            "INSERT INTO job_logs (job_id, log_message, created_at) VALUES (?, ?, ?)",
+            (job_id, "Cancellation requested by user", now),
+        )
     conn.commit()
     conn.close()
 
-    # Audit: job cancel
+    if not changed:
+        return {"message": "Job already finished", "status": "unknown"}
+
+    # A job that never started has no worker to settle it: settle now.
+    if status_value == "pending":
+        try:
+            await asyncio.to_thread(job_service.settle_job_credits, job_id)
+        except Exception as exc:
+            logger.error("Settlement after cancel failed for %s: %r", job_id, exc)
+
     record_audit_event(
-        "job.cancel",
-        request_id=request.state.request_id,
-        actor_user_id=current_user["id"],
-        actor_username=current_user["username"],
-        target_type="job",
-        target_id=job_id,
-        before={"status": status_value},
-        after={"status": "cancelled"},
-        ip_address=request.state.client_ip,
-        user_agent=request.state.user_agent,
+        "job.cancel", request_id=request.state.request_id, actor_user_id=current_user["id"],
+        actor_username=current_user["username"], target_type="job", target_id=job_id,
+        before={"status": status_value}, after={"status": "cancelled"},
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
     )
     record_job_activity_event(
-        job_id=job_id,
-        user_id=job_user_id,
-        event_type="job_cancelled",
-        job_status="cancelled",
-        job_type=str(job_category),
-        error_message="Cancelled by user",
-        metadata={
-            "cancelled_by_user_id": current_user["id"],
-            "cancelled_by_username": current_user.get("username"),
-        },
+        job_id=job_id, user_id=job_user_id, event_type="job_cancelled", job_status="cancelled",
+        job_type=str(job_category), error_message="Cancelled by user",
+        metadata={"cancelled_by_user_id": current_user["id"],
+                  "cancelled_by_username": current_user.get("username")},
     )
-
-    return {"message": "Cancellation requested"}
+    return {"message": "Cancellation requested", "status": "cancelled"}
 
 
 @app.delete("/api/jobs/{job_id}")
@@ -3787,7 +3750,7 @@ async def delete_scraping_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     job_user_id, status_value, category = row[0], row[1], row[2]
-    if job_user_id != current_user["id"] and current_user.get("is_admin") is not True:
+    if not _can_manage_job(job_user_id, current_user):
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -3798,84 +3761,69 @@ async def delete_scraping_job(
             detail="Job is running. Cancel it first, then delete.",
         )
 
+    # Results/logs are removed explicitly: SQLite connections in this app do not
+    # always enforce ON DELETE CASCADE for rows created before foreign keys were on.
+    cursor.execute("DELETE FROM results WHERE job_id = ?", (job_id,))
+    cursor.execute("DELETE FROM job_logs WHERE job_id = ?", (job_id,))
     cursor.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
     conn.commit()
     conn.close()
 
-    # Audit: job delete
     record_audit_event(
-        "job.delete",
-        request_id=request.state.request_id,
-        actor_user_id=current_user["id"],
-        actor_username=current_user["username"],
-        target_type="job",
-        target_id=job_id,
+        "job.delete", request_id=request.state.request_id, actor_user_id=current_user["id"],
+        actor_username=current_user["username"], target_type="job", target_id=job_id,
         before={"status": status_value, "category": category},
-        ip_address=request.state.client_ip,
-        user_agent=request.state.user_agent,
+        ip_address=request.state.client_ip, user_agent=request.state.user_agent,
     )
-
     return {"message": "Job deleted"}
 
-@app.get("/api/jobs/{job_id}", response_model=ScrapingJob)
-async def get_job_status(job_id: str, current_user: dict = Depends(get_current_user)):
-    """Get scraping job status"""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    # Get job
-    cursor.execute("""
-        SELECT job_id, status, progress, total_cities, current_city, error, created_at, completed_at
-        FROM jobs WHERE job_id = ? AND user_id = ?
-    """, (job_id, current_user["id"]))
-    
-    job_data = cursor.fetchone()
-    if not job_data:
-        conn.close()
+
+@app.get("/api/jobs/active")
+async def get_active_jobs(current_user: dict = Depends(get_current_user)):
+    """Pending/running jobs of the current user (lets a refreshed page reattach)."""
+    import job_service
+
+    def _read(conn, cur):
+        cur.execute(
+            "SELECT job_id FROM jobs WHERE user_id = ? AND status IN ('pending', 'running') "
+            "ORDER BY created_at DESC LIMIT 10",
+            (current_user["id"],),
+        )
+        out = []
+        for (jid,) in cur.fetchall():
+            job = job_service.fetch_job_row(cur, jid, current_user["id"])
+            if job:
+                out.append(job_service.job_payload(cur, job, include_results=False, log_limit=200))
+        return out
+
+    jobs = await asyncio.to_thread(_db_block, _read)
+    return {"jobs": jobs, "server_time": job_service.server_time_api()}
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job_status(
+    job_id: str,
+    include_results: bool = True,
+    logs_after: Optional[int] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Job status.
+
+    Pollers should pass ``include_results=false`` and ``logs_after=<next_log_cursor>``
+    so each poll transfers only counters and new log lines.
+    """
+    import job_service
+
+    def _read(conn, cur):
+        job = job_service.fetch_job_row(cur, job_id, current_user["id"])
+        if not job:
+            return None
+        return job_service.job_payload(cur, job, include_results=include_results, logs_after=logs_after)
+
+    payload = await asyncio.to_thread(_db_block, _read)
+    if payload is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    # Get logs
-    cursor.execute("SELECT log_message FROM job_logs WHERE job_id = ? ORDER BY created_at", (job_id,))
-    logs = [row[0] for row in cursor.fetchall()]
-    
-    # Get results count
-    cursor.execute("SELECT COUNT(*) FROM results WHERE job_id = ?", (job_id,))
-    results_count = cursor.fetchone()[0]
-    
-    # Get results
-    cursor.execute("""
-        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
-        FROM results WHERE job_id = ?
-    """, (job_id,))
-    
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "business_name": row[0],
-            "phone": row[1],
-            "website": row[2],
-            "email": row[3],
-            "address": row[4],
-            "category": row[5],
-            "city": row[6],
-            "state": row[7],
-            "google_maps_url": row[8]
-        })
-    
-    conn.close()
-    
-    return ScrapingJob(
-        job_id=job_data[0],
-        status=ScrapingStatus(job_data[1]),
-        progress=job_data[2],
-        total_cities=job_data[3],
-        current_city=job_data[4] or "",
-        results=results,
-        error=job_data[5],
-        created_at=job_data[6],
-        completed_at=job_data[7],
-        logs=logs
-    )
+    return payload
 
 @app.get("/api/jobs")
 async def get_user_jobs(current_user: dict = Depends(get_current_user)):
@@ -3887,7 +3835,8 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
         SELECT j.job_id, j.category, j.status, j.progress,
                j.total_cities, j.credit_estimate, j.credit_charged,
                j.created_at, j.completed_at, j.cities_data,
-               (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count
+               (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count,
+               j.completed_cities, j.credit_refunded, j.error, j.current_city
         FROM jobs j WHERE j.user_id = ? ORDER BY j.created_at DESC
     """, (current_user["id"],))
 
@@ -3946,11 +3895,15 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
             "total_cities": row[4],
             "credit_estimate": row[5],
             "credit_charged": row[6],
-            "created_at": row[7],
-            "completed_at": row[8],
+            "created_at": _api_ts(row[7]),
+            "completed_at": _api_ts(row[8]),
             "cities": cities,
             "result_count": result_count,
-            "top_city": top_city_text
+            "top_city": top_city_text,
+            "completed_cities": int(row[11] or 0),
+            "credit_refunded": int(row[12] or 0),
+            "error": row[13],
+            "current_city": row[14] or "",
         })
 
     conn.close()

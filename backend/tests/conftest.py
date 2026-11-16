@@ -41,8 +41,19 @@ def test_db(test_db_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setenv("DB_TYPE", "sqlite")
 
+    monkeypatch.setenv("DISABLE_DEFAULT_ADMIN", "true")
+    monkeypatch.setenv("JOB_RUNNER_MODE", "off")
+    monkeypatch.delenv("JOB_REFUND_POLICY", raising=False)
+
     # Import after setting environment
+    import database
     from database import init_database, get_db
+
+    # Safety guard: never let the suite touch a real database (CLAUDE_DEEP_AUDIT M-3).
+    assert database._get_db_type() == "sqlite"
+    assert os.path.abspath(database._sqlite_path(database._database_url())) == os.path.abspath(test_db_path), (
+        "Test DB resolution escaped the temp directory"
+    )
 
     # Initialize database with migrations
     init_database()

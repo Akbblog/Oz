@@ -214,6 +214,26 @@ def validate_migration_checksum(conn, version: str, sql_content: str) -> bool:
     return True
 
 
+class MigrationError(RuntimeError):
+    """Raised when a migration cannot be applied."""
+
+
+# MySQL: 1060 duplicate column, 1061 duplicate key name, 1050 table exists.
+# SQLite: "duplicate column name", "already exists".
+_ALREADY_APPLIED_MYSQL_CODES = {1050, 1060, 1061}
+
+
+def _is_already_applied_error(exc: Exception) -> bool:
+    try:
+        code = int(getattr(exc, "args", [None])[0])
+        if code in _ALREADY_APPLIED_MYSQL_CODES:
+            return True
+    except Exception:
+        pass
+    msg = str(exc).lower()
+    return "duplicate column name" in msg or "already exists" in msg
+
+
 def apply_migration(conn, migration_path: str, version: str, filename: str) -> bool:
     """
     Apply a single migration file
@@ -264,6 +284,13 @@ def apply_migration(conn, migration_path: str, version: str, filename: str) -> b
             try:
                 cursor.execute(statement)
             except Exception as e:
+                if _is_already_applied_error(e):
+                    # MySQL DDL is not transactional: a previous partial run may
+                    # already have added this column/index. Treat as applied.
+                    logger.warning(
+                        f"Skipping already-applied statement in {filename}: {str(e)[:160]}"
+                    )
+                    continue
                 logger.error(f"Error executing statement in {filename}:")
                 logger.error(f"Statement: {statement[:200]}...")
                 raise
@@ -315,7 +342,9 @@ def run_pending_migrations(migrations_dir: str) -> int:
                 applied_count += 1
             else:
                 logger.error(f"Migration {version} failed. Stopping migration process.")
-                break
+                # Fail loudly: serving traffic on a half-migrated schema causes
+                # silent data corruption (see CLAUDE_DEEP_AUDIT H-8).
+                raise MigrationError(f"Migration {version} ({filename}) failed")
     finally:
         conn.close()
 
