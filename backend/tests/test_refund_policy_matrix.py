@@ -163,3 +163,16 @@ def test_refund_outcome(db_connection, monkeypatch, scenario, policy):
     cur.execute("SELECT COALESCE(SUM(amount), 0) FROM credit_ledger WHERE user_id = ?", (uid,))
     assert balance == 1000 + cur.fetchone()[0] == 1000 - charged + refunded
     assert job_service.settle_job_credits(jid) == 0  # exactly once
+
+
+def test_refund_policy_default_is_none(monkeypatch):
+    """Refunds must be an explicit operator choice, never a deployment accident."""
+    import job_service
+
+    monkeypatch.delenv("JOB_REFUND_POLICY", raising=False)
+    assert job_service.refund_policy() == "none"
+    assert "not set" in job_service.refund_policy_warning()
+    monkeypatch.setenv("JOB_REFUND_POLICY", "Delivered ")
+    assert job_service.refund_policy() == "delivered" and job_service.refund_policy_warning() is None
+    monkeypatch.setenv("JOB_REFUND_POLICY", "refund-everything")
+    assert job_service.refund_policy() == "none" and "invalid" in job_service.refund_policy_warning()

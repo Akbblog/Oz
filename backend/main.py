@@ -497,6 +497,13 @@ async def _startup_job_runner():
 
     if os.getenv("SKIP_DB_INIT", "").strip().lower() in ("1", "true", "t", "yes", "y"):
         return
+    import job_service
+
+    warning = job_service.refund_policy_warning()
+    if warning:
+        logging.getLogger(__name__).warning(warning)
+    else:
+        logging.getLogger(__name__).info("JOB_REFUND_POLICY=%s", job_service.refund_policy())
     mode = runner_mode()
     if mode != "inprocess":
         logging.getLogger(__name__).info("Job runner mode=%s: API will not execute jobs", mode)

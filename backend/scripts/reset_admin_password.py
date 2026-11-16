@@ -65,8 +65,22 @@ def main() -> int:
             f"UPDATE password_reset_tokens SET used = 1 WHERE user_id = {placeholder} AND used = 0",
             (row[0],),
         )
+        revoked = True
+        try:
+            # Migration 015: tokens issued before this moment are rejected.
+            from datetime import datetime
+
+            cursor.execute(
+                f"UPDATE users SET password_changed_at = {placeholder} WHERE id = {placeholder}",
+                (datetime.now().isoformat(), row[0]),
+            )
+        except Exception:
+            revoked = False  # schema older than 015
         conn.commit()
-        print("Admin password reset. Existing access tokens remain valid until expiry.")
+        if revoked:
+            print("Admin password reset. Existing sessions for this account are signed out.")
+        else:
+            print("Admin password reset. Existing access tokens remain valid until expiry (run migrations to revoke).")
         return 0
     except Exception:
         conn.rollback()

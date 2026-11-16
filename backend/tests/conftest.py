@@ -121,7 +121,9 @@ def test_db(test_db_path, monkeypatch):
     """
     monkeypatch.setenv("DISABLE_DEFAULT_ADMIN", "true")
     monkeypatch.setenv("JOB_RUNNER_MODE", "off")
-    monkeypatch.delenv("JOB_REFUND_POLICY", raising=False)
+    # Durability tests assert refund behaviour, so they pin a policy explicitly.
+    # (Production default when unset is "none" - see test_refund_policy_default_is_none.)
+    monkeypatch.setenv("JOB_REFUND_POLICY", "delivered")
 
     import database
     from database import init_database, get_db

@@ -196,9 +196,30 @@ def estimate_cost(num_cities: int, max_results_per_city: int, cfg: Optional[dict
     return int(max(cost, cfg["min_job"]))
 
 
+REFUND_POLICIES = ("delivered", "unattempted", "none")
+
+
 def refund_policy() -> str:
-    policy = os.getenv("JOB_REFUND_POLICY", "delivered").strip().lower()
-    return policy if policy in ("delivered", "unattempted", "none") else "delivered"
+    """Billing rule applied when a job settles.
+
+    Deliberately defaults to ``none`` (= the billing production has always
+    used): turning on refunds is a business decision with a large revenue
+    effect (see AUDIT_FIX_REPORT.md, "Refund policy"), so it must be an
+    explicit JOB_REFUND_POLICY setting, never an accident of deployment.
+    Unknown values also fall back to ``none``.
+    """
+    policy = os.getenv("JOB_REFUND_POLICY", "none").strip().lower()
+    return policy if policy in REFUND_POLICIES else "none"
+
+
+def refund_policy_warning() -> Optional[str]:
+    raw = os.getenv("JOB_REFUND_POLICY")
+    if raw is None or not raw.strip():
+        return ("JOB_REFUND_POLICY is not set: using 'none' (no automatic refunds, same as before). "
+                "Set it explicitly to delivered | unattempted | none.")
+    if raw.strip().lower() not in REFUND_POLICIES:
+        return f"JOB_REFUND_POLICY={raw!r} is invalid: using 'none'. Valid: delivered | unattempted | none."
+    return None
 
 
 def compute_refund(
