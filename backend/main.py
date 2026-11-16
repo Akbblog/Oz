@@ -3370,7 +3370,7 @@ async def run_job_by_id(job_id: str, worker_id: str) -> None:
         if not row:
             return "deleted"
         status_value = str(row[0] or "")
-        if status_value in ("cancelled", "failed"):
+        if status_value in ("completed", "cancelled", "failed"):
             return status_value
         if status_value == "running" and row[1] == worker_id:
             return "running"
@@ -3388,6 +3388,8 @@ async def run_job_by_id(job_id: str, worker_id: str) -> None:
                 ok = await asyncio.to_thread(job_service.heartbeat, job_id, worker_id)
                 if not ok and stop_reason is None:
                     st = await _db(lambda c, cur: _status(cur))
+                    if st == "completed":
+                        return  # The worker has finished; settlement follows below.
                     stop_reason = st if st in ("cancelled", "failed", "deleted") else "lost"
             except Exception as exc:
                 logger.warning("Heartbeat failed for job %s: %r", job_id, exc)
@@ -3614,11 +3616,13 @@ async def run_job_by_id(job_id: str, worker_id: str) -> None:
             await scraper.close()
         except Exception:
             pass
-        if stop_reason != "lost":
-            try:
-                await asyncio.to_thread(job_service.settle_job_credits, job_id)
-            except Exception as exc:
-                logger.error("Settlement for job %s failed (sweep will retry): %r", job_id, exc)
+        # Settlement is idempotent and ignores active jobs. Always attempt it:
+        # a heartbeat racing with the terminal write can report lost ownership
+        # just as this worker completes, but credits must still settle.
+        try:
+            await asyncio.to_thread(job_service.settle_job_credits, job_id)
+        except Exception as exc:
+            logger.error("Settlement for job %s failed (sweep will retry): %r", job_id, exc)
 
 # ==================== JOB ENDPOINTS ====================
 

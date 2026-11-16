@@ -385,6 +385,67 @@ def test_runner_dedupes_across_cities_and_keeps_timeout_partials(db_connection, 
     assert any("Timeout scraping Al Khor" in l for l in logs)
 
 
+def test_runner_completes_thirty_cities_with_ten_leads_each(db_connection, fake_scraper):
+    """A full-size requested job keeps progress, results and billing consistent."""
+    import job_service
+
+    uid = _insert_user(db_connection, balance=1000)
+    cities = [f"City {i}, Qatar" for i in range(30)]
+    job_id = _create(uid, cities=cities, max_results=10)["job_id"]
+    fake_scraper.plan = {f"City {i}": list(range(i * 10 + 1, i * 10 + 11))
+                         for i in range(30)}
+
+    assert job_service.claim_job(job_id, "scale-worker")
+    _run(job_id, "scale-worker")
+
+    job = _job(db_connection, job_id)
+    assert job["status"] == "completed"
+    assert job["completed_cities"] == 30
+    assert job["progress"] == 100
+    assert len(_results(db_connection, job_id)) == 300
+    assert job["credit_charged"] == 460
+    assert job["credit_refunded"] == 0
+    assert _balance(db_connection, uid) == 540
+
+
+def test_lost_worker_still_settles_job_completed_elsewhere(db_connection, monkeypatch):
+    """A terminal write racing with lease loss must not strand the refund."""
+    import job_service
+    import main
+    from database import get_db
+
+    uid = _insert_user(db_connection, balance=1000)
+    job_id = _create(uid, cities=["A, Qatar", "B, Qatar"], max_results=3)["job_id"]
+
+    class ExternalCompletion:
+        async def scrape_location(self, *args, **kwargs):
+            conn = get_db()
+            try:
+                conn.cursor().execute(
+                    "UPDATE jobs SET status = 'completed', completed_cities = 2, "
+                    "progress = 100, worker_id = 'other-worker' WHERE job_id = ?",
+                    (job_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return []
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(main, "GoogleBusinessScraper", ExternalCompletion)
+    assert job_service.claim_job(job_id, "first-worker")
+    _run(job_id, "first-worker")
+
+    job = _job(db_connection, job_id)
+    assert job["status"] == "completed"
+    assert job["settled_at"] is not None
+    assert job["credit_charged"] == 26
+    assert job["credit_refunded"] == 6
+    assert _balance(db_connection, uid) == 980
+
+
 def test_resumed_job_skips_completed_cities_and_keeps_results(db_connection, fake_scraper):
     import job_service
 

@@ -14,8 +14,10 @@ import pytest
 EXPECTED = {
     #                      charged, refund
     "completed_full":    {"delivered": (26, 0),  "unattempted": (26, 0),  "none": (26, 0)},
+    "completed_zero":    {"delivered": (26, 6),  "unattempted": (26, 0),  "none": (26, 0)},
     "completed_partial": {"delivered": (34, 4),  "unattempted": (34, 0),  "none": (34, 0)},
     "cancelled":         {"delivered": (34, 15), "unattempted": (34, 16), "none": (34, 0)},
+    "cancelled_queued":  {"delivered": (34, 34), "unattempted": (34, 24), "none": (34, 0)},
     "failed_no_leads":   {"delivered": (34, 34), "unattempted": (34, 34), "none": (34, 0)},
     "failed_with_leads": {"delivered": (34, 16), "unattempted": (34, 16), "none": (34, 0)},
     "all_cities_timeout": {"delivered": (34, 34), "unattempted": (34, 34), "none": (34, 0)},
@@ -62,7 +64,9 @@ def _setup(conn, monkeypatch, policy, cities, max_results):
 
     monkeypatch.setenv("JOB_REFUND_POLICY", policy)
     monkeypatch.setattr(main, "GoogleBusinessScraper", Script)
-    monkeypatch.setattr(main, "_PER_CITY_TIMEOUT", 0.3)
+    # SQLite is in-process; Docker-hosted MariaDB needs time for each result
+    # callback's committed write. Keep the intentional 30s hangs short.
+    monkeypatch.setattr(main, "_PER_CITY_TIMEOUT", 3.0 if job_service.is_mysql() else 0.3)
     cur = conn.cursor()
     cur.execute("INSERT INTO users (username, email, password_hash, is_approved, role, created_at, credit_balance) "
                 "VALUES ('p', 'p@example.com', ?, 1, 'user', ?, 1000)", (get_password_hash("pw-strong-123"),
@@ -101,6 +105,10 @@ def test_refund_outcome(db_connection, monkeypatch, scenario, policy):
         uid, jid = _setup(db_connection, monkeypatch, policy, ["A, Q", "B, Q"], 3)
         Script.plan = {"A": [1, 2, 3], "B": [4, 5, 6]}
         _run(jid)
+    elif scenario == "completed_zero":
+        uid, jid = _setup(db_connection, monkeypatch, policy, ["A, Q", "B, Q"], 3)
+        Script.plan = {"A": [], "B": []}
+        _run(jid)
     elif scenario == "completed_partial":
         # B finds only 1; C times out after 1 lead -> 5 leads, 1 failed city
         uid, jid = _setup(db_connection, monkeypatch, policy, three, 3)
@@ -125,6 +133,10 @@ def test_refund_outcome(db_connection, monkeypatch, scenario, policy):
             return []
         monkeypatch.setattr(Script, "scrape_location", on_b)
         _run(jid)
+    elif scenario == "cancelled_queued":
+        uid, jid = _setup(db_connection, monkeypatch, policy, three, 3)
+        _cancel(jid)
+        job_service.settle_job_credits(jid)
     elif scenario == "failed_no_leads":
         uid, jid = _setup(db_connection, monkeypatch, policy, three, 3)
         Script.plan = {"A": "raise"}
@@ -165,14 +177,33 @@ def test_refund_outcome(db_connection, monkeypatch, scenario, policy):
     assert job_service.settle_job_credits(jid) == 0  # exactly once
 
 
-def test_refund_policy_default_is_none(monkeypatch):
-    """Refunds must be an explicit operator choice, never a deployment accident."""
+def test_refund_policy_default_returns_unused_credits(monkeypatch):
+    """The owner's chosen rule is the fallback if no operator override exists."""
     import job_service
 
     monkeypatch.delenv("JOB_REFUND_POLICY", raising=False)
-    assert job_service.refund_policy() == "none"
+    assert job_service.refund_policy() == "delivered"
     assert "not set" in job_service.refund_policy_warning()
     monkeypatch.setenv("JOB_REFUND_POLICY", "Delivered ")
     assert job_service.refund_policy() == "delivered" and job_service.refund_policy_warning() is None
     monkeypatch.setenv("JOB_REFUND_POLICY", "refund-everything")
-    assert job_service.refund_policy() == "none" and "invalid" in job_service.refund_policy_warning()
+    assert job_service.refund_policy() == "delivered" and "invalid" in job_service.refund_policy_warning()
+
+
+def test_refund_uses_prices_from_job_creation(db_connection, monkeypatch):
+    """A mid-job pricing change must not alter the charge already agreed to."""
+    import job_service
+
+    uid, jid = _setup(db_connection, monkeypatch, "delivered", ["A, Q", "B, Q"], 3)
+    monkeypatch.setattr(job_service, "get_credit_config", lambda: {
+        "base": 100, "per_city": 50, "per_result": 10, "min_job": 100,
+    })
+    Script.plan = {"A": [1], "B": []}
+    _run(jid)
+
+    row = job_service.fetch_job_row(db_connection.cursor(), jid)
+    assert row["credit_charged"] == 26
+    assert row["credit_refunded"] == 5  # original: 26 - (10 + 2*5 + 1)
+    cur = db_connection.cursor()
+    cur.execute("SELECT credit_balance FROM users WHERE id = ?", (uid,))
+    assert cur.fetchone()[0] == 979

@@ -78,8 +78,9 @@ def _mysql_admin_conn(db=None):
 
 def _reset_mysql_database(init_database):
     """First call: drop/create + run all migrations, then snapshot seed rows.
-    Later calls: truncate every table and restore that snapshot (DDL replay
-    on Docker storage costs ~60s per test)."""
+    Later calls: delete test rows and restore seed rows in one transaction.
+    TRUNCATE is DDL and forces a slow disk sync per table on Docker Desktop.
+    """
     global _MYSQL_SEED
     _, db = _mysql_target()
     if _MYSQL_SEED is None:
@@ -101,16 +102,23 @@ def _reset_mysql_database(init_database):
         _MYSQL_SEED = seed
         return
     conn = _mysql_admin_conn(db)
-    with conn.cursor() as cur:
-        cur.execute("SET FOREIGN_KEY_CHECKS = 0")
-        for table, (cols, rows) in _MYSQL_SEED.items():
-            cur.execute(f"TRUNCATE TABLE `{table}`")
-            if rows:
-                col_sql = ", ".join(f"`{c}`" for c in cols)
-                ph = ", ".join(["%s"] * len(cols))
-                cur.executemany(f"INSERT INTO `{table}` ({col_sql}) VALUES ({ph})", rows)
-        cur.execute("SET FOREIGN_KEY_CHECKS = 1")
-    conn.close()
+    try:
+        conn.autocommit(False)
+        with conn.cursor() as cur:
+            cur.execute("SET FOREIGN_KEY_CHECKS = 0")
+            for table, (cols, rows) in _MYSQL_SEED.items():
+                cur.execute(f"DELETE FROM `{table}`")
+                if rows:
+                    col_sql = ", ".join(f"`{c}`" for c in cols)
+                    ph = ", ".join(["%s"] * len(cols))
+                    cur.executemany(f"INSERT INTO `{table}` ({col_sql}) VALUES ({ph})", rows)
+            cur.execute("SET FOREIGN_KEY_CHECKS = 1")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @pytest.fixture(scope="function")
@@ -122,7 +130,7 @@ def test_db(test_db_path, monkeypatch):
     monkeypatch.setenv("DISABLE_DEFAULT_ADMIN", "true")
     monkeypatch.setenv("JOB_RUNNER_MODE", "off")
     # Durability tests assert refund behaviour, so they pin a policy explicitly.
-    # (Production default when unset is "none" - see test_refund_policy_default_is_none.)
+    # (Production default is "delivered"; matrix tests also cover overrides.)
     monkeypatch.setenv("JOB_REFUND_POLICY", "delivered")
 
     import database

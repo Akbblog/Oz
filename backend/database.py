@@ -269,8 +269,16 @@ def _release_mysql_connection(raw_conn, created_at: float) -> None:
     try:
         # Ensure we don't leak an open transaction into the next borrower.
         raw_conn.rollback()
+        # Some callers (including the MariaDB test fixture) perform fresh
+        # reads with autocommit enabled. A later job must never inherit that
+        # mode: its charge and settlement each rely on one transaction.
+        raw_conn.autocommit(False)
     except Exception:
-        pass
+        try:
+            raw_conn.close()
+        except Exception:
+            pass
+        return
 
     try:
         if hasattr(raw_conn, "open") and not raw_conn.open:

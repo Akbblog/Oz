@@ -10,6 +10,80 @@ Line numbers in the inventory refer to the **baseline** (`1434809`) unless marke
 
 ---
 
+## 0A. Verification round 3 and QA handoff (2026-11-17)
+
+This section supersedes the refund decision and open MariaDB test gate in round 2 below.
+All changes remain on `fix/job-durability-audit`; nothing was merged or deployed.
+The current public frontend and backend both returned HTTP 200, but still run the old code.
+
+### Billing decision
+
+The owner chose to **return unused lead credits**. New jobs default to
+`JOB_REFUND_POLICY=delivered`, and `docker-compose.worker.yml` sets it explicitly.
+The maximum estimated cost is debited when the job starts. On settlement, the
+user keeps the base job charge, completed-city charges, and charges for leads
+actually delivered (subject to the existing minimum job charge); the rest is
+returned once to the wallet. A failed job with no leads, or a cancellation
+before any city completes and before any lead is saved, gets a full refund.
+Historical jobs remain protected by `settled_at='pre-014'`: **no retroactive
+refund is issued at deployment**. At the old fill rate, applying this policy
+to future jobs could reduce net charges substantially; round 2 estimated
+50.6% of historical charges would have been returned if it had applied then.
+
+Examples with the test price (base 10, city 5, lead 1, minimum 15):
+
+| Job | Charged | Returned | Kept |
+|---|---:|---:|---:|
+| 2 cities x 3 leads, all 6 delivered | 26 | 0 | 26 |
+| 2 cities completed, zero leads | 26 | 6 | 20 |
+| 3-city job cancelled while queued | 34 | 34 | 0 |
+| Failed with no leads | 34 | 34 | 0 |
+
+Migration 016 stores the prices at job creation so an admin price change during
+a job cannot change that job's refund. Older active jobs without a snapshot use
+the current prices; there were no active jobs in the isolated production copy.
+
+### Final verification
+
+| Check | Result |
+|---|---|
+| Full backend suite, temporary SQLite | **104 passed** |
+| Full backend suite, isolated MariaDB 11.8 | **100 passed, 4 skipped** (the skips inspect SQLite-only catalog tables) |
+| Billing matrix | 29 SQLite cases passed; pricing-change regression passed on MariaDB |
+| 30-city x 10-lead scripted job | Passed on SQLite and MariaDB: 30 completed cities, 300 distinct saved leads, 460 charged, 0 refunded, balance and progress consistent |
+| Settlement race | Regression passes on both engines: a completed job is settled even when ownership changes as the worker exits |
+| Migration 016 on isolated MariaDB production copy | Applied once; users/jobs/results/ledger/balance totals stayed **5/25/802/50/10,838**; second startup applied 0 migrations |
+| Flutter | 11 tests passed, analysis 0 errors (50 existing infos/warnings), cleaned Windows release web build succeeded and required bundle files were verified |
+| Real Google Maps extraction and browser stress | Round 2 evidence still applies. Round 3 did not repeat those runs after the billing and settlement changes. |
+
+The MariaDB run caught a real race: a heartbeat could see the just-completed
+job as lost ownership and skip settlement. The worker now recognizes completed
+status and always attempts the idempotent terminal settlement. The connection
+pool also resets autocommit before reuse. The test fixture's MariaDB reset now
+uses one transaction rather than many slow table-recreation operations.
+The Windows build wrapper's asset paths were repaired.
+After verification, the `il-qa-mariadb` and `il-qa-mysql8` containers holding
+the production-data copy were removed. The live backend and tunnel stayed up.
+
+### Remaining before release
+
+1. Run the manual staging QA in section 0.7 with **`delivered`** billing; verify
+   a partial-result job shows the exact refund in the job panel and Wallet.
+2. Sample result relevance and lead completeness. The historical 789 leads had
+   phone/website/email on 711/667/259 rows respectively; the prior 38% result
+   fill rate remains the main product-quality problem. A **real** 30-city
+   Google Maps job has not been run; the 30-city test above uses a fake scraper.
+3. Push the branch or open a PR to execute CI. The same backend and Flutter
+   commands passed locally, but GitHub Actions has not run.
+4. SMTP is not configured. The owner chose to leave email setup for later, so
+   password reset remains unavailable until an email provider is configured.
+5. Fresh MySQL 8 installs still fail on historical migration 004. Production
+   runs MariaDB 11.8; document MySQL 8 as unsupported until that migration is fixed.
+
+This is a **local QA candidate**, not a deployed or fully production-ready release.
+
+---
+
 ## 0. Verification round 2 — status before manual QA (2026-11-16)
 
 **Not production-ready yet** — see 0.4 for the exact open gaps. Everything marked ✅ was executed and
@@ -176,8 +250,8 @@ session scratchpad, not in the repo; they target only 127.0.0.1:13306/13307, tem
 
 ### 0.7 Manual QA plan (≈45 min, on a staging copy — not production)
 
-Setup: backend from this branch against a **restored copy** of production, `JOB_REFUND_POLICY` set to the
-policy you choose, frontend built with `API_URL` pointing at it. Use a test account with ~500 credits.
+Setup: backend from this branch against an **isolated staging database**, `JOB_REFUND_POLICY=delivered`,
+frontend built with `API_URL` pointing at it. Use a test account with ~500 credits.
 
 1. **Sign in / refresh** — sign in, refresh twice. Expect: still signed in, balance identical in top bar,
    Credit Balance card and Wallet.
@@ -191,13 +265,14 @@ policy you choose, frontend built with `API_URL` pointing at it. Use a test acco
    category text unchanged.
 6. **Second tab** — open the app in a 2nd tab. Expect: same running job. Cancel it there. Expect: first tab
    shows Cancelled within ~10 s; leads found so far downloadable; refund shown per chosen policy.
-7. **Completion** — run another 1-city job to completion. Expect: Completed, Download Excel works, lead
-   count in panel = History = Results page = rows in the file.
+7. **Completion and refund** — run another 1-city job to completion. Expect: Completed, Download Excel
+   works, lead count in panel = History = Results page = rows in the file. If fewer leads than requested
+   arrive, the unused lead credits return once; the job panel and Wallet agree on the exact amount.
 8. **Backend restart** — start a 3-city job; restart the backend container after the first city. Expect:
    UI shows "Connection problem" while down, then the job resumes ("Resuming job at city 2" in the log)
    and completes; no duplicate leads.
-9. **Password reset** — (needs SMTP on staging) request reset, set an 8+ char password; a session in
-   another browser must be signed out.
+9. **Password reset — deferred** until SMTP is configured. Do not mark this feature as passing yet;
+   after configuration, request reset, set an 8+ char password and verify another session is signed out.
 10. **Roles** — sign in as a support user: admin lists visible; granting credits / deleting users fails.
 11. **Wallet** — after all of the above, sum of Wallet ledger = shown balance.
 Record any step that deviates, with a screenshot and the job id.

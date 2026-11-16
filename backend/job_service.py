@@ -202,23 +202,21 @@ REFUND_POLICIES = ("delivered", "unattempted", "none")
 def refund_policy() -> str:
     """Billing rule applied when a job settles.
 
-    Deliberately defaults to ``none`` (= the billing production has always
-    used): turning on refunds is a business decision with a large revenue
-    effect (see AUDIT_FIX_REPORT.md, "Refund policy"), so it must be an
-    explicit JOB_REFUND_POLICY setting, never an accident of deployment.
-    Unknown values also fall back to ``none``.
+    The owner chose to return credits for unused lead slots. Jobs therefore
+    default to ``delivered``; an operator can still select a different policy
+    explicitly. Unknown values fall back to the chosen default.
     """
-    policy = os.getenv("JOB_REFUND_POLICY", "none").strip().lower()
-    return policy if policy in REFUND_POLICIES else "none"
+    policy = os.getenv("JOB_REFUND_POLICY", "delivered").strip().lower()
+    return policy if policy in REFUND_POLICIES else "delivered"
 
 
 def refund_policy_warning() -> Optional[str]:
     raw = os.getenv("JOB_REFUND_POLICY")
     if raw is None or not raw.strip():
-        return ("JOB_REFUND_POLICY is not set: using 'none' (no automatic refunds, same as before). "
+        return ("JOB_REFUND_POLICY is not set: using 'delivered' (unused lead credits are returned). "
                 "Set it explicitly to delivered | unattempted | none.")
     if raw.strip().lower() not in REFUND_POLICIES:
-        return f"JOB_REFUND_POLICY={raw!r} is invalid: using 'none'. Valid: delivered | unattempted | none."
+        return f"JOB_REFUND_POLICY={raw!r} is invalid: using 'delivered'. Valid: delivered | unattempted | none."
     return None
 
 
@@ -235,9 +233,10 @@ def compute_refund(
 ) -> int:
     """Credits to return when a job settles.
 
-    ``delivered`` (default): the user pays for what was delivered —
-        base + per_city*attempted + per_result*leads (at least ``min_job``),
-        and nothing at all when no lead was delivered.
+    ``delivered`` (default): the user pays the base charge, completed city
+        charges, and for leads actually delivered (at least ``min_job``).
+        A failed job with no leads, or a cancelled job with no completed city
+        and no leads, gets a full refund.
     ``unattempted``: refund only cities that were never attempted, plus a full
         refund when the job failed without delivering anything.
     ``none``: never refund (legacy behaviour).
@@ -259,7 +258,7 @@ def compute_refund(
         return max(0, min(charged, unattempted * per_city_total))
 
     # delivered
-    if leads == 0:
+    if leads == 0 and (final_status == "failed" or (final_status == "cancelled" and attempted == 0)):
         return charged
     earned = cfg["base"] + cfg["per_city"] * attempted + cfg["per_result"] * leads
     earned = max(earned, cfg["min_job"])
@@ -388,17 +387,20 @@ def create_job_atomic(
         new_balance = balance - cost
 
         job_id = str(uuid.uuid4())
+        billing_snapshot = json.dumps({key: int(cfg[key]) for key in
+                                       ("base", "per_city", "per_result", "min_job")})
         try:
             cursor.execute(
                 """
                 INSERT INTO jobs (job_id, user_id, category, cities_data, max_results_per_city, status,
                                   total_cities, credit_estimate, credit_charged, created_at,
-                                  idempotency_key, completed_cities, failed_cities, attempts, credit_refunded)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 0, 0, 0, 0)
+                                  idempotency_key, completed_cities, failed_cities, attempts, credit_refunded,
+                                  billing_snapshot)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 0, 0, 0, 0, ?)
                 """,
                 (
                     job_id, user_id, category, json.dumps(cities), max_results_per_city,
-                    len(cities), cost, cost, now_s, idempotency_key,
+                    len(cities), cost, cost, now_s, idempotency_key, billing_snapshot,
                 ),
             )
         except Exception as exc:
@@ -450,14 +452,14 @@ def settle_job_credits(job_id: str) -> int:
         lock = " FOR UPDATE" if is_mysql() else ""
         cursor.execute(
             "SELECT user_id, status, credit_charged, total_cities, completed_cities, failed_cities, "
-            "max_results_per_city, settled_at, category FROM jobs WHERE job_id = ?" + lock,
+            "max_results_per_city, settled_at, category, billing_snapshot FROM jobs WHERE job_id = ?" + lock,
             (job_id,),
         )
         row = cursor.fetchone()
         if not row:
             conn.rollback()
             return 0
-        user_id, status, charged, total, completed, failed, max_results, settled_at, category = row
+        user_id, status, charged, total, completed, failed, max_results, settled_at, category, billing_snapshot = row
         if settled_at or status not in TERMINAL_STATUSES:
             conn.rollback()
             return 0
@@ -465,6 +467,14 @@ def settle_job_credits(job_id: str) -> int:
         cursor.execute("SELECT COUNT(*) FROM results WHERE job_id = ?", (job_id,))
         leads = int((cursor.fetchone() or [0])[0] or 0)
         attempted = int(completed or 0)
+        try:
+            saved_cfg = json.loads(billing_snapshot) if billing_snapshot else None
+            if saved_cfg is not None:
+                saved_cfg = {key: int(saved_cfg[key]) for key in
+                             ("base", "per_city", "per_result", "min_job")}
+        except (TypeError, ValueError, KeyError):
+            logger.warning("Job %s has an invalid billing snapshot; using current prices", job_id)
+            saved_cfg = None
         refund = compute_refund(
             charged=int(charged or 0),
             final_status=str(status),
@@ -472,6 +482,7 @@ def settle_job_credits(job_id: str) -> int:
             attempted_cities=attempted,
             leads_delivered=leads,
             max_results_per_city=int(max_results or 0),
+            cfg=saved_cfg,
         )
         now_s = now_iso()
         cursor.execute(

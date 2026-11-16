@@ -3146,7 +3146,7 @@ class _ReviewSheet extends StatelessWidget {
                   const SizedBox(width: AppSpacing.sm),
                   Expanded(
                     child: _metricCard(
-                      label: 'Est. Cost',
+                      label: 'Max Cost',
                       value: hasEstimate ? '$estimatedCost credits' : '—',
                       icon: Icons.payments_rounded,
                       color: _ScrapeColors.emerald,
@@ -3168,7 +3168,7 @@ class _ReviewSheet extends StatelessWidget {
                   const SizedBox(width: AppSpacing.sm),
                   Expanded(
                     child: _metricCard(
-                      label: 'After',
+                      label: 'After Charge',
                       value: hasEstimate ? '$remaining' : '—',
                       icon: Icons.trending_down_rounded,
                       color: hasEstimate ? Colors.white70 : Colors.white38,
@@ -3230,7 +3230,7 @@ class _ReviewSheet extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
-                'By continuing, credits are charged immediately and the job starts in the background.',
+                'The maximum is charged now. Final cost includes the job fee, completed cities and leads delivered; unused credits are returned. Failed jobs with no leads are fully refunded.',
                 style: AppTypography.labelSmall.copyWith(color: Colors.white38),
                 textAlign: TextAlign.center,
               ),

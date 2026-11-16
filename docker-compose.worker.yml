@@ -9,6 +9,7 @@ services:
       DB_TYPE: mysql
       DISABLE_DEFAULT_ADMIN: 'true'
       DEBUG: 'false'
+      JOB_REFUND_POLICY: delivered
     ports:
       - 127.0.0.1:8001:8000
     healthcheck:
