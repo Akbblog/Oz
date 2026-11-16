@@ -11,6 +11,7 @@ import '../core/theme/app_colors.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
 import '../widgets/progress_stepper.dart';
+import '../core/utils/refresh_bus.dart';
 import '../widgets/infinity_data_table.dart';
 
 class ResultsScreen extends StatefulWidget {
@@ -74,7 +75,19 @@ class _ResultsScreenState extends State<ResultsScreen>
       curve: Curves.easeOut,
     );
     _animationController.forward();
+    if (widget.jobId == null && widget.overrideResults == null) {
+      RefreshBus.jobsChanged.addListener(_reloadLatest);
+      RefreshBus.tabActivated.addListener(_onTabActivated);
+    }
     _loadIfNeeded();
+  }
+
+  void _onTabActivated() {
+    if (RefreshBus.tabActivated.value == 3) _reloadLatest();
+  }
+
+  void _reloadLatest() {
+    if (mounted) _loadIfNeeded();
   }
 
   @override
@@ -105,6 +118,8 @@ class _ResultsScreenState extends State<ResultsScreen>
 
   @override
   void dispose() {
+    RefreshBus.jobsChanged.removeListener(_reloadLatest);
+    RefreshBus.tabActivated.removeListener(_onTabActivated);
     _animationController.dispose();
     _searchController.dispose();
     super.dispose();

@@ -29,16 +29,32 @@ class AuthProvider with ChangeNotifier {
     _isLoading = true;
     notifyListeners();
     
-    try {
-      final token = await _apiService.getToken();
-      if (token != null) {
-        _currentUser = await _apiService.getCurrentUser();
-        _isAuthenticated = true;
+    final token = await _apiService.getToken();
+    if (token != null) {
+      // Retry transient failures: a flaky network on page refresh must not
+      // sign the user out. Only a definitive auth rejection clears the token.
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          _currentUser = await _apiService.getCurrentUser();
+          _isAuthenticated = true;
+          break;
+        } catch (e) {
+          if (ErrorHandler.isAuthError(e) || e is AuthorizationException) {
+            _isAuthenticated = false;
+            _currentUser = null;
+            await _apiService.clearToken();
+            break;
+          }
+          if (attempt == 2) {
+            _isAuthenticated = false;
+            _currentUser = null;
+            _errorMessage =
+                'Could not reach the server. Check your connection and reload.';
+          } else {
+            await Future<void>.delayed(Duration(seconds: 1 << attempt));
+          }
+        }
       }
-    } catch (e) {
-      _isAuthenticated = false;
-      _currentUser = null;
-      await _apiService.clearToken();
     }
     
     _isLoading = false;

@@ -116,3 +116,8 @@ states_cities_data.json
 !backend/states_cities_data.json
 
 .vercel
+
+# Local databases (never commit real data)
+*.db
+*.db-wal
+*.db-shm

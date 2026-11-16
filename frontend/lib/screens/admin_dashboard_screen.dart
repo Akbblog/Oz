@@ -10,6 +10,7 @@ import '../core/theme/app_colors.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../widgets/brand_mark.dart';
 import '../widgets/analytics_charts.dart';
+import '../core/utils/server_time.dart';
 import 'admin_jobs_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -2975,7 +2976,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final createdAt = e['created_at'] ?? '';
     String timeStr = '';
     try {
-      final dt = DateTime.parse(createdAt);
+      final dt = _parseServerOrThrow(createdAt);
       timeStr =
           '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
@@ -3345,7 +3346,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   String _formatDate(String? dateString) {
     if (dateString == null) return '';
     try {
-      final date = DateTime.parse(dateString);
+      final date = _parseServerOrThrow(dateString);
       return '${date.day}/${date.month}/${date.year}';
     } catch (e) {
       return dateString;
@@ -3516,7 +3517,7 @@ class _JobActivityDetailsPanelState extends State<_JobActivityDetailsPanel> {
   String _formatTimestamp(String value) {
     if (value.isEmpty) return '-';
     try {
-      final dt = DateTime.parse(value);
+      final dt = _parseServerOrThrow(value);
       return '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return value;
@@ -3930,7 +3931,7 @@ class _UserTimelineDialogState extends State<_UserTimelineDialog> {
                         : AppColors.dangerRed;
                     String timeStr = '';
                     try {
-                      final dt = DateTime.parse(e['created_at'] ?? '');
+                      final dt = _parseServerOrThrow(e['created_at'] ?? '');
                       timeStr =
                           '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
                     } catch (_) {
@@ -4130,7 +4131,7 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
   String _formatKpiDate(dynamic val) {
     if (val == null) return 'Never';
     try {
-      final dt = DateTime.parse(val.toString());
+      final dt = _parseServerOrThrow(val.toString());
       return '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (_) {
       return val.toString();
@@ -4168,4 +4169,11 @@ class _UserKpisDialogState extends State<_UserKpisDialog> {
       ),
     );
   }
+}
+
+
+DateTime _parseServerOrThrow(String value) {
+  final dt = parseServerTimeLocal(value);
+  if (dt == null) throw FormatException('Invalid date', value);
+  return dt;
 }

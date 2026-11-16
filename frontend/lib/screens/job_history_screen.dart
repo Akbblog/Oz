@@ -7,6 +7,9 @@ import '../services/api_service.dart';
 import '../core/download_helper.dart';
 import '../widgets/infinity_data_table.dart';
 import '../widgets/job_completion_card.dart';
+import '../core/utils/server_time.dart';
+import '../core/utils/refresh_bus.dart';
+import 'dart:async';
 import 'results_screen.dart';
 
 class JobHistoryScreen extends StatefulWidget {
@@ -54,11 +57,37 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
       curve: Curves.easeOut,
     );
     _searchController.addListener(_applyFilter);
+    RefreshBus.tabActivated.addListener(_onTabActivated);
+    RefreshBus.jobsChanged.addListener(_loadJobs);
     _loadJobs();
+  }
+
+  Timer? _activePoll;
+
+  void _onTabActivated() {
+    if (RefreshBus.tabActivated.value == 4) _loadJobs();
+  }
+
+  /// While any listed job is pending/running, refresh every 10s so status,
+  /// progress and lead counts do not go stale.
+  void _scheduleActivePoll() {
+    final hasActive = _jobs.any((j) {
+      final st = '${j['status']}';
+      return st == 'pending' || st == 'running';
+    });
+    _activePoll?.cancel();
+    _activePoll = hasActive
+        ? Timer(const Duration(seconds: 10), () {
+            if (mounted) _loadJobs();
+          })
+        : null;
   }
 
   @override
   void dispose() {
+    _activePoll?.cancel();
+    RefreshBus.tabActivated.removeListener(_onTabActivated);
+    RefreshBus.jobsChanged.removeListener(_loadJobs);
     _searchController.removeListener(_applyFilter);
     _searchController.dispose();
     _animationController.dispose();
@@ -76,13 +105,17 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
         });
         _applyFilter();
         _animationController.forward();
+        _scheduleActivePoll();
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to load job history: $e';
+          // Keep the last good list visible on a transient failure instead of
+          // replacing it with an error/empty state.
+          _error = _jobs.isEmpty ? 'Failed to load job history: $e' : null;
           _isLoading = false;
         });
+        _scheduleActivePoll();
       }
     }
   }
@@ -116,7 +149,7 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
 
         // Date filter
         if (_dateFilter != 'All') {
-          final createdAt = DateTime.tryParse(job['created_at'] ?? '');
+          final createdAt = parseServerTimeLocal(job['created_at'] ?? '');
           if (createdAt == null) return false;
 
           final now = DateTime.now();
@@ -144,9 +177,9 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
       if (_sortOption == 'Oldest') {
         _filteredJobs.sort((a, b) {
           final dateA =
-              DateTime.tryParse(a['created_at'] ?? '') ?? DateTime(1970);
+              parseServerTimeLocal(a['created_at'] ?? '') ?? DateTime(1970);
           final dateB =
-              DateTime.tryParse(b['created_at'] ?? '') ?? DateTime(1970);
+              parseServerTimeLocal(b['created_at'] ?? '') ?? DateTime(1970);
           return dateA.compareTo(dateB);
         });
       } else if (_sortOption == 'Most Results') {
@@ -240,7 +273,7 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
 
   String _formatDate(String? value) {
     if (value == null || value.isEmpty) return '—';
-    final parsed = DateTime.tryParse(value);
+    final parsed = parseServerTimeLocal(value);
     if (parsed == null) return value;
     return '${_monthName(parsed.month)} ${_pad(parsed.day)}, ${_pad(parsed.hour)}:${_pad(parsed.minute)}';
   }
@@ -1239,9 +1272,9 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
     final category = job['category']?.toString() ?? 'Unknown';
     final cities = _citiesList(job['cities']);
     final resultCount = _resultCountForJob(job);
-    final createdAt = DateTime.tryParse(job['created_at']?.toString() ?? '');
+    final createdAt = parseServerTimeLocal(job['created_at']?.toString() ?? '');
     final completedAt =
-        DateTime.tryParse(job['completed_at']?.toString() ?? '') ??
+        parseServerTimeLocal(job['completed_at']?.toString() ?? '') ??
             createdAt ??
             DateTime.now();
     final duration = createdAt != null && completedAt.isAfter(createdAt)
@@ -1342,7 +1375,7 @@ class _JobHistoryScreenState extends State<JobHistoryScreen>
     final cities = _citiesList(job['cities']);
     final createdAt = _formatDate(job['created_at']?.toString());
     final createdAtDate =
-        DateTime.tryParse(job['created_at']?.toString() ?? '') ??
+        parseServerTimeLocal(job['created_at']?.toString() ?? '') ??
             DateTime.now();
     final canCancel = status == 'pending' || status == 'running';
     final secondaryLabel = canCancel ? 'Cancel Job' : 'Delete Job';

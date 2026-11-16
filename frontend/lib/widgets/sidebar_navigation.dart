@@ -306,14 +306,16 @@ class SidebarNavigation extends StatelessWidget {
 
   Widget _buildUserSection(bool collapsed) {
     if (!isAuthenticated) {
+      // The collapsed rail is 72px wide: full margins + padding + border left
+      // less than the 40px avatar and overflowed on tablets.
       return Container(
-        margin: const EdgeInsets.fromLTRB(
-          AppSpacing.sm,
+        margin: EdgeInsets.fromLTRB(
+          collapsed ? AppSpacing.xxs : AppSpacing.sm,
           AppSpacing.md,
-          AppSpacing.sm,
+          collapsed ? AppSpacing.xxs : AppSpacing.sm,
           AppSpacing.lg,
         ),
-        padding: const EdgeInsets.all(AppSpacing.sm),
+        padding: EdgeInsets.all(collapsed ? AppSpacing.xxs : AppSpacing.sm),
         decoration: BoxDecoration(
           color: AppColors.surfaceDark.withValues(alpha: 0.7),
           borderRadius: AppSpacing.borderRadiusLg,

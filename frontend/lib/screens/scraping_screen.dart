@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:convert';
 import '../providers/scraper_provider.dart';
+import '../providers/credit_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../core/download_helper.dart';
@@ -61,10 +62,21 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   final ApiService _apiService = ApiService();
 
   int _maxResults = 50;
-  int _creditBalance = 0;
   int _estimatedCost = 0;
-  bool _loadingCredits = true;
-  bool _canCreateJob = true;
+  VoidCallback? _jobListener;
+  ScraperProvider? _scraperForListener;
+
+  int get _creditBalance => CreditProvider.instance.balance;
+  bool get _loadingCredits => !CreditProvider.instance.hasValue;
+  bool get _canCreateJob => CreditProvider.instance.canCreateJob;
+
+  // In-memory copy of the form. This State is recreated when the layout
+  // crosses a breakpoint (mobile PageView <-> desktop shell); without this the
+  // category the user typed was lost while the cities (re-passed by the
+  // parent) survived - the "category text disappears" bug.
+  static String? _memCategory;
+  static String? _memCities;
+  static int? _memMaxResults;
   String? _lastCompletedJobId; // Track completion updates per job
   String _logFilter = 'All'; // All, Errors, Warnings, Info
   String _logSearchQuery = '';
@@ -75,10 +87,6 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   _RepeatJobPreset? _activeJobPreset;
   _RepeatJobPreset? _lastCompletedPreset;
   bool _isDownloading = false;
-  int _lastKnownResultCount = 0;
-  String? _lastResultJobId;
-  final List<String> _syntheticResultLogs = <String>[];
-  bool _completionSummaryAdded = false;
   bool _attemptedStart = false;
   bool _draftLoaded = false;
 
@@ -102,10 +110,17 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   void initState() {
     super.initState();
     AnalyticsService.instance.page('/scraping');
-    _categoryController.text = widget.initialCategory;
-    _citiesController.text = widget.initialCities;
+    _categoryController.text = widget.initialCategory.trim().isNotEmpty
+        ? widget.initialCategory
+        : (_memCategory ?? '');
+    _citiesController.text = widget.initialCities.trim().isNotEmpty
+        ? widget.initialCities
+        : (_memCities ?? '');
     _showCategorySuggestions = _categoryController.text.trim().isEmpty;
-    _maxResults = int.tryParse(widget.initialMaxResults) ?? 50;
+    _maxResults =
+        _memMaxResults ?? int.tryParse(widget.initialMaxResults) ?? 50;
+    _categoryController.addListener(_rememberForm);
+    _citiesController.addListener(_rememberForm);
     _loadSearchDraftIfNeeded();
 
     _fadeController = AnimationController(
@@ -121,8 +136,6 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     if (authProvider.isAuthenticated) {
       _loadCreditBalance();
-    } else {
-      _loadingCredits = false;
     }
     _categoryController.addListener(_syncCategorySuggestionVisibility);
     _categoryFocusNode.addListener(_syncCategorySuggestionVisibility);
@@ -140,7 +153,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     super.didUpdateWidget(oldWidget);
 
     final provider = Provider.of<ScraperProvider>(context, listen: false);
-    final isRunning = provider.status == ScrapingStatus.running;
+    final isRunning = provider.hasActiveJob;
     if (isRunning) return;
 
     final citiesChanged = widget.initialCities != oldWidget.initialCities &&
@@ -166,9 +179,18 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     _updateCostEstimate();
   }
 
+  void _rememberForm() {
+    _memCategory = _categoryController.text;
+    _memCities = _citiesController.text;
+    _memMaxResults = _maxResults;
+  }
+
   void _setupJobCompletionListener() {
+    if (!mounted) return;
     final provider = Provider.of<ScraperProvider>(context, listen: false);
-    provider.addListener(() {
+    _scraperForListener = provider;
+    _jobListener = () {
+      if (!mounted) return;
       final job = provider.currentJob;
       if (job != null &&
           job.status == ScrapingStatus.completed &&
@@ -183,9 +205,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         _activeJobPreset = null;
         AnalyticsService.instance.track('search_complete', properties: {
           'job_type': job.category,
-          'result_count': job.results.length,
+          'result_count': job.resultCount,
         });
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content:
@@ -195,7 +216,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           ),
         );
       }
-    });
+    };
+    provider.addListener(_jobListener!);
   }
 
   void _navigateToResults(String jobId) {
@@ -228,6 +250,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
 
   @override
   void dispose() {
+    if (_jobListener != null) {
+      _scraperForListener?.removeListener(_jobListener!);
+    }
+    _rememberForm();
+    _categoryController.removeListener(_rememberForm);
+    _citiesController.removeListener(_rememberForm);
     _categoryController.removeListener(_syncCategorySuggestionVisibility);
     _categoryFocusNode.removeListener(_syncCategorySuggestionVisibility);
     _logSearchController.removeListener(_onLogSearchChanged);
@@ -242,20 +270,10 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   }
 
   Future<void> _loadCreditBalance() async {
-    try {
-      final data = await _apiService.getCreditBalance();
-      if (mounted) {
-        setState(() {
-          _creditBalance = data['balance'] ?? 0;
-          _canCreateJob = data['rate_limits']?['can_create_job'] ?? true;
-          _loadingCredits = false;
-        });
-        _updateCostEstimate();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loadingCredits = false);
-      }
+    await CreditProvider.instance.refresh();
+    if (mounted) {
+      setState(() {});
+      _updateCostEstimate();
     }
   }
 
@@ -389,23 +407,31 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   }
 
   Future<void> _loadSearchDraftIfNeeded() async {
-    final hasInitial = widget.initialCategory.trim().isNotEmpty ||
-        widget.initialCities.trim().isNotEmpty;
-    if (hasInitial) return;
-
-    if (_categoryController.text.trim().isNotEmpty ||
-        _citiesController.text.trim().isNotEmpty) {
-      return;
-    }
+    // Fill whichever field is empty. Previously a non-empty city list from
+    // the Cities step skipped the draft entirely, leaving the category blank.
+    final needCategory = _categoryController.text.trim().isEmpty;
+    final needCities = _citiesController.text.trim().isEmpty;
+    if (!needCategory && !needCities) return;
 
     final draft = await _readSearchDraft();
     if (draft == null) return;
 
     if (!mounted) return;
+    final draftCategory = (draft['category'] as String?) ?? '';
+    final draftCities = (draft['cities_text'] as String?) ?? '';
+    final fillCategory = needCategory &&
+        draftCategory.isNotEmpty &&
+        _categoryController.text.trim().isEmpty;
+    final fillCities = needCities &&
+        draftCities.isNotEmpty &&
+        _citiesController.text.trim().isEmpty;
+    if (!fillCategory && !fillCities) return;
     setState(() {
-      _categoryController.text = (draft['category'] as String?) ?? '';
-      _citiesController.text = (draft['cities_text'] as String?) ?? '';
-      _maxResults = (draft['max_results'] as int?) ?? _maxResults;
+      if (fillCategory) _categoryController.text = draftCategory;
+      if (fillCities) {
+        _citiesController.text = draftCities;
+        _maxResults = (draft['max_results'] as int?) ?? _maxResults;
+      }
       _draftLoaded = true;
     });
     _updateCostEstimate();
@@ -771,11 +797,23 @@ class _ScrapingScreenState extends State<ScrapingScreen>
       'max_results': _maxResults,
     });
 
-    await provider.startScraping(
+    _rememberForm();
+    final started = await provider.startScraping(
       category: category,
       citiesData: cities,
       maxResultsPerCity: _maxResults,
     );
+    if (!mounted) return;
+    if (!started && provider.startError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(provider.startError!),
+          backgroundColor: _ScrapeColors.rose,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
   }
 
   @override
@@ -783,7 +821,8 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     super.build(context); // Required for AutomaticKeepAliveClientMixin
     final scraperProvider = Provider.of<ScraperProvider>(context);
     final authProvider = Provider.of<AuthProvider>(context);
-    final isRunning = scraperProvider.status == ScrapingStatus.running;
+    context.watch<CreditProvider>();
+    final isRunning = scraperProvider.hasActiveJob;
     final isAuthenticated = authProvider.isAuthenticated;
     final layoutType =
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
@@ -1582,7 +1621,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget _buildActivitySection(
       ScraperProvider scraperProvider, LayoutType layoutType) {
     final job = scraperProvider.currentJob;
-    final isRunning = scraperProvider.status == ScrapingStatus.running;
+    final isRunning = scraperProvider.hasActiveJob;
     final progress = job?.progress ?? 0;
     final logs = scraperProvider.getCurrentLogs();
     return Container(
@@ -1630,6 +1669,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
           ),
           const SizedBox(height: AppSpacing.sm),
           _buildJobControls(scraperProvider),
+          _buildJobNotices(scraperProvider),
           const SizedBox(height: AppSpacing.sm),
           _buildJobStages(job),
           AnimatedSwitcher(
@@ -2036,55 +2076,34 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   }
 
   List<String> _logsWithSyntheticEntries(List<String> logs, ScrapingJob? job) {
-    if (job == null) return logs;
-
-    if (_lastResultJobId != job.jobId) {
-      _lastResultJobId = job.jobId;
-      _lastKnownResultCount = job.results.length;
-      _syntheticResultLogs.clear();
-      _completionSummaryAdded = false;
+    // The server writes one log line per lead, so no client-side "+N leads"
+    // lines are needed. Only append a summary once the full results arrived.
+    if (job == null ||
+        job.status != ScrapingStatus.completed ||
+        !job.resultsLoaded) {
+      return logs;
     }
-
-    if (job.status == ScrapingStatus.running) {
-      final delta = job.results.length - _lastKnownResultCount;
-      if (delta > 0) {
-        final timestamp = DateTime.now().toIso8601String();
-        _syntheticResultLogs.add(
-          '[$timestamp] [LIVE] +$delta leads found (total ${job.results.length})',
-        );
-      }
-      _lastKnownResultCount = job.results.length;
+    final cityCounts = <String, int>{};
+    for (final result in job.results) {
+      final city = (result['city'] ?? '').toString().trim();
+      final state = (result['state'] ?? '').toString().trim();
+      if (city.isEmpty) continue;
+      final key = state.isEmpty ? city : '$city, $state';
+      cityCounts[key] = (cityCounts[key] ?? 0) + 1;
     }
-
-    if (job.status == ScrapingStatus.completed && !_completionSummaryAdded) {
-      _lastKnownResultCount = job.results.length;
-      final cityCounts = <String, int>{};
-      for (final result in job.results) {
-        final city = (result['city'] ?? '').toString().trim();
-        final state = (result['state'] ?? '').toString().trim();
-        if (city.isEmpty) continue;
-        final key = state.isEmpty ? city : '$city, $state';
-        cityCounts[key] = (cityCounts[key] ?? 0) + 1;
-      }
-      final topCity = cityCounts.entries.isEmpty
-          ? null
-          : cityCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
-      final avg =
-          job.totalCities > 0 ? job.results.length / job.totalCities : 0.0;
-
-      _syntheticResultLogs.add(
-        '[SUMMARY] Scraping complete - ${job.results.length} businesses found across ${job.totalCities} cities',
-      );
-      if (topCity != null) {
-        _syntheticResultLogs
-            .add('[SUMMARY] Top city: ${topCity.key} (${topCity.value} leads)');
-      }
-      _syntheticResultLogs
-          .add('[SUMMARY] Avg: ${avg.toStringAsFixed(1)} leads per city');
-      _completionSummaryAdded = true;
-    }
-
-    return [...logs, ..._syntheticResultLogs];
+    final topCity = cityCounts.entries.isEmpty
+        ? null
+        : cityCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    final avg = job.totalCities > 0 ? job.resultCount / job.totalCities : 0.0;
+    return [
+      ...logs,
+      '[SUMMARY] Scraping complete - ${job.resultCount} businesses found across ${job.totalCities} cities',
+      if (topCity != null)
+        '[SUMMARY] Top city: ${topCity.key} (${topCity.value} leads)',
+      '[SUMMARY] Avg: ${avg.toStringAsFixed(1)} leads per city',
+      if (job.creditRefunded > 0)
+        '[SUMMARY] ${job.creditRefunded} credits refunded for undelivered results',
+    ];
   }
 
   Future<void> _downloadCompletedResults(
@@ -2141,7 +2160,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final duration = completedAt.isAfter(job.createdAt)
         ? completedAt.difference(job.createdAt)
         : Duration.zero;
-    final resultCount = job.results.length;
+    final resultCount = job.resultCount;
     final avgPerCity =
         job.totalCities > 0 ? resultCount / job.totalCities : 0.0;
     final topCity = _topCitySummary(job.results);
@@ -2283,7 +2302,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget _buildJobControls(ScraperProvider scraperProvider) {
     final job = scraperProvider.currentJob;
     final status = job?.status ?? ScrapingStatus.idle;
-    final isRunning = status == ScrapingStatus.running;
+    // Cancel stays available whenever the SERVER says the job is active,
+    // including while the connection is being re-established.
+    final isRunning = job?.isActive ?? false;
 
     Color pillColor;
     String label;
@@ -2292,8 +2313,10 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     switch (status) {
       case ScrapingStatus.running:
         pillColor = _ScrapeColors.primaryLight;
-        label = 'Running';
-        icon = Icons.autorenew_rounded;
+        label = (job?.isQueued ?? false) ? 'Queued' : 'Running';
+        icon = (job?.isQueued ?? false)
+            ? Icons.schedule_rounded
+            : Icons.autorenew_rounded;
         break;
       case ScrapingStatus.completed:
         pillColor = _ScrapeColors.emerald;
@@ -2348,9 +2371,13 @@ class _ScrapingScreenState extends State<ScrapingScreen>
         const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(
-            job?.currentCity.isNotEmpty == true
-                ? 'Current: ${job!.currentCity}'
-                : 'Ready to start a search',
+            job == null
+                ? (scraperProvider.isStarting
+                    ? 'Creating job...'
+                    : 'Ready to start a search')
+                : job.currentCity.isNotEmpty && job.isActive
+                    ? '${job.category} - ${job.currentCity}'
+                    : '${job.category} - ${job.totalCities} cities',
             style: AppTypography.labelSmall.copyWith(
               color: Colors.white54,
             ),
@@ -2373,6 +2400,91 @@ class _ScrapingScreenState extends State<ScrapingScreen>
             icon: const Icon(Icons.stop_circle_rounded, size: 20),
           ),
       ],
+    );
+  }
+
+  /// Connection state, server-reported errors and the credit outcome.
+  Widget _buildJobNotices(ScraperProvider scraperProvider) {
+    final job = scraperProvider.currentJob;
+    final notices = <Widget>[];
+
+    Widget notice(IconData icon, Color color, String text, {Widget? action}) {
+      return Container(
+        margin: const EdgeInsets.only(top: AppSpacing.xs),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: AppSpacing.borderRadiusMd,
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 16),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Text(
+                text,
+                style: AppTypography.labelSmall.copyWith(color: Colors.white),
+              ),
+            ),
+            if (action != null) action,
+          ],
+        ),
+      );
+    }
+
+    if (scraperProvider.syncState != JobSyncState.live &&
+        scraperProvider.syncMessage != null) {
+      final auth = scraperProvider.syncState == JobSyncState.authExpired;
+      notices.add(notice(
+        auth ? Icons.lock_clock_rounded : Icons.wifi_off_rounded,
+        Colors.amberAccent,
+        scraperProvider.syncMessage!,
+        action: auth
+            ? null
+            : TextButton(
+                onPressed: scraperProvider.retrySyncNow,
+                child: const Text('Retry now'),
+              ),
+      ));
+    }
+    if (job != null &&
+        (job.status == ScrapingStatus.failed ||
+            job.status == ScrapingStatus.cancelled) &&
+        (job.error ?? '').isNotEmpty) {
+      notices.add(notice(
+        Icons.info_outline_rounded,
+        _ScrapeColors.rose,
+        '${job.status == ScrapingStatus.cancelled ? 'Cancelled' : 'Failed'}: ${job.error}'
+        '${job.resultCount > 0 ? ' - ${job.resultCount} leads were saved and can be downloaded.' : ''}',
+      ));
+    }
+    if (job != null && job.isTerminal && job.creditCharged > 0) {
+      final refunded = job.creditRefunded;
+      notices.add(notice(
+        Icons.account_balance_wallet_rounded,
+        _ScrapeColors.emerald,
+        refunded > 0
+            ? 'Charged ${job.creditCharged} credits, refunded $refunded for undelivered results.'
+            : job.settled
+                ? 'Charged ${job.creditCharged} credits.'
+                : 'Charged ${job.creditCharged} credits. Settling any refund...',
+      ));
+    }
+    if (job != null && job.isActive && job.failedCities > 0) {
+      notices.add(notice(
+        Icons.timer_off_rounded,
+        Colors.amberAccent,
+        '${job.failedCities} ${job.failedCities == 1 ? 'city' : 'cities'} timed out; leads found before the timeout were kept.',
+      ));
+    }
+    if (notices.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: notices,
     );
   }
 
@@ -2565,18 +2677,12 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget _buildJobStats(ScrapingJob? job) {
     if (job == null) return const SizedBox.shrink();
 
-    final now = DateTime.now();
-    final end = job.completedAt ?? now;
-    final elapsed = end.difference(job.createdAt);
-
-    final activeIndex =
-        job.currentCity.isNotEmpty ? job.cities.indexOf(job.currentCity) : -1;
-
+    // Both timestamps are UTC instants and "now" is corrected by the server
+    // clock offset, so the browser timezone no longer adds hours.
+    final elapsed = job.elapsed;
     final completedCities = job.status == ScrapingStatus.completed
         ? job.totalCities
-        : activeIndex >= 0
-            ? activeIndex
-            : 0;
+        : job.completedCities.clamp(0, job.totalCities);
 
     final remainingCities =
         (job.totalCities - completedCities).clamp(0, job.totalCities);
@@ -2590,13 +2696,13 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     final isCompleted = job.status == ScrapingStatus.completed;
     final isRunning = job.status == ScrapingStatus.running;
     final leadsValue = isCompleted
-        ? '${job.results.length} total'
+        ? '${job.resultCount} total'
         : isRunning
-            ? '${job.results.length} found'
-            : '${job.results.length}';
+            ? '${job.resultCount} found'
+            : '${job.resultCount}';
     final leadsColor = isCompleted ? _ScrapeColors.emerald : Colors.white;
     final rate =
-        completedCities > 0 ? job.results.length / completedCities : 0.0;
+        completedCities > 0 ? job.resultCount / completedCities : 0.0;
 
     final stats = <_MiniStat>[
       _MiniStat(label: 'Elapsed', value: _formatDuration(elapsed)),
@@ -2670,8 +2776,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
   Widget _buildCityProgress(ScrapingJob? job, LayoutType layoutType) {
     if (job == null || job.cities.isEmpty) return const SizedBox.shrink();
 
-    final activeIndex =
-        job.currentCity.isNotEmpty ? job.cities.indexOf(job.currentCity) : -1;
+    // Server-side counter; matching currentCity strings against the user's
+    // input failed whenever spacing differed and showed every city as pending.
+    final activeIndex = job.completedCities;
 
     final cityCounts = <String, int>{};
     for (final result in job.results) {
@@ -2710,7 +2817,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
               itemBuilder: (context, index) {
                 final cityState = job.cities[index];
                 final isCompleted = job.status == ScrapingStatus.completed ||
-                    (activeIndex >= 0 && index < activeIndex);
+                    index < activeIndex;
                 final isActive = job.status == ScrapingStatus.running &&
                     activeIndex >= 0 &&
                     index == activeIndex;
@@ -2720,7 +2827,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                         activeIndex >= 0 &&
                         index == activeIndex;
 
-                final count = cityCounts[cityState] ?? 0;
+                final count = cityCounts[cityState] ??
+                    cityCounts[cityState.replaceAll(RegExp(r'\s*,\s*'), ', ')] ??
+                    0;
 
                 IconData statusIcon;
                 Color statusColor;

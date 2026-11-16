@@ -8,6 +8,8 @@ import '../services/api_service.dart';
 import '../widgets/low_balance_alert.dart';
 import '../widgets/subscription_status_banner.dart';
 import 'pricing_screen.dart';
+import '../core/utils/server_time.dart';
+import '../providers/credit_provider.dart';
 import 'subscription_management_screen.dart';
 
 class WalletScreen extends StatefulWidget {
@@ -116,6 +118,7 @@ class _WalletScreenState extends State<WalletScreen>
         _creditBalance = rawBalance is num
             ? rawBalance.toInt()
             : (rawBalance is String ? int.tryParse(rawBalance) ?? 0 : 0);
+        CreditProvider.instance.setBalance(_creditBalance);
         _isLoading = false;
       });
 
@@ -778,7 +781,7 @@ class _WalletScreenState extends State<WalletScreen>
         // Format date: "Mar 01, 19:35" style.
         String formattedDate = createdAt;
         try {
-          final dt = DateTime.parse(createdAt).toLocal();
+          final dt = parseServerTimeLocal(createdAt) ?? DateTime.now();
           const months = [
             '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',

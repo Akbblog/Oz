@@ -9,6 +9,8 @@ import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
 import '../widgets/stat_card.dart';
 import '../widgets/gradient_button.dart';
+import '../core/utils/server_time.dart';
+import '../core/utils/refresh_bus.dart';
 import 'results_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -49,11 +51,23 @@ class _DashboardScreenState extends State<DashboardScreen>
   void initState() {
     super.initState();
     AnalyticsService.instance.page('/dashboard');
+    RefreshBus.tabActivated.addListener(_onTabActivated);
+    RefreshBus.jobsChanged.addListener(_onJobsChanged);
     _load();
+  }
+
+  void _onTabActivated() {
+    if (RefreshBus.tabActivated.value == 0 && mounted) _load();
+  }
+
+  void _onJobsChanged() {
+    if (mounted) _load();
   }
 
   @override
   void dispose() {
+    RefreshBus.tabActivated.removeListener(_onTabActivated);
+    RefreshBus.jobsChanged.removeListener(_onJobsChanged);
     _fadeController.dispose();
     super.dispose();
   }
@@ -386,7 +400,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
       final raw = job[dateField]?.toString();
       if (raw == null || raw.isEmpty) continue;
-      final parsed = DateTime.tryParse(raw);
+      final parsed = parseServerTimeLocal(raw);
       if (parsed == null) continue;
 
       final day = DateTime(parsed.year, parsed.month, parsed.day);

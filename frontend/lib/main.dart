@@ -18,6 +18,7 @@ import 'screens/live_payments_gate_screen.dart';
 import 'screens/wallet_coming_soon_screen.dart';
 import 'screens/privacy_policy_screen.dart';
 import 'providers/scraper_provider.dart';
+import 'providers/credit_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
 import 'core/theme/app_theme.dart';
@@ -33,6 +34,7 @@ void main() {
         ChangeNotifierProvider(create: (context) => ThemeProvider()),
         ChangeNotifierProvider(create: (context) => AuthProvider()),
         ChangeNotifierProvider(create: (context) => ScraperProvider()),
+        ChangeNotifierProvider<CreditProvider>.value(value: CreditProvider.instance),
       ],
       child: const MyApp(),
     ),

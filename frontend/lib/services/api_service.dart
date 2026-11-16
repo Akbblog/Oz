@@ -242,13 +242,19 @@ class ApiService {
   }
 
   // Job endpoints
+
+  /// Creates a job. [idempotencyKey] must be reused for retries of the same
+  /// submission: the server then returns the original job instead of charging
+  /// again, so a timeout or dropped connection can be retried safely.
   Future<Map<String, dynamic>> createScrapingJob({
     required String category,
     required List<String> citiesData,
     int maxResultsPerCity = 10,
+    String? idempotencyKey,
   }) async {
     try {
       final headers = await _getHeaders();
+      if (idempotencyKey != null) headers['Idempotency-Key'] = idempotencyKey;
       final response = await http
           .post(
             Uri.parse('$baseUrl/api/jobs'),
@@ -275,15 +281,26 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getJobStatus(String jobId) async {
+  /// Job status. Pollers should pass `includeResults: false` and the last
+  /// `next_log_cursor` as [logsAfter] so each poll only moves new data.
+  Future<Map<String, dynamic>> getJobStatus(
+    String jobId, {
+    bool includeResults = true,
+    int? logsAfter,
+    Duration? requestTimeout,
+  }) async {
     try {
       final headers = await _getHeaders();
+      final query = <String, String>{
+        'include_results': includeResults ? 'true' : 'false',
+        if (logsAfter != null) 'logs_after': '$logsAfter',
+      };
       final response = await http
           .get(
-            Uri.parse('$baseUrl/api/jobs/$jobId'),
+            Uri.parse('$baseUrl/api/jobs/$jobId').replace(queryParameters: query),
             headers: headers,
           )
-          .timeout(timeout);
+          .timeout(requestTimeout ?? timeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -291,6 +308,27 @@ class ApiService {
         ErrorHandler.handleHttpError(response, context: 'Get job status');
         throw ApiException('Failed to get job status');
       }
+    } on TimeoutException {
+      throw NetworkException('Request timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ErrorHandler.handleNetworkError(e);
+    }
+  }
+
+  /// Pending/running jobs of the current user (used to reattach after a
+  /// refresh, navigation or an uncertain job-creation response).
+  Future<List<Map<String, dynamic>>> getActiveJobs() async {
+    try {
+      final headers = await _getHeaders();
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/jobs/active'), headers: headers)
+          .timeout(timeout);
+      if (response.statusCode == 200) {
+        return _decodeListOfMaps(response.body, key: 'jobs');
+      }
+      ErrorHandler.handleHttpError(response, context: 'Get active jobs');
+      throw ApiException('Failed to get active jobs');
     } on TimeoutException {
       throw NetworkException('Request timed out. Please try again.');
     } catch (e) {
@@ -315,10 +353,12 @@ class ApiService {
 
   Future<List<Map<String, dynamic>>> getUserJobs() async {
     final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/jobs'),
-      headers: headers,
-    );
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/jobs'),
+          headers: headers,
+        )
+        .timeout(timeout);
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -566,10 +606,12 @@ class ApiService {
 
   Future<Map<String, dynamic>> getCreditBalance() async {
     final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/credits/balance'),
-      headers: headers,
-    );
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/credits/balance'),
+          headers: headers,
+        )
+        .timeout(timeout);
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body);

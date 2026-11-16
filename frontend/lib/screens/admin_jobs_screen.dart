@@ -7,6 +7,7 @@ import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
 import '../widgets/infinity_data_table.dart';
 import '../widgets/job_completion_card.dart';
+import '../core/utils/server_time.dart';
 import 'results_screen.dart';
 
 class AdminJobsScreen extends StatefulWidget {
@@ -136,7 +137,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
       }
 
       if (_dateFilter != 'All') {
-        final createdAt = DateTime.tryParse(
+        final createdAt = parseServerTimeLocal(
           job['created_at']?.toString() ?? '',
         );
         if (createdAt == null) return false;
@@ -161,9 +162,9 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
 
     if (_sortOption == 'Oldest') {
       filtered.sort((a, b) {
-        final dateA = DateTime.tryParse(a['created_at']?.toString() ?? '') ??
+        final dateA = parseServerTimeLocal(a['created_at']?.toString() ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0);
-        final dateB = DateTime.tryParse(b['created_at']?.toString() ?? '') ??
+        final dateB = parseServerTimeLocal(b['created_at']?.toString() ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0);
         return dateA.compareTo(dateB);
       });
@@ -171,9 +172,9 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
       filtered.sort((a, b) => _resultsCount(b).compareTo(_resultsCount(a)));
     } else {
       filtered.sort((a, b) {
-        final dateA = DateTime.tryParse(a['created_at']?.toString() ?? '') ??
+        final dateA = parseServerTimeLocal(a['created_at']?.toString() ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0);
-        final dateB = DateTime.tryParse(b['created_at']?.toString() ?? '') ??
+        final dateB = parseServerTimeLocal(b['created_at']?.toString() ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0);
         return dateB.compareTo(dateA);
       });
@@ -376,7 +377,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
 
   String _formatDate(String? value) {
     if (value == null || value.isEmpty) return '--';
-    final parsed = DateTime.tryParse(value);
+    final parsed = parseServerTimeLocal(value);
     if (parsed == null) return value;
     return '${_monthName(parsed.month)} ${_pad(parsed.day)}, ${_pad(parsed.hour)}:${_pad(parsed.minute)}';
   }
@@ -1107,7 +1108,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
     final isDownloading = _downloadingJobs.contains(jobId);
     final cityCount = _asInt(job['total_cities']);
     final createdAtDate =
-        DateTime.tryParse(job['created_at']?.toString() ?? '') ??
+        parseServerTimeLocal(job['created_at']?.toString() ?? '') ??
             DateTime.now();
     return JobStatusCard(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
@@ -1147,9 +1148,9 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
     final username = (job['username'] ?? 'unknown').toString();
     final resultCount = _resultsCount(job);
     final totalCities = _asInt(job['total_cities']);
-    final createdAt = DateTime.tryParse(job['created_at']?.toString() ?? '');
+    final createdAt = parseServerTimeLocal(job['created_at']?.toString() ?? '');
     final completedAt =
-        DateTime.tryParse(job['completed_at']?.toString() ?? '') ??
+        parseServerTimeLocal(job['completed_at']?.toString() ?? '') ??
             createdAt ??
             DateTime.now();
     final duration = createdAt != null && completedAt.isAfter(createdAt)

@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:business_scraper_app/main.dart';
 import 'package:business_scraper_app/providers/auth_provider.dart';
+import 'package:business_scraper_app/providers/credit_provider.dart';
 import 'package:business_scraper_app/providers/scraper_provider.dart';
 import 'package:business_scraper_app/providers/theme_provider.dart';
 
@@ -24,12 +25,14 @@ void main() {
           ChangeNotifierProvider(create: (_) => ThemeProvider()),
           ChangeNotifierProvider(create: (_) => AuthProvider()),
           ChangeNotifierProvider(create: (_) => ScraperProvider()),
+          ChangeNotifierProvider<CreditProvider>.value(value: CreditProvider.instance),
         ],
         child: const MyApp(),
       ),
     );
 
-    await tester.pumpAndSettle(const Duration(seconds: 2));
+    // Spinners animate forever, so pump a fixed time instead of settling.
+    await tester.pump(const Duration(seconds: 2));
 
     // Smoke assertion: we should render something without crashing.
     expect(find.byType(MyApp), findsOneWidget);

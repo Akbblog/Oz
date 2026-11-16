@@ -3,7 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../services/api_service.dart';
+import '../providers/credit_provider.dart';
+import '../providers/scraper_provider.dart';
 import '../services/analytics_service.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/app_breakpoints.dart';
@@ -19,6 +20,7 @@ import '../widgets/sidebar_navigation.dart';
 import '../widgets/top_bar.dart';
 import '../widgets/responsive_shell.dart';
 import '../widgets/credit_pill.dart';
+import '../core/utils/refresh_bus.dart';
 import '../widgets/brand_mark.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -32,10 +34,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _currentIndex = 1; // Guest starts on Cities
   late PageController _pageController;
   late final AuthProvider _authProvider;
-  final ApiService _apiService = ApiService();
   bool _isAuthenticated = false;
-  int _creditBalance = 0;
-  bool _loadingCredits = true;
+  // Desktop/tablet tabs that have been opened at least once. They stay
+  // mounted (IndexedStack) so form text, scroll position and in-flight state
+  // survive tab switches instead of being rebuilt from scratch.
+  final Set<int> _visitedPages = <int>{};
   String _scrapeInitialCategory = '';
   String _scrapeInitialCities = '';
   String _scrapeInitialMaxResults = '50';
@@ -91,10 +94,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _isAuthenticated = isAuthenticated;
       _navItems = isAuthenticated ? _authenticatedNavItems : _guestNavItems;
       _currentIndex = targetPage;
-      _loadingCredits = isAuthenticated;
-      if (!isAuthenticated) {
-        _creditBalance = 0;
-      }
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -102,35 +101,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _pageController.jumpToPage(targetPage);
     });
 
-    if (isAuthenticated) {
-      _loadCreditBalance();
-    }
+    // Provider updates notify listeners, so run them after this frame
+    // (_syncAuthState is also called from initState).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final scraper = Provider.of<ScraperProvider>(context, listen: false);
+      if (isAuthenticated) {
+        _loadCreditBalance();
+        // Reattach to a job that is still running on the server (refresh,
+        // new tab, or a previous session that lost its connection).
+        scraper.resumeActiveJob();
+      } else {
+        CreditProvider.instance.clear();
+        scraper.detach();
+      }
+    });
   }
 
   Future<void> _loadCreditBalance() async {
-    if (!_isAuthenticated) {
-      if (mounted) {
-        setState(() {
-          _creditBalance = 0;
-          _loadingCredits = false;
-        });
-      }
-      return;
-    }
-
-    try {
-      final data = await _apiService.getCreditBalance();
-      if (mounted) {
-        setState(() {
-          _creditBalance = data['balance'] ?? 0;
-          _loadingCredits = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loadingCredits = false);
-      }
-    }
+    if (!_isAuthenticated) return;
+    await CreditProvider.instance.refresh();
   }
 
   @override
@@ -142,6 +132,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _onNavTap(int index) {
     setState(() => _currentIndex = index);
+    RefreshBus.activateTab(index);
     if (_pageController.hasClients) {
       _pageController.animateToPage(
         index,
@@ -208,6 +199,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
+    final credits = Provider.of<CreditProvider>(context);
     final layoutType = AppBreakpoints.getLayoutType(
       MediaQuery.of(context).size.width,
     );
@@ -224,8 +216,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             title: title,
             showMenuToggle: layoutType == LayoutType.tablet,
             onMenuToggle: onToggleSidebar,
-            creditBalance: _creditBalance,
-            loadingCredits: _loadingCredits,
+            creditBalance: credits.balance,
+            loadingCredits: _isAuthenticated && credits.loading,
             onRefreshCredits: _loadCreditBalance,
             userInitial: (authProvider.currentUser?['username'] ?? 'U')[0]
                 .toUpperCase(),
@@ -302,6 +294,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               : const NeverScrollableScrollPhysics(),
                           onPageChanged: (index) {
                             setState(() => _currentIndex = index);
+                            RefreshBus.activateTab(index);
                           },
                           children: [
                             DashboardScreen(
@@ -437,9 +430,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           if (_isAuthenticated) ...[
             CreditPill(
-              balance: _creditBalance,
-              loading: _loadingCredits,
-              onTap: () => Navigator.of(context).pushNamed('/wallet'),
+              balance: context.watch<CreditProvider>().balance,
+              loading: context.watch<CreditProvider>().loading,
+              onTap: _openWallet,
               onRefresh: _loadCreditBalance,
             ),
             const SizedBox(width: AppSpacing.sm),
@@ -979,8 +972,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Icon(icon, color: color, size: size);
   }
 
-  Widget _buildDesktopContent() {
-    switch (_currentIndex) {
+  Widget _buildDesktopPage(int index) {
+    switch (index) {
       case 0:
         return DashboardScreen(showHeader: false, onNavigateToTab: _onNavTap);
       case 1:
@@ -1001,15 +994,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       case 4:
         return const JobHistoryScreen(showHeader: false);
       default:
-        return ScrapingScreen(
-          showHeader: false,
-          initialCategory: _scrapeInitialCategory,
-          initialCities: _scrapeInitialCities,
-          initialMaxResults: _scrapeInitialMaxResults,
-          onBackToCities: () => _onNavTap(1),
-        );
+        return const SizedBox.shrink();
     }
   }
+
+  Widget _buildDesktopContent() {
+    final index = (_currentIndex >= 0 && _currentIndex <= 4) ? _currentIndex : 2;
+    _visitedPages.add(index);
+    return IndexedStack(
+      index: index,
+      sizing: StackFit.expand,
+      children: List<Widget>.generate(5, (i) {
+        if (!_visitedPages.contains(i)) return const SizedBox.shrink();
+        // TickerMode pauses animations of hidden pages.
+        return TickerMode(
+          enabled: i == index,
+          child: KeyedSubtree(key: ValueKey('desktop-page-$i'), child: _buildDesktopPage(i)),
+        );
+      }),
+    );
+  }
+
 }
 
 class _NavItem {
