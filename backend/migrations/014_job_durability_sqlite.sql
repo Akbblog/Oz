@@ -24,3 +24,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_user_idempotency ON jobs (user_id, ide
 CREATE UNIQUE INDEX IF NOT EXISTS uq_results_job_dedupe ON results (job_id, dedupe_key);
 CREATE INDEX IF NOT EXISTS idx_jobs_status_heartbeat ON jobs (status, heartbeat_at);
 CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id ON job_logs (job_id, id);
+
+-- Jobs that already finished before this migration were billed under the old
+-- (no-refund) rules. Mark them settled so the settlement sweep never issues
+-- retroactive refunds for historical jobs. Jobs still pending/running stay
+-- unsettled and are settled normally when they finish.
+UPDATE jobs SET settled_at = 'pre-014' WHERE status IN ('completed', 'failed', 'cancelled') AND settled_at IS NULL;

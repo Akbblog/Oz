@@ -633,3 +633,33 @@ def test_migration_runner_treats_duplicate_ddl_as_applied():
     assert _is_already_applied_error(E(1060, "Duplicate column name 'x'"))
     assert _is_already_applied_error(Exception("duplicate column name: attempts"))
     assert not _is_already_applied_error(Exception("no such table: jobs"))
+
+
+def test_migration_014_does_not_refund_historical_jobs(db_connection):
+    """Pre-014 terminal jobs must never be swept into retroactive refunds."""
+    import os
+    import job_service
+
+    uid = _insert_user(db_connection, balance=1000)
+    cur = db_connection.cursor()
+    for status in ("completed", "failed", "cancelled", "running"):
+        cur.execute(
+            "INSERT INTO jobs (job_id, user_id, category, cities_data, status, total_cities, credit_charged, "
+            "created_at, settled_at) VALUES (?, ?, 'x', '[\"a, b\"]', ?, 1, 50, ?, NULL)",
+            (f"legacy-{status}", uid, status, datetime.now().isoformat()),
+        )
+    db_connection.commit()
+
+    # Run the data step of migration 014 exactly as shipped.
+    path = os.path.join(os.path.dirname(__file__), "..", "migrations", "014_job_durability_sqlite.sql")
+    update = [l for l in open(path, encoding="utf-8").read().splitlines() if l.startswith("UPDATE jobs SET settled_at")]
+    assert len(update) == 1
+    cur.execute(update[0])
+    db_connection.commit()
+
+    job_service.settle_unsettled_terminal_jobs()
+    assert _balance(db_connection, uid) == 1000
+    cur.execute("SELECT job_id, settled_at FROM jobs WHERE job_id LIKE 'legacy-%' ORDER BY job_id")
+    rows = dict(cur.fetchall())
+    assert rows["legacy-running"] is None          # still settles normally when it finishes
+    assert all(rows[f"legacy-{s}"] == "pre-014" for s in ("completed", "failed", "cancelled"))
