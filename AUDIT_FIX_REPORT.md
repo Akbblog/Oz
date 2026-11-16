@@ -12,8 +12,8 @@ Line numbers in the inventory refer to the **baseline** (`1434809`) unless marke
 
 ## 0. Verification round 2 — status before manual QA (2026-11-16)
 
-**Not production-ready yet.** Everything below marked ✅ was executed and observed; ⏳ was still
-running when this section was written; ❌ is a known gap. Sections 3–5 further down are from round 1
+**Not production-ready yet** — see 0.4 for the exact open gaps. Everything marked ✅ was executed and
+observed; ⚠️ is partially verified; ❌ is a known gap or was blocked. Sections 3–5 further down are from round 1
 and are superseded by this section where they differ.
 
 ### 0.1 Verified / unverified checklist
@@ -25,8 +25,9 @@ and are superseded by this section where they differ.
 | V3 | Restore into isolated containers | ✅ | `il-qa-mariadb` (MariaDB 11.8, 127.0.0.1:13306) and `il-qa-mysql8` (MySQL 8.0.46, 127.0.0.1:13307); row counts match (4 users, 22 jobs, 789 results, 46 ledger rows) |
 | V4 | Migration 014 on the production copy | ✅ 13/13 on MariaDB, 13/13 on MySQL 8 | Applies once; all columns/indexes present; no job, result, ledger or balance row changed; all 22 historical jobs marked `pre-014`; settlement sweep refunds 0; second start applies nothing; partially-applied 014 re-runs cleanly |
 | V5 | Migration 015 on the production copy | ✅ | Applied by the new backend during V7 on both engines |
-| V6 | Backend test suite on SQLite | ✅ 94/94 | `pytest tests` |
-| V7 | Backend test suite on MariaDB 11.8 and MySQL 8 | ⏳ PENDING | Chunked runner (one process per module) — results in 0.4 |
+| V6 | Backend test suite on SQLite | ✅ 95/95 | `pytest tests` (final run, all fixes included) |
+| V7a | Backend suite on **MariaDB 11.8** (production engine) | ⚠️ partial | `test_job_durability`: 27/28 — the 1 failure was a real bug (F11), fixed; the fix's regression test reproduces the failure on MariaDB without the fix (verified), but the post-fix MariaDB re-run was cut off by a Docker shutdown. Other modules: an earlier full MariaDB run (before F1/F11 fixes) passed 55 with 10 failures, all since diagnosed (F1 + harness). **A clean full MariaDB run is still owed** |
+| V7b | Backend suite on **MySQL 8** | ❌ blocked | Fresh MySQL 8 databases cannot run the **pre-existing** migration 004 (F12). MySQL 8 was only exercised from the restored MariaDB snapshot (V4, V12–V14), not with a fresh schema |
 | V8 | Real Google Maps scraping (MariaDB copy) | ✅ 41/41 | 3 real jobs, Qatar, headless Chromium — see 0.3 |
 | V9 | Cancellation during a real job | ✅ | Settled 6 s after cancel; ≤1 lead written after cancel; no writes after settlement |
 | V10 | Backend crash/restart during a real job | ✅ | Process tree killed after city 1; DB stayed `running`; restarted server resumed (attempt 2) and completed; 2 pre-crash leads kept, 6 total, no duplicates |
@@ -35,12 +36,12 @@ and are superseded by this section where they differ.
 | V13 | Roll-forward after rollback | ✅ | Jobs billed by old code are not refunded retroactively (bug found and fixed, F2) |
 | V14 | Deployed (current Vercel) frontend vs new backend | ✅ | Old client contract (create without key, default status payload, field types) + browser smoke of the old web build: loads signed in, History lists jobs, 0 API errors, 0 page errors |
 | V15 | Browser: network outage, refresh, mobile↔desktop, reattach | ✅ 15/15 (round 1) | Unchanged since |
-| V16 | Browser: double clicks, lost create response, slow/timeout responses, multiple tabs, session expiry + re-login, server-side failure | ⏳ / partial | Run 2: 13/17 — every product assertion that ran passed; the 4 failures were harness timing/parsing (jobs finished before the step; status parser). Run 3 with fixed harness: results in 0.4 |
-| V17 | "Never Failed unless the server says failed" | ✅ | Sampled UI vs DB throughout run 2: 0 violations; positive control shows Failed + server reason |
+| V16 | Browser: double clicks, lost create response, slow/timeout responses, multiple tabs, session expiry + re-login, server-side failure | ✅ 17/17 | Run 5 (SQLite backend, fake scraper, new web build): one job/one charge on double-click; lost create response retried with one Idempotency-Key → one job/one charge; responses >20 s → connection notice; 2nd tab attaches, cancels, 1st tab shows Cancelled; 401 → sign-in notice, re-login reattaches; server crash → Failed + reason. Runs 2–4 failures were harness issues (timing, status parser, 5 jobs/hour limit correctly returning 429, stale test server on port) |
+| V17 | "Never Failed unless the server says failed" | ✅ | UI sampled against the DB throughout runs 2–5: 0 violations; positive control (S6) shows Failed + server reason |
 | V18 | Refund policies × job outcomes | ✅ 21/21 + default test | Exact outcomes in 0.5 |
 | V19 | Security: roles/auth | ✅ | 12 security tests incl. support cannot mutate, password policy, reset revokes sessions, XFF rotation locked out, SECRET_KEY fail-fast, templates tracked |
 | V20 | Flutter `analyze` / `test` / web build | ✅ | 0 errors (50 pre-existing infos/warnings) / 11/11 / bundle verified |
-| V21 | CI | ✅ written, ❌ not executed | `.github/workflows/test.yml` now runs pytest on SQLite + MariaDB 11.8 + MySQL 8 and Flutter analyze/test/build. Not run on GitHub (branch not pushed) |
+| V21 | CI | ✅ written, ❌ not executed | `.github/workflows/test.yml`: pytest on SQLite and MariaDB 11.8, Flutter analyze/test/build; `deploy.yml` test job runs pytest. Not run on GitHub (branch not pushed). MySQL 8 leg omitted until F12 is fixed |
 | V22 | Production config: SMTP | ❌ not configured in live env | Live container has no SMTP user ⇒ forgot-password returns 503 (feature unavailable) |
 | V23 | Load / concurrency at production scale | ❌ | Not tested beyond 2 concurrent jobs and 6 concurrent creates |
 | V24 | Real email delivery, payments (Coinbase), PWA install | ❌ | Not exercised |
@@ -74,6 +75,17 @@ and are superseded by this section where they differ.
 
 **F10 — Admin password-reset script left sessions valid.** *Fix:* stamps `password_changed_at`.
 
+**F11 — On MariaDB's default isolation, the heartbeat could make a healthy job fail (high).**
+*Repro:* MariaDB 11.8 with default `REPEATABLE READ` + `innodb_snapshot_isolation=ON`; worker reads the job row, heartbeat thread updates it, worker updates it → `1020 Record has changed since last read`; three retries then the job errors (seen in `test_runner_dedupes_across_cities_and_keeps_timeout_partials`).
+*Production impact:* none today — a read-only check shows production runs `READ-COMMITTED` globally (`innodb_snapshot_isolation=1`), where this cannot happen. Any MariaDB left at defaults would fail jobs.
+*Fix:* every MySQL/MariaDB connection sets `SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED` (matches production).
+*Evidence:* `test_job_row_update_after_concurrent_heartbeat_does_not_conflict` raises 1020 on MariaDB 11.8 **without** the fix (verified). Post-fix MariaDB run: owed (V7a).
+
+**F12 — Fresh MySQL 8 install cannot initialise (pre-existing, not fixed).**
+*Repro:* empty MySQL 8.0 database → `init_database()` → migration `004_user_enhancements.sql` fails: `1170 BLOB/TEXT column 'created_at' used in key specification without a key length`. Many MySQL migrations declare timestamps as `TEXT` and index them.
+*Impact:* production (MariaDB, already past 004) unaffected; `docker-compose.yml`'s `mysql:8.0` stack and any new MySQL 8 deployment fail at startup.
+*Not fixed* because the change (TEXT→VARCHAR in historical MySQL migrations) needs a fresh-install run on MySQL 8 to verify and Docker went down. Next step: change indexed `TEXT` columns in the MySQL `.sql` files to `VARCHAR(64)`/`VARCHAR(255)`, then run the fresh-install probe until all 15 migrations apply.
+
 Test-harness-only problems fixed (not product bugs): MySQL test mode needed autocommit on the long-lived test connection (REPEATABLE READ snapshot hid app writes), tuple-vs-list comparisons, SQLite-catalog tests skipped on MySQL, test helper typo, too-tight timeout for Docker-hosted DB, browser status parser.
 
 ### 0.3 Real scraping run (MariaDB copy of production, headless Chromium, Google Maps)
@@ -85,9 +97,20 @@ Test-harness-only problems fixed (not product bugs): MySQL test mode needed auto
 | C | "pharmacy", 3 cities, process tree killed after city 1 | resumed on attempt 2, completed; 6 leads (2 pre-crash kept); charged 31, refunded 0 |
 | — | User balance vs ledger | 928 = 1000 + (−72) ✅; balance API = DB ✅ |
 
-### 0.4 Pending results (filled in when available)
+### 0.4 Gaps that block "production ready"
 
-_Runs in progress — see the final summary of this round; this placeholder is replaced when results arrive._
+1. **Clean full backend suite on MariaDB 11.8 after F1/F11** (V7a). Command in 0.6; needs Docker.
+2. **MySQL 8 fresh install** (F12) — only matters if MySQL 8 will ever be used; otherwise document MariaDB as the supported engine.
+3. **Refund policy decision** (0.5) — set `JOB_REFUND_POLICY` explicitly.
+4. **Real scraping at production scale** — verified with 3 small Qatar jobs (≤ 3 cities × 3 results); a 30-city × 10 job and concurrent users were not run.
+5. **SMTP not configured in production** (V22) — password reset is unavailable until it is.
+6. **CI never executed** (V21) — push the branch to see it run.
+7. **Manual QA** (0.7) on a staging copy.
+
+Environment note: during this round Docker Desktop stopped several times by itself (each time the
+session was interrupted). Every restart also restarted the **live** backend and tunnel containers
+(restart policy `unless-stopped`) on the old code; the live database showed 0 running jobs, so the old
+startup recovery had nothing to fail. No live container was started, stopped or rebuilt by this work.
 
 ### 0.5 Refund policy — exact outcomes and recommendation
 
@@ -139,7 +162,7 @@ cd backend
 SECRET_KEY=test-secret-key-0123456789 python -m pytest tests -q                       # SQLite
 IL_TEST_MYSQL_URL=mysql://root:qa_root_only@127.0.0.1:13306/il_test_mariadb \
 SECRET_KEY=test-secret-key-0123456789 python -m pytest tests/<module>.py -q          # MariaDB, per module
-IL_TEST_MYSQL_URL=mysql://root:qa_root_only@127.0.0.1:13307/il_test_mysql8 ...        # MySQL 8
+# MySQL 8: blocked by F12 for fresh databases
 
 # Frontend
 cd frontend && flutter analyze && flutter test && bash build_web.sh
@@ -257,7 +280,7 @@ Severity: **C**ritical / **H**igh / **M**edium / **L**ow. Status: **Fixed** (wit
 
 New backend files: `job_service.py`, `job_runner.py`, `job_worker.py`, `migrations/014_job_durability*.sql`.
 New API: `GET /api/jobs/active`; `POST /api/jobs` accepts `Idempotency-Key`; `GET /api/jobs/{id}` accepts `include_results`, `logs_after`.
-New env (all optional): `JOB_RUNNER_MODE` (`inprocess`|`external`|`off`), `JOB_WORKER_CONCURRENCY` (2), `JOB_STALE_SECONDS` (120), `JOB_HEARTBEAT_SECONDS` (20), `JOB_MAX_ATTEMPTS` (3), `JOB_MAX_HOURS` (12), `JOB_CITY_TIMEOUT_SECONDS` (180), `JOB_REFUND_POLICY` (`delivered`).
+New env (all optional): `JOB_RUNNER_MODE` (`inprocess`|`external`|`off`), `JOB_WORKER_CONCURRENCY` (2), `JOB_STALE_SECONDS` (120), `JOB_HEARTBEAT_SECONDS` (20), `JOB_MAX_ATTEMPTS` (3), `JOB_MAX_HOURS` (12), `JOB_CITY_TIMEOUT_SECONDS` (180), `JOB_REFUND_POLICY` (default `none` since round 2 — set it explicitly), `LOGIN_EDGE_MAX_ATTEMPTS` (60). Required: `SECRET_KEY` (≥16 chars, not a placeholder) — the app refuses to start without it.
 Removed env: `JOB_WATCHDOG_HOURS`, `JOB_WATCHDOG_INTERVAL_SECS` (replaced by heartbeat recovery).
 
 ---
