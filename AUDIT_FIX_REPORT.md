@@ -2,19 +2,57 @@
 
 Branch `fix/job-durability-audit` (git worktree `F:\webTest\scraper\il-fix-worktree`), based on
 `f60ec53` plus the uncommitted security fixes that were in the main checkout (commit `1434809`).
-Nothing was deployed or merged. The live database was never migrated or written: round 2 took one
+At the time of round 2, nothing was deployed or merged. The live database was not migrated or written: round 2 took one
 read-only snapshot (approved by the owner) and tested only against isolated copies. `.env` was not
 read; live credentials were never printed. Note: production runs **MariaDB 11.8**, not MySQL.
+See section 0B for the later live QA setup.
 
 Line numbers in the inventory refer to the **baseline** (`1434809`) unless marked "now".
+
+---
+
+## 0B. Live QA setup (2026-11-17)
+
+The owner requested a pushed branch and a Vercel preview connected to the
+backend running locally. Branch `fix/job-durability-audit` was pushed at
+`ac682eb`. The current production frontend domain was **not** promoted to the
+new build; use this Vercel preview for QA:
+
+`https://frontend-69432nnim-akbs-projects-69c135c0.vercel.app`
+
+The current backend/tunnel containers were replaced with the audited code on
+the same local port and public tunnel. Because `backend/requirements.txt` did
+not change, the local QA image layers the audited backend code on the tagged
+previous image; the normal Dockerfile was not fully rebuilt in this session.
+The previous image is tagged locally as
+`infinity-leads-backend:pre-job-durability-20261117` for rollback.
+
+Before the switch, a fresh live MariaDB dump was saved outside Git and
+successfully restored into a temporary MariaDB 11.8 container: 29 tables,
+22 jobs, 789 results, 46 ledger rows. The temporary restore container was
+removed. The live backend applied migrations 014, 015 and 016 on startup;
+read-only checks afterwards showed 4 users, 22 jobs, 789 results and 46 ledger
+rows, with the new `billing_snapshot` column present and
+`JOB_REFUND_POLICY=delivered`. The job runner started at concurrency 2.
+Local and public API health checks returned HTTP 200. The Vercel preview's
+home page, JavaScript bundle, login route and `/api/health` returned HTTP 200;
+a headless browser load of `/login` reported 0 JavaScript errors and 0 failed
+API requests.
+
+**Your PC, Docker backend and Cloudflare tunnel must remain running during QA.**
+The preview uses the live backend and database, so test jobs will consume and
+then settle real account credits under the chosen refund policy. The branch is
+not merged, the production frontend is unchanged, and manual QA is still
+required before calling this a production release.
 
 ---
 
 ## 0A. Verification round 3 and QA handoff (2026-11-17)
 
 This section supersedes the refund decision and open MariaDB test gate in round 2 below.
-All changes remain on `fix/job-durability-audit`; nothing was merged or deployed.
-The current public frontend and backend both returned HTTP 200, but still run the old code.
+At the time of this verification, all changes remained on
+`fix/job-durability-audit`; nothing was merged or deployed. The later live QA
+setup is documented in section 0B.
 
 ### Billing decision
 
@@ -80,7 +118,8 @@ the production-data copy were removed. The live backend and tunnel stayed up.
 5. Fresh MySQL 8 installs still fail on historical migration 004. Production
    runs MariaDB 11.8; document MySQL 8 as unsupported until that migration is fixed.
 
-This is a **local QA candidate**, not a deployed or fully production-ready release.
+At the end of round 3 this was a **local QA candidate**. Section 0B records
+the subsequent live QA setup; it is still not a fully production-ready release.
 
 ---
 
