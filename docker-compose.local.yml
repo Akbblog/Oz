@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DB_TYPE: sqlite
+      DATABASE_URL: sqlite:////data/scraper.db
+      SECRET_KEY: ${LOCAL_JWT_SECRET:?Set LOCAL_JWT_SECRET in backend/.env}
+      DEFAULT_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in backend/.env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in backend/.env}
+      DEFAULT_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-akb@tool.com}
+      PLAYWRIGHT_HEADLESS: 'true'
+    volumes:
+      - local_sqlite_data:/data
+    ports:
+      - 127.0.0.1:8001:8000
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.local
+    ports:
+      - 127.0.0.1:8080:80
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  local_sqlite_data:

@@ -1,0 +1,12 @@
+**/.env
+**/.env.*
+!**/.env.example
+**/*.db
+**/*.db-*
+**/*.log
+**/results/
+**/__pycache__/
+**/.git/
+**/.dart_tool/
+**/.venv/
+**/venv/

@@ -38,7 +38,7 @@ services:
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run
     environment:
-      - TUNNEL_TOKEN=eyJhIjoiYTZiMjAxZjc1ZTVhOThjYTFiM2ZiNjM4N2RhMjQ0OGUiLCJ0IjoiMzBiYzAzYWMtY2ZhMS00NWJmLTg2ZGUtZDNiYjJhZTEzNjM5IiwicyI6Ik9HRm1NVGhrTURjdFlqUmxNUzAwWVRFMExUZzRZVE10T1RRM04yVTFZVGN5WkRNdyJ9
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in your environment}
     restart: unless-stopped
     depends_on:
       - backend

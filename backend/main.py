@@ -6,7 +6,7 @@ Provides REST API for scraping functionality with authentication
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import List, Dict, Optional, Tuple
 import os
 import uuid
@@ -604,9 +604,9 @@ class AdminUserSuspendRequest(BaseModel):
     reason: Optional[str] = None
 
 class ScrapingRequest(BaseModel):
-    category: str
-    cities_data: List[str]
-    max_results_per_city: int = 10
+    category: str = Field(min_length=1, max_length=120)
+    cities_data: List[str] = Field(min_length=1, max_length=500)
+    max_results_per_city: int = Field(default=10, ge=1, le=100)
 
 class ScrapingJob(BaseModel):
     job_id: str
@@ -1095,7 +1095,7 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)):
 
 async def get_admin_or_above(current_user: dict = Depends(get_current_user)):
     """Require at least 'admin' role for mutation endpoints."""
-    if _user_role_level(current_user) < ROLE_HIERARCHY["admin"] and not current_user.get("is_admin"):
+    if _user_role_level(current_user) < ROLE_HIERARCHY["admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin role required"
@@ -1375,6 +1375,8 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
 @app.post("/api/auth/forgot-password")
 async def forgot_password(request: ForgotPasswordRequest):
     """Request password reset token"""
+    if not config.SMTP_USER or not config.SMTP_PASSWORD or config.SMTP_USER.startswith("your_") or config.SMTP_PASSWORD.startswith("your_"):
+        raise HTTPException(status_code=503, detail="Password reset email is unavailable")
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1404,14 +1406,19 @@ async def forgot_password(request: ForgotPasswordRequest):
     conn.commit()
     conn.close()
 
-    # TODO: Send email with reset link
-    # For MVP, log the token to console
-    reset_url = f"http://localhost:8000/reset-password/{reset_token}"
-    print(f"\n{'='*60}")
-    print(f"PASSWORD RESET TOKEN FOR: {request.email}")
-    print(f"Reset URL: {reset_url}")
-    print(f"Token: {reset_token}")
-    print(f"{'='*60}\n")
+    from notifications.email_service import send_email
+
+    reset_url = f"{config.FRONTEND_URL}/reset-password/{reset_token}"
+    try:
+        await asyncio.to_thread(
+            send_email,
+            to_email=request.email,
+            subject="Reset your Infinity Leads password",
+            html_body=f'<p>Use this link to reset your password:</p><p><a href="{reset_url}">Reset password</a></p>',
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("Password reset email failed")
+        raise HTTPException(status_code=503, detail="Password reset email is unavailable")
 
     return {"message": "If that email is registered, a password reset link has been sent."}
 
@@ -1493,7 +1500,7 @@ async def reset_password(request: ResetPasswordRequest):
 
 # Debug endpoint: list users (local dev only)
 @app.get("/internal/debug_users")
-async def _debug_list_users():
+async def _debug_list_users(admin: dict = Depends(get_admin_or_above)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
@@ -1575,7 +1582,7 @@ async def update_user_profile(
     user_id: int,
     profile_data: AdminUserProfileUpdateRequest,
     request: Request,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(get_admin_or_above),
 ):
     """Update user profile fields (admin only)."""
     conn = get_db()
@@ -1633,6 +1640,9 @@ async def update_user_profile(
         params.append(phone or None)
 
     if profile_data.role is not None:
+        if _user_role_level(admin) < ROLE_HIERARCHY["owner"]:
+            conn.close()
+            raise HTTPException(status_code=403, detail="Owner role required to change roles")
         role = profile_data.role.strip().lower()
         if role not in VALID_ROLES:
             conn.close()
@@ -1656,6 +1666,9 @@ async def update_user_profile(
         params.append(1 if role in ("admin", "owner", "support") else 0)
 
     elif profile_data.is_admin is not None:
+        if _user_role_level(admin) < ROLE_HIERARCHY["owner"]:
+            conn.close()
+            raise HTTPException(status_code=403, detail="Owner role required to change admin status")
         target_is_admin = bool(existing[4])
         if target_is_admin and not profile_data.is_admin:
             cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
@@ -2360,8 +2373,8 @@ async def update_setting(
 # ==================== CREDIT ENDPOINTS ====================
 
 class CreditEstimateRequest(BaseModel):
-    num_cities: int
-    max_results_per_city: int = 10
+    num_cities: int = Field(ge=1, le=500)
+    max_results_per_city: int = Field(default=10, ge=1, le=100)
 
 
 class CreditRequestModel(BaseModel):
@@ -4935,9 +4948,24 @@ async def my_subscription(current_user: dict = Depends(get_current_user)):
     }
 
 
+def _require_subscription_owner(stripe_subscription_id: str, user_id: int) -> None:
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM user_subscriptions WHERE stripe_subscription_id = ? AND user_id = ? LIMIT 1",
+            (stripe_subscription_id, user_id),
+        )
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+    finally:
+        conn.close()
+
+
 @app.put("/api/subscriptions/{stripe_subscription_id}/cancel")
 async def cancel_subscription(stripe_subscription_id: str, immediate: bool = False, current_user: dict = Depends(get_current_user)):
     """Cancel subscription (at period end by default)"""
+    _require_subscription_owner(stripe_subscription_id, current_user["id"])
     try:
         return _subscription_manager.cancel(stripe_subscription_id, at_period_end=not immediate)
     except Exception as e:
@@ -4946,6 +4974,7 @@ async def cancel_subscription(stripe_subscription_id: str, immediate: bool = Fal
 
 @app.put("/api/subscriptions/{stripe_subscription_id}/pause")
 async def pause_subscription(stripe_subscription_id: str, current_user: dict = Depends(get_current_user)):
+    _require_subscription_owner(stripe_subscription_id, current_user["id"])
     try:
         return _subscription_manager.pause(stripe_subscription_id)
     except Exception as e:
@@ -4954,6 +4983,7 @@ async def pause_subscription(stripe_subscription_id: str, current_user: dict = D
 
 @app.put("/api/subscriptions/{stripe_subscription_id}/resume")
 async def resume_subscription(stripe_subscription_id: str, current_user: dict = Depends(get_current_user)):
+    _require_subscription_owner(stripe_subscription_id, current_user["id"])
     try:
         return _subscription_manager.resume(stripe_subscription_id)
     except Exception as e:
