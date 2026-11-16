@@ -1,4 +1,4 @@
-name: Test Backend
+name: Test
 
 on:
   push:
@@ -6,69 +6,82 @@ on:
   pull_request:
     branches: [ main ]
 
+# CI-only throwaway signing key: the app refuses to start without one.
+env:
+  SECRET_KEY: ci-only-not-a-real-secret-0123456789
+  DISABLE_DEFAULT_ADMIN: "true"
+
 jobs:
-  test:
+  backend-sqlite:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64
-    
-    - name: Install Python dependencies
-      working-directory: ./backend
-      run: |
-        python -m pip install --upgrade pip
-        # Install numpy first to avoid compatibility issues
-        pip install "numpy>=1.24.0,<2.0.0"
-        # Install bcrypt with compatible version
-        pip install "bcrypt>=4.0.0,<5.0.0"
-        # Then install other dependencies
-        pip install -r requirements.txt
-        pip install httpx
-    
-    - name: Install Playwright browsers
-      working-directory: ./backend
-      run: |
-        playwright install chromium
-        # Skip install-deps as it tries to install libasound2 which doesn't exist in Ubuntu 24.04
-        # We already installed the required dependencies manually above
-    
-    - name: Check database initialization
-      working-directory: ./backend
-      run: |
-        python -c "
-        try:
-            from database import init_database
-            init_database()
-            print('Database initialized successfully')
-        except Exception as e:
-            print(f'Database initialization warning: {e}')
-            print('This is acceptable for testing - database will work when bcrypt is properly configured')
-        "
-    
-    - name: Test API health endpoint
-      working-directory: ./backend
-      run: |
-        python -c "
-        import sys
-        import os
-        sys.path.insert(0, '.')
-        # Create results directory if it doesn't exist
-        os.makedirs('results', exist_ok=True)
-        from main import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        response = client.get('/api/health')
-        assert response.status_code == 200
-        print('Health check passed')
-        print('Response:', response.json())
-        "
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        working-directory: ./backend
+        run: pip install -r requirements.txt
+      - name: pytest (temporary SQLite)
+        working-directory: ./backend
+        run: python -m pytest tests -q
+
+  # Production runs MariaDB 11.8; MySQL 8 is the documented alternative.
+  # Locking, INSERT IGNORE, FOR UPDATE and rowcount semantics differ from
+  # SQLite, so the same suite runs against both.
+  backend-mysql:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db:
+          - image: mariadb:11.8
+            env_prefix: MARIADB
+          - image: mysql:8.0
+            env_prefix: MYSQL
+    services:
+      db:
+        image: ${{ matrix.db.image }}
+        env:
+          MARIADB_ROOT_PASSWORD: ci_root
+          MYSQL_ROOT_PASSWORD: ci_root
+        ports: [ "3306:3306" ]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root || mariadb-admin ping -h 127.0.0.1 -uroot -pci_root"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        working-directory: ./backend
+        run: pip install -r requirements.txt
+      - name: pytest (${{ matrix.db.image }})
+        working-directory: ./backend
+        env:
+          IL_TEST_MYSQL_URL: mysql://root:ci_root@127.0.0.1:3306/il_test_suite
+        run: python -m pytest tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.38.5
+          cache: true
+      - run: flutter pub get
+      - name: Analyze (errors fail the build)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+      - name: Build web and verify bundle
+        run: bash build_web.sh

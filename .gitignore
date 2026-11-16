@@ -90,6 +90,8 @@ Untitled spreadsheet - New Jersey.csv
 
 # HTML files (unless they are part of the application)
 *.html
+# Email templates ARE part of the application (audit H-7)
+!backend/notifications/templates/*.html
 
 # JavaScript files (unless they are part of the application)
 *.js

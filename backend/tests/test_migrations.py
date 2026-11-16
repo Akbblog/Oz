@@ -9,6 +9,7 @@ Verifies:
 """
 
 import pytest
+from tests.conftest import requires_sqlite
 from db.migration_runner import (
     get_applied_migrations,
     extract_version_from_filename,
@@ -16,6 +17,7 @@ from db.migration_runner import (
 )
 
 
+@requires_sqlite
 def test_schema_migrations_table_exists(db_connection):
     """Test that schema_migrations tracking table is created"""
     cursor = db_connection.cursor()
@@ -57,6 +59,7 @@ def test_migration_status(test_db):
         assert migration["status"] in ["applied", "pending"]
 
 
+@requires_sqlite
 def test_required_tables_exist(db_connection):
     """Test that all required tables from migrations exist"""
     cursor = db_connection.cursor()
@@ -92,6 +95,7 @@ def test_required_tables_exist(db_connection):
             assert table in existing_tables, f"Payment table {table} should exist"
 
 
+@requires_sqlite
 def test_users_table_has_credit_columns(db_connection):
     """Test that users table has been extended with credit columns"""
     cursor = db_connection.cursor()
@@ -124,6 +128,7 @@ def test_users_table_has_credit_columns(db_connection):
         assert column in columns, f"Column {column} should exist in users table"
 
 
+@requires_sqlite
 def test_results_table_has_contact_columns(db_connection):
     """Test that results table has all expected contact columns."""
     cursor = db_connection.cursor()

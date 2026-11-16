@@ -6,7 +6,7 @@ Provides REST API for scraping functionality with authentication
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import List, Dict, Optional, Tuple
 import os
 import uuid
@@ -563,12 +563,31 @@ class ScrapingStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_BYTES = 72  # bcrypt silently ignores bytes beyond 72
+
+
+def _check_password_policy(value: str) -> str:
+    if len(value) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters")
+    if len(value.encode("utf-8")) > PASSWORD_MAX_BYTES:
+        raise ValueError("Password is too long (max 72 bytes)")
+    if not value.strip():
+        raise ValueError("Password cannot be blank")
+    return value
+
+
 class UserRegister(BaseModel):
     username: str
     email: EmailStr
     password: str
     phone: Optional[str] = None
     referral_code: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_policy(cls, v: str) -> str:
+        return _check_password_policy(v)
 
 class UserLogin(BaseModel):
     username: str
@@ -580,6 +599,11 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _password_policy(cls, v: str) -> str:
+        return _check_password_policy(v)
 
 
 class BulkUserIdsRequest(BaseModel):
@@ -763,6 +787,20 @@ LOGIN_RATE_MAX_ATTEMPTS = int(os.getenv("LOGIN_RATE_MAX_ATTEMPTS", "8"))
 LOGIN_RATE_LOCKOUT_MINUTES = int(os.getenv("LOGIN_RATE_LOCKOUT_MINUTES", "10"))
 
 
+LOGIN_EDGE_MAX_ATTEMPTS = int(os.getenv("LOGIN_EDGE_MAX_ATTEMPTS", "60"))
+
+
+def _get_edge_ip(request: Request) -> Optional[str]:
+    """IP that connected to Cloudflare (set by Cloudflare, not spoofable through
+    the tunnel). X-Forwarded-For's first entry is client-controlled when the
+    API is called directly, so the per-IP lockout could be bypassed by sending
+    a new X-Forwarded-For on every attempt (audit H-6). This second scope uses
+    the edge IP with a higher threshold because traffic proxied by Vercel
+    shares Vercel's egress IPs."""
+    value = (request.headers.get("cf-connecting-ip") or "").strip()
+    return value[:64] or None
+
+
 def _get_client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
     if xff:
@@ -885,7 +923,7 @@ def _enforce_login_rate_limit(conn, scope: str, identifier: str):
         conn.commit()
 
 
-def _record_login_failure(conn, scope: str, identifier: str) -> bool:
+def _record_login_failure(conn, scope: str, identifier: str, max_attempts: Optional[int] = None) -> bool:
     """
     Record a failed attempt.
 
@@ -910,7 +948,7 @@ def _record_login_failure(conn, scope: str, identifier: str) -> bool:
 
         attempts = int(attempts or 0) + 1
         locked_until = None
-        locked = attempts >= LOGIN_RATE_MAX_ATTEMPTS
+        locked = attempts >= (max_attempts or LOGIN_RATE_MAX_ATTEMPTS)
         if locked:
             locked_until = (now + lock_delta).isoformat()
 
@@ -928,7 +966,7 @@ def _record_login_failure(conn, scope: str, identifier: str) -> bool:
         return locked
 
     attempts = 1
-    locked = attempts >= LOGIN_RATE_MAX_ATTEMPTS
+    locked = attempts >= (max_attempts or LOGIN_RATE_MAX_ATTEMPTS)
     locked_until = (now + lock_delta).isoformat() if locked else None
     _upsert_login_rate_limit_record(
         cursor,
@@ -1005,7 +1043,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, username, email, phone, is_approved, is_admin, role, is_suspended
+        SELECT id, username, email, phone, is_approved, is_admin, role, is_suspended, password_changed_at
         FROM users
         WHERE username = ?
         """,
@@ -1013,6 +1051,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     )
     user = cursor.fetchone()
     conn.close()
+
+    # Tokens issued before the last password change are revoked (audit M-9):
+    # a reset must end sessions an attacker may already hold.
+    if user is not None and user[8]:
+        from job_service import _parse_local
+        changed_at = _parse_local(user[8])
+        iat = payload.get("iat")
+        issued = datetime.utcfromtimestamp(iat) if isinstance(iat, (int, float)) else None
+        if changed_at is not None:
+            changed_utc = changed_at.astimezone().astimezone(__import__("datetime").timezone.utc).replace(tzinfo=None)
+            if issued is None or issued < changed_utc.replace(microsecond=0):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session expired after a password change. Please sign in again.",
+                )
 
     if user is None:
         raise HTTPException(
@@ -1263,6 +1316,7 @@ async def register(user_data: UserRegister, request: Request, background_tasks: 
 async def login(credentials: UserLogin, request: Request):
     """Login and get access token"""
     ip = _get_client_ip(request)
+    edge_ip = _get_edge_ip(request)
     identifier_username = (credentials.username or "").strip().lower()
 
     conn = get_db()
@@ -1270,6 +1324,8 @@ async def login(credentials: UserLogin, request: Request):
 
     try:
         _enforce_login_rate_limit(conn, "ip", ip)
+        if edge_ip:
+            _enforce_login_rate_limit(conn, "edge", edge_ip)
         if identifier_username:
             _enforce_login_rate_limit(conn, "username", identifier_username)
 
@@ -1286,6 +1342,8 @@ async def login(credentials: UserLogin, request: Request):
 
         if not user or not verify_password(credentials.password, user[4]):
             locked_ip = _record_login_failure(conn, "ip", ip)
+            if edge_ip:
+                _record_login_failure(conn, "edge", edge_ip, max_attempts=LOGIN_EDGE_MAX_ATTEMPTS)
             locked_user = False
             if identifier_username:
                 locked_user = _record_login_failure(conn, "username", identifier_username)
@@ -1481,7 +1539,10 @@ async def reset_password(request: ResetPasswordRequest):
 
     # Update password
     new_password_hash = get_password_hash(request.new_password)
-    cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_password_hash, user_id))
+    cursor.execute(
+        "UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?",
+        (new_password_hash, datetime.now().isoformat(), user_id),
+    )
 
     # Mark token as used
     cursor.execute("UPDATE password_reset_tokens SET used = 1, used_at = ? WHERE id = ?",

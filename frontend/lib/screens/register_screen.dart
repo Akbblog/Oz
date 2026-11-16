@@ -413,8 +413,15 @@ class _RegisterScreenState extends State<RegisterScreen>
                       onPressed: () => _passwordVisible.value = !visible,
                     ),
                   ),
-                  validator: (value) =>
-                      value?.isEmpty ?? true ? 'Please enter a password' : null,
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter a password';
+                    }
+                    if (value.length < 8) {
+                      return 'Password must be at least 8 characters';
+                    }
+                    return null;
+                  },
                 );
               },
             ),

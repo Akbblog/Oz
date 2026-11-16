@@ -500,8 +500,12 @@ def settle_unsettled_terminal_jobs(limit: int = 50) -> int:
     try:
         cursor = conn.cursor()
         cursor.execute(
+            # attempts > 0: only jobs the durable runner actually ran. Jobs finished by
+            # older code (e.g. during a rollback window) were billed under the old
+            # no-refund rules and must never be refunded retroactively.
             "SELECT job_id FROM jobs WHERE status IN ('completed', 'failed', 'cancelled') "
-            "AND settled_at IS NULL AND (worker_id IS NULL OR heartbeat_at IS NULL OR heartbeat_at < ?) "
+            "AND settled_at IS NULL AND COALESCE(attempts, 0) > 0 "
+            "AND (worker_id IS NULL OR heartbeat_at IS NULL OR heartbeat_at < ?) "
             "ORDER BY created_at LIMIT " + str(int(limit)),
             ((now_local() - timedelta(seconds=stale_seconds())).isoformat(),),
         )

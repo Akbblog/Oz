@@ -44,7 +44,7 @@ def _balance(conn, user_id):
 def _ledger(conn, user_id):
     cur = conn.cursor()
     cur.execute("SELECT amount, transaction_type, job_id FROM credit_ledger WHERE user_id = ? ORDER BY id", (user_id,))
-    return cur.fetchall()
+    return [tuple(r) for r in cur.fetchall()]
 
 
 def _job(conn, job_id):
@@ -330,7 +330,7 @@ def fake_scraper(monkeypatch):
     FakeScraper.plan = {}
     FakeScraper.calls = []
     monkeypatch.setattr(main, "GoogleBusinessScraper", FakeScraper)
-    monkeypatch.setattr(main, "_PER_CITY_TIMEOUT", 0.5)
+    monkeypatch.setattr(main, "_PER_CITY_TIMEOUT", 3.0)  # > a few DB round-trips on MySQL-in-Docker
     monkeypatch.setattr(main, "_HEARTBEAT_SECONDS", 0.05)
 
     async def _no_sleep(*_a, **_k):
@@ -430,7 +430,7 @@ def test_worker_that_lost_its_lease_does_not_complete_the_job(db_connection, fak
             from database import get_db
 
             c = get_db()
-            c.execute("UPDATE jobs SET worker_id = 'w2' WHERE job_id = ?", (job_id,))
+            c.cursor().execute("UPDATE jobs SET worker_id = 'w2' WHERE job_id = ?", (job_id,))
             c.commit()
             c.close()
         return await original(self, category, city, *a, **k)
@@ -457,7 +457,7 @@ def test_cancel_mid_run_stops_and_refunds(db_connection, fake_scraper):
             from database import get_db
 
             c = get_db()
-            c.execute("UPDATE jobs SET status = 'cancelled' WHERE job_id = ?", (job_id,))
+            c.cursor().execute("UPDATE jobs SET status = 'cancelled' WHERE job_id = ?", (job_id,))
             c.commit()
             c.close()
         return await original(self, category, city, *a, **k)
@@ -663,3 +663,35 @@ def test_migration_014_does_not_refund_historical_jobs(db_connection):
     rows = dict(cur.fetchall())
     assert rows["legacy-running"] is None          # still settles normally when it finishes
     assert all(rows[f"legacy-{s}"] == "pre-014" for s in ("completed", "failed", "cancelled"))
+
+
+def test_heartbeat_with_identical_timestamp_keeps_ownership(db_connection, monkeypatch):
+    """MySQL/MariaDB report 0 'changed' rows when an UPDATE rewrites the same
+    value; two heartbeats inside one clock tick made a healthy worker think it
+    had lost its job. Connections must count MATCHED rows (CLIENT.FOUND_ROWS)."""
+    import job_service
+
+    uid = _insert_user(db_connection)
+    job_id = _create(uid)["job_id"]
+    monkeypatch.setattr(job_service, "now_iso", lambda: "2026-11-16T10:00:00.000000")
+    assert job_service.claim_job(job_id, "w1")
+    assert job_service.heartbeat(job_id, "w1") is True
+    assert job_service.heartbeat(job_id, "w1") is True  # same value again
+
+
+def test_sweep_never_refunds_jobs_finished_by_old_code(db_connection):
+    """Rollback then roll-forward: jobs the old code completed have
+    settled_at NULL and attempts 0. The sweep must leave them alone."""
+    import job_service
+
+    uid = _insert_user(db_connection, balance=1000)
+    cur = db_connection.cursor()
+    cur.execute(
+        "INSERT INTO jobs (job_id, user_id, category, cities_data, status, total_cities, credit_charged, created_at) "
+        "VALUES ('old-code-job', ?, 'x', '[\"a, b\"]', 'completed', 1, 50, ?)",
+        (uid, datetime.now().isoformat()),
+    )
+    db_connection.commit()
+    job_service.settle_unsettled_terminal_jobs()
+    assert _balance(db_connection, uid) == 1000
+    assert _job(db_connection, "old-code-job")["settled_at"] is None

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            padding: 30px 20px;
+        }
+        .content h2 {
+            color: #333;
+            margin-top: 0;
+        }
+        .content p {
+            color: #666;
+            line-height: 1.6;
+            margin: 15px 0;
+        }
+        .credentials {
+            background: #f5f5f5;
+            padding: 15px;
+            border-left: 4px solid #667eea;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+        }
+        .credentials-label {
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        .credentials-value {
+            color: #333;
+            font-weight: bold;
+            word-break: break-all;
+        }
+        .button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .footer {
+            background: #f9f9f9;
+            border-top: 1px solid #eee;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+        }
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎉 Welcome to Infinity Leads Pro!</h1>
+        </div>
+        <div class="content">
+            <h2>Hello {{username}},</h2>
+            <p>Your registration has been approved! You can now start using Infinity Leads Pro to discover valuable business leads.</p>
+            
+            <h3>Getting Started</h3>
+            <p>We've added <strong>{{starting_credits}} free credits</strong> to your account to help you get started. Each lead discovery requires credits based on the scope of your search.</p>
+            
+            <div class="credentials">
+                <div class="credentials-label">Username</div>
+                <div class="credentials-value">{{username}}</div>
+                <div class="credentials-label" style="margin-top: 10px;">Email</div>
+                <div class="credentials-value">{{email}}</div>
+                <div class="credentials-label" style="margin-top: 10px;">Starting Credits</div>
+                <div class="credentials-value">{{starting_credits}}</div>
+            </div>
+
+            <h3>Next Steps</h3>
+            <ol>
+                <li>Log in to your account</li>
+                <li>Explore our pricing and available search options</li>
+                <li>Start discovering leads from your target industries</li>
+                <li>Monitor your credit balance and purchase more when needed</li>
+            </ol>
+
+            <p>If you have any questions, our support team is here to help!</p>
+        </div>
+        <div class="footer">
+            <p>&copy; {{current_year}} Infinity Leads Pro. All rights reserved.</p>
+            <p><a href="{{support_url}}">Contact Support</a> | <a href="{{help_url}}">Help Center</a></p>
+        </div>
+    </div>
+</body>
+</html>

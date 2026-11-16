@@ -212,6 +212,12 @@ def _create_mysql_connection():
         password=unquote(parsed_url.password or ""),
         db=parsed_url.path.lstrip("/"),
         autocommit=False,
+        # rowcount = rows MATCHED (as on SQLite), not rows CHANGED. Ownership,
+        # settlement and conditional-debit checks rely on rowcount == 1; with
+        # the MySQL default an UPDATE that rewrites an identical value (e.g. two
+        # heartbeats within one clock tick) reports 0 and a healthy worker
+        # concluded it had lost its job.
+        client_flag=mysql_client.constants.CLIENT.FOUND_ROWS,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
         write_timeout=write_timeout,

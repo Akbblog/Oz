@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+        .header {
+            background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            padding: 30px 20px;
+        }
+        .content h2 {
+            color: #333;
+            margin-top: 0;
+        }
+        .content p {
+            color: #666;
+            line-height: 1.6;
+            margin: 15px 0;
+        }
+        .note-box {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .note-box strong {
+            color: #e65100;
+        }
+        .button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .footer {
+            background: #f9f9f9;
+            border-top: 1px solid #eee;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+        }
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Registration Application Denied</h1>
+        </div>
+        <div class="content">
+            <h2>Hello {{username}},</h2>
+            
+            <p>Thank you for your interest in Infinity Leads Pro. We appreciate your registration application.</p>
+
+            <div class="note-box">
+                <strong>Unfortunately,</strong> your registration application has been denied at this time.
+            </div>
+
+            <h3>Next Steps</h3>
+            {{#admin_note}}
+            <p><strong>Reason:</strong></p>
+            <p>{{admin_note}}</p>
+            {{/admin_note}}
+
+            <p>If you believe this is in error or have any questions, please contact our support team.</p>
+            
+            <a href="{{support_url}}" class="button">Contact Support</a>
+
+            <p>We appreciate your understanding, and we hope to welcome you in the future.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; {{current_year}} Infinity Leads Pro. All rights reserved.</p>
+            <p><a href="{{support_url}}">Contact Support</a> | <a href="{{help_url}}">Help Center</a></p>
+        </div>
+    </div>
+</body>
+</html>

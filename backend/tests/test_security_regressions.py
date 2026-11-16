@@ -57,7 +57,7 @@ def test_admin_grant_is_atomic_and_ledgered(db_connection):
     cur.execute("SELECT credit_balance FROM users WHERE id = ?", (target,))
     assert cur.fetchone()[0] == 55
     cur.execute("SELECT amount, balance_after FROM credit_ledger WHERE user_id = ?", (target,))
-    assert cur.fetchall() == [(50, 55)]
+    assert [tuple(r) for r in cur.fetchall()] == [(50, 55)]
 
 
 def test_debug_user_dump_and_public_docs_are_gone(db_connection):
@@ -121,3 +121,96 @@ def test_monthly_purchase_query_is_portable(db_connection, sample_user):
 
     # Used to call SQLite-only datetime('now', ...); must run and return an int.
     assert PricingEngine()._get_monthly_credits_purchased(sample_user) == 0
+
+
+# --------------------------------------------------------------------------- #
+# Auth hardening (audit H-5, H-6, H-7, M-9, M-10)
+# --------------------------------------------------------------------------- #
+
+def test_password_policy_on_register_and_reset(db_connection):
+    from main import app
+
+    client = TestClient(app)
+    r = client.post("/api/auth/register", json={"username": "weak", "email": "weak@example.com",
+                                                "password": "a", "phone": "5551234567"})
+    assert r.status_code == 422
+    r = client.post("/api/auth/reset-password", json={"token": "x", "new_password": "short"})
+    assert r.status_code == 422
+    r = client.post("/api/auth/reset-password", json={"token": "x", "new_password": "é" * 40})  # 80 bytes
+    assert r.status_code == 422
+
+
+def test_password_reset_revokes_existing_sessions(db_connection):
+    import hashlib
+    from datetime import timedelta
+
+    from main import app
+
+    uid = _user(db_connection, "victim")
+    client = TestClient(app)
+    old = _h(client, "victim")
+    assert client.get("/api/auth/me", headers=old).status_code == 200
+
+    token = "reset-token-for-test-0001"
+    cur = db_connection.cursor()
+    cur.execute(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, used, created_at) VALUES (?, ?, ?, 0, ?)",
+        (uid, hashlib.sha256(token.encode()).hexdigest(),
+         (datetime.now() + timedelta(hours=1)).isoformat(), datetime.now().isoformat()),
+    )
+    db_connection.commit()
+    import time
+    time.sleep(1.1)  # iat has second resolution
+    r = client.post("/api/auth/reset-password", json={"token": token, "new_password": "brand-new-password-1"})
+    assert r.status_code == 200, r.text
+
+    assert client.get("/api/auth/me", headers=old).status_code == 401  # attacker's token is dead
+    r = client.post("/api/auth/login", json={"username": "victim", "password": "brand-new-password-1"})
+    assert r.status_code == 200
+    fresh = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    assert client.get("/api/auth/me", headers=fresh).status_code == 200
+
+
+def test_rotating_x_forwarded_for_does_not_bypass_lockout(db_connection, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "LOGIN_EDGE_MAX_ATTEMPTS", 5)
+    client = TestClient(main.app)
+    codes = []
+    for i in range(8):
+        r = client.post(
+            "/api/auth/login",
+            json={"username": f"spray{i}", "password": "wrong-password"},  # new username each time
+            headers={"X-Forwarded-For": f"10.0.0.{i}", "CF-Connecting-IP": "203.0.113.9"},
+        )
+        codes.append(r.status_code)
+    assert 429 in codes, codes
+    assert codes.index(429) <= 5
+
+
+def test_missing_or_placeholder_secret_key_refuses_to_start(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for key in ("", "your-secret-key-change-in-production", "short"):
+        env = {**os.environ, "SECRET_KEY": key}
+        r = subprocess.run([sys.executable, "-c", "import auth"], cwd=backend, env=env,
+                           capture_output=True, text=True)
+        assert r.returncode != 0 and "SECRET_KEY" in r.stderr, key
+
+
+def test_every_email_template_referenced_by_code_is_tracked_in_git():
+    import os
+    import re
+    import subprocess
+
+    backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(backend, "notifications", "email_service.py"), encoding="utf-8").read()
+    names = set(re.findall(r'"([a-z_]+\.html)"', src))
+    assert names, "no templates found in email_service.py"
+    tracked = subprocess.run(["git", "ls-files", "notifications/templates"], cwd=backend,
+                             capture_output=True, text=True).stdout
+    missing = [n for n in names if n not in tracked]
+    assert not missing, f"templates not in git (clean clones cannot send these emails): {missing}"
