@@ -18,6 +18,14 @@ if not "%API_URL%"=="" (
 rem NOTE: Flutter 3.29+ removed --web-renderer. Use default renderer.
 rem Disable PWA caching to avoid stale builds after deploys.
 flutter build web --release --pwa-strategy=none %DART_DEFINES%
+if %errorlevel% == 0 (
+    for %%F in (build\web\main.dart.js build\webssets\AssetManifest.bin.json build\webssets\FontManifest.json) do (
+        if not exist %%F (
+            echo Incomplete web bundle: missing %%F. Run "flutter clean" and build again.
+            exit /b 1
+        )
+    )
+)
 
 if %errorlevel% == 0 (
     echo.

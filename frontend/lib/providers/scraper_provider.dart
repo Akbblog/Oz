@@ -176,7 +176,7 @@ class ScraperProvider with ChangeNotifier {
   })  : _apiService = api ?? ApiService(),
         _pollInterval = pollInterval ?? const Duration(seconds: 2),
         _retryBaseDelay = retryBaseDelay ?? const Duration(seconds: 1),
-        _maxBackoff = maxBackoff ?? const Duration(seconds: 30) {
+        _maxBackoff = maxBackoff ?? const Duration(seconds: 10) {
     checkApiConnection();
   }
 

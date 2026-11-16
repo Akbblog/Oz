@@ -19,8 +19,21 @@ fi
 # NOTE: Flutter 3.29+ removed --web-renderer. Use the default renderer.
 # Disable PWA caching to avoid stale builds after deploys.
 flutter build web --release --pwa-strategy=none $EXTRA_DEFINES
+BUILD_STATUS=$?
 
-if [ $? -eq 0 ]; then
+# Incremental builds have been observed to report success while leaving
+# build/web without its asset manifests (the app then loads as a blank page).
+# Refuse to call such a bundle "successful".
+if [ $BUILD_STATUS -eq 0 ]; then
+    for f in build/web/main.dart.js build/web/assets/AssetManifest.bin.json build/web/assets/FontManifest.json; do
+        if [ ! -s "$f" ]; then
+            echo "Incomplete web bundle: missing $f. Run 'flutter clean' and build again."
+            BUILD_STATUS=1
+        fi
+    done
+fi
+
+if [ $BUILD_STATUS -eq 0 ]; then
     echo ""
     echo "========================================"
     echo "Build completed successfully!"

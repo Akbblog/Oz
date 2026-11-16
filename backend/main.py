@@ -113,7 +113,7 @@ def get_admin_setting(key: str, default: str = "") -> str:
         return default
 
 
-def set_admin_setting(key: str, value: str, admin_id: int) -> None:
+def set_admin_setting(key: str, value: str, admin_id: Optional[int]) -> None:
     """Update admin setting in database."""
     conn = get_db()
     cursor = conn.cursor()
@@ -168,14 +168,15 @@ def ensure_default_admin_settings() -> None:
     ]
     for key, value in defaults:
         if not admin_setting_exists(key):
-            # System bootstrap: attribute to the first admin user (id=1) by convention.
-            set_admin_setting(key, value, admin_id=1)
+            # System bootstrap: no acting user. (Attributing to id=1 violated the
+            # users FK and crashed startup on a fresh DB with no admin yet.)
+            set_admin_setting(key, value, admin_id=None)
 
     # Enforce Coinbase-only payment methods for existing databases.
     current = get_admin_setting("payment_methods_enabled", "coinbase")
     methods = [m.strip().lower() for m in str(current).split(",") if m.strip()]
     if methods != ["coinbase"]:
-        set_admin_setting("payment_methods_enabled", "coinbase", admin_id=1)
+        set_admin_setting("payment_methods_enabled", "coinbase", admin_id=None)
 
 
 def get_all_admin_settings() -> dict:

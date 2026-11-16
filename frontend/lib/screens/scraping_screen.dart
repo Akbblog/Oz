@@ -145,6 +145,10 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     // Listen for job completion and update local completion state once.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupJobCompletionListener();
+      if (mounted) {
+        _fillFormFromJob(
+            Provider.of<ScraperProvider>(context, listen: false).currentJob);
+      }
     });
   }
 
@@ -179,6 +183,27 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     _updateCostEstimate();
   }
 
+  String? _formFilledForJobId;
+
+  /// When a job is attached (refresh / reattach / other tab) and the form is
+  /// empty, show what that job is searching for. Previously the field showed
+  /// its placeholder ("Software Companies") while an "ecommerce" job ran.
+  void _fillFormFromJob(ScrapingJob? job) {
+    if (job == null || _formFilledForJobId == job.jobId) return;
+    _formFilledForJobId = job.jobId;
+    final fillCategory =
+        _categoryController.text.trim().isEmpty && job.category.isNotEmpty;
+    final fillCities =
+        _citiesController.text.trim().isEmpty && job.cities.isNotEmpty;
+    if (!fillCategory && !fillCities) return;
+    setState(() {
+      if (fillCategory) _categoryController.text = job.category;
+      if (fillCities) _citiesController.text = job.cities.join('; ');
+      if (job.maxResultsPerCity > 0) _maxResults = job.maxResultsPerCity;
+      _showCategorySuggestions = _categoryController.text.trim().isEmpty;
+    });
+  }
+
   void _rememberForm() {
     _memCategory = _categoryController.text;
     _memCities = _citiesController.text;
@@ -192,6 +217,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
     _jobListener = () {
       if (!mounted) return;
       final job = provider.currentJob;
+      _fillFormFromJob(job);
       if (job != null &&
           job.status == ScrapingStatus.completed &&
           _lastCompletedJobId != job.jobId) {
@@ -2838,7 +2864,9 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 if (isCompleted) {
                   statusIcon = Icons.check_circle_rounded;
                   statusColor = _ScrapeColors.emerald;
-                  statusLabel = '$count ${count == 1 ? 'lead' : 'leads'}';
+                  statusLabel = job.resultsLoaded
+                      ? '$count ${count == 1 ? 'lead' : 'leads'}'
+                      : 'Done';
                 } else if (isFailedOrCancelled) {
                   statusIcon = Icons.error_rounded;
                   statusColor = _ScrapeColors.rose;
@@ -2848,7 +2876,7 @@ class _ScrapingScreenState extends State<ScrapingScreen>
                 } else if (isActive) {
                   statusIcon = Icons.autorenew_rounded;
                   statusColor = _ScrapeColors.primaryLight;
-                  statusLabel = '$count ${count == 1 ? 'lead' : 'leads'}';
+                  statusLabel = job.isQueued ? 'Queued' : 'Scraping...';
                 } else {
                   statusIcon = Icons.circle_rounded;
                   statusColor = Colors.white24;

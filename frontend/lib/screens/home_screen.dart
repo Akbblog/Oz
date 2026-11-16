@@ -39,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // mounted (IndexedStack) so form text, scroll position and in-flight state
   // survive tab switches instead of being rebuilt from scratch.
   final Set<int> _visitedPages = <int>{};
+  bool? _lastLayoutWasMobile;
   String _scrapeInitialCategory = '';
   String _scrapeInitialCities = '';
   String _scrapeInitialMaxResults = '50';
@@ -110,7 +111,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _loadCreditBalance();
         // Reattach to a job that is still running on the server (refresh,
         // new tab, or a previous session that lost its connection).
-        scraper.resumeActiveJob();
+        scraper.resumeActiveJob().then((attached) {
+          // After a refresh the app opens on Home; take the user straight back
+          // to the live job instead of leaving it unreachable until they
+          // re-select cities.
+          if (!mounted || !attached) return;
+          if ((scraper.currentJob?.isActive ?? false) && _currentIndex == 0) {
+            _onNavTap(2);
+          }
+        });
       } else {
         CreditProvider.instance.clear();
         scraper.detach();
@@ -203,6 +212,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final layoutType = AppBreakpoints.getLayoutType(
       MediaQuery.of(context).size.width,
     );
+    final isMobile = layoutType == LayoutType.mobile;
+    if (isMobile && _lastLayoutWasMobile == false) {
+      // The PageView is rebuilt when crossing into the mobile layout and would
+      // reopen at the controller's *initial* page (Cities), hiding the tab the
+      // user was on (e.g. a running job on Search). Restore the current tab.
+      final target = _currentIndex;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pageController.hasClients) {
+          _pageController.jumpToPage(target);
+        }
+      });
+    }
+    _lastLayoutWasMobile = isMobile;
 
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
