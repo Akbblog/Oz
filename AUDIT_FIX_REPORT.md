@@ -106,6 +106,9 @@ Test-harness-only problems fixed (not product bugs): MySQL test mode needed auto
 5. **SMTP not configured in production** (V22) — password reset is unavailable until it is.
 6. **CI never executed** (V21) — push the branch to see it run.
 7. **Manual QA** (0.7) on a staging copy.
+8. **Data hygiene:** the snapshot file was deleted, but the stopped QA containers `il-qa-mariadb` and
+   `il-qa-mysql8` still hold a **copy of production data** (users, emails, leads). Re-use them for gap 1,
+   then remove them: `docker rm -f il-qa-mariadb il-qa-mysql8`.
 
 Environment note: during this round Docker Desktop stopped several times by itself (each time the
 session was interrupted). Every restart also restarted the **live** backend and tunnel containers
