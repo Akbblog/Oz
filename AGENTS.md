@@ -390,7 +390,8 @@ static const Color primaryEnd = Color(0xFFA855F7);    // Purple
 
 2. **Database Initialization**:
    - Automatically creates tables on first run
-   - Default admin: `admin` / `tool.com`
+   - No built-in admin. On an empty DB set `DEFAULT_ADMIN_EMAIL` and a 12+ char
+     `DEFAULT_ADMIN_PASSWORD` once, or use `scripts/reset_admin_password.py`.
 
 3. **Testing Endpoints**:
    - Use Postman/curl or built-in scripts:

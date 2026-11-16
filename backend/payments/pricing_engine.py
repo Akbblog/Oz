@@ -51,16 +51,26 @@ class PricingEngine:
         return None if row[0] is None else int(row[0])
 
     def _get_monthly_credits_purchased(self, user_id: int) -> int:
-        # SQLite: created_at is typically TEXT; datetime(created_at) works for "YYYY-MM-DDTHH:MM:SS" and "YYYY-MM-DD HH:MM:SS"
+        # Portable (CLAUDE_DEEP_AUDIT H-9): SQLite's datetime('now', '-30 days')
+        # does not exist on MySQL and broke every price calculation there.
+        # Compute the cutoff in Python, in the same format now_db_string() stores.
+        from datetime import datetime, timedelta, timezone
+        from db.base import get_db_type
+
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=30)
+        if get_db_type() == "mysql":
+            cutoff = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            cutoff = cutoff_dt.replace(microsecond=0).isoformat()
         row = execute_query(
             """
             SELECT COALESCE(SUM(credits_purchased), 0)
             FROM payment_transactions
             WHERE user_id = ?
               AND status = 'completed'
-              AND datetime(created_at) >= datetime('now', '-30 days')
+              AND created_at >= ?
             """,
-            (user_id,),
+            (user_id, cutoff),
             fetch_one=True,
             commit=False,
         )

@@ -366,7 +366,16 @@ def increment_rate_limit(user_id: int):
     conn.commit()
     conn.close()
 
-app = FastAPI(title="Google Business Scraper API", version="2.0.0", debug=config.DEBUG)
+# Interactive docs/schema only in DEBUG (CLAUDE_DEEP_AUDIT M-18); never send
+# tracebacks to clients.
+app = FastAPI(
+    title="Google Business Scraper API",
+    version="2.0.0",
+    debug=False,
+    docs_url="/docs" if config.DEBUG else None,
+    redoc_url="/redoc" if config.DEBUG else None,
+    openapi_url="/openapi.json" if config.DEBUG else None,
+)
 
 
 @app.on_event("startup")
@@ -1484,38 +1493,7 @@ async def reset_password(request: ResetPasswordRequest):
     return {"message": "Password reset successful"}
 
 
-# Debug endpoint: list users (local dev only)
-@app.get("/internal/debug_users")
-async def _debug_list_users(admin: dict = Depends(get_admin_or_above)):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, username, email, phone, is_approved, is_admin, created_at, last_login, approved_at, denied_at, denied_reason FROM users ORDER BY id DESC"
-    )
-    users = cursor.fetchall()
-    conn.close()
-    return {
-        "users": [
-            {
-                "id": u[0],
-                "username": u[1],
-                "email": u[2],
-                "phone": u[3],
-                "approval_status": _approval_state(u[4]),
-                "approval_state": _approval_state_label(u[4]),
-                "is_approved": _approval_state(u[4]) == APPROVAL_APPROVED,
-                "is_admin": bool(u[5]),
-                "created_at": u[6],
-                "last_login": u[7],
-                "approved_at": u[8],
-                "denied_at": u[9],
-                "denied_reason": u[10],
-            }
-            for u in users
-        ]
-    }
-
-# ==================== ADMIN ENDPOINTS ====================
+# /internal/debug_users removed (CLAUDE_DEEP_AUDIT C-1): use GET /api/admin/users.
 
 @app.get("/api/admin/users")
 async def get_all_users(admin: dict = Depends(get_admin_user)):
@@ -1649,7 +1627,7 @@ async def update_user_profile(
         params.append(role)
         # Keep is_admin in sync
         update_fields.append("is_admin = ?")
-        params.append(1 if role in ("admin", "owner", "support") else 0)
+        params.append(1 if role in ("admin", "owner") else 0)  # support is read-only (audit C-4)
 
     elif profile_data.is_admin is not None:
         if _user_role_level(admin) < ROLE_HIERARCHY["owner"]:
@@ -1702,7 +1680,7 @@ async def approve_user(
     user_id: int,
     request: Request,
     background_tasks: BackgroundTasks,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(get_admin_or_above),
 ):
     """Approve a user and grant starting credits (admin only)"""
     conn = get_db()
@@ -1797,7 +1775,7 @@ async def bulk_approve_users(
     payload: BulkUserIdsRequest,
     request: Request,
     background_tasks: BackgroundTasks,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(get_admin_or_above),
 ):
     """Bulk-approve users (admin only)."""
     user_ids = sorted({int(u) for u in (payload.user_ids or []) if int(u) > 0})
@@ -1908,7 +1886,7 @@ async def deny_user(
     request: Request,
     background_tasks: BackgroundTasks,
     admin_note: Optional[str] = None,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(get_admin_or_above),
 ):
     """Deny/reject a user registration (admin only)"""
     conn = get_db()
@@ -1981,7 +1959,7 @@ async def suspend_user(
     user_id: int,
     request: Request,
     payload: Optional[AdminUserSuspendRequest] = Body(default=None),
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(get_admin_or_above),
 ):
     """Suspend an approved user account (admin only)."""
     if admin["id"] == user_id:
@@ -2046,7 +2024,7 @@ async def suspend_user(
 
 
 @app.post("/api/admin/users/{user_id}/restore")
-async def restore_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
+async def restore_user(user_id: int, request: Request, admin: dict = Depends(get_admin_or_above)):
     """Restore a denied user back to pending status (admin only)."""
     conn = get_db()
     cursor = conn.cursor()
@@ -2091,7 +2069,7 @@ async def restore_user(user_id: int, request: Request, admin: dict = Depends(get
 
 
 @app.post("/api/admin/users/{user_id}/unsuspend")
-async def unsuspend_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
+async def unsuspend_user(user_id: int, request: Request, admin: dict = Depends(get_admin_or_above)):
     """Restore a suspended user account (admin only)."""
     conn = get_db()
     cursor = conn.cursor()
@@ -2135,7 +2113,7 @@ async def unsuspend_user(user_id: int, request: Request, admin: dict = Depends(g
 
 
 @app.delete("/api/admin/users/{user_id}")
-async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_admin_user)):
+async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_admin_or_above)):
     """Permanently delete a user after suspension/denial (admin only)."""
     if admin["id"] == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
@@ -2327,7 +2305,7 @@ async def update_setting(
     req: Request,
     payload: Optional[AdminSettingUpdate] = Body(default=None),
     value: Optional[str] = None,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(get_admin_or_above),
 ):
     """Update an admin setting (admin only)"""
     new_value = payload.value if payload is not None else value
@@ -2533,7 +2511,7 @@ async def get_all_credit_requests(admin: dict = Depends(get_admin_user)):
 
 
 @app.post("/api/admin/credits/requests/{request_id}/approve")
-async def approve_credit_request(request_id: int, req: Request, admin: dict = Depends(get_admin_user)):
+async def approve_credit_request(request_id: int, req: Request, admin: dict = Depends(get_admin_or_above)):
     """Approve a credit request (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
@@ -2574,7 +2552,7 @@ async def approve_credit_request(request_id: int, req: Request, admin: dict = De
 
 
 @app.post("/api/admin/credits/requests/bulk-approve")
-async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, request: Request, admin: dict = Depends(get_admin_user)):
+async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, request: Request, admin: dict = Depends(get_admin_or_above)):
     """Bulk-approve credit requests (admin only)."""
     request_ids = sorted({int(r) for r in (payload.request_ids or []) if int(r) > 0})
     if not request_ids:
@@ -2641,7 +2619,7 @@ async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, req
 
 
 @app.post("/api/admin/credits/requests/{request_id}/deny")
-async def deny_credit_request(request_id: int, req: Request, admin_note: Optional[str] = None, admin: dict = Depends(get_admin_user)):
+async def deny_credit_request(request_id: int, req: Request, admin_note: Optional[str] = None, admin: dict = Depends(get_admin_or_above)):
     """Deny a credit request (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
@@ -2672,7 +2650,7 @@ async def deny_credit_request(request_id: int, req: Request, admin_note: Optiona
 
 
 @app.post("/api/admin/credits/requests/bulk-deny")
-async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, request: Request, admin: dict = Depends(get_admin_user)):
+async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, request: Request, admin: dict = Depends(get_admin_or_above)):
     """Bulk-deny credit requests (admin only)."""
     request_ids = sorted({int(r) for r in (payload.request_ids or []) if int(r) > 0})
     if not request_ids:
@@ -2724,7 +2702,7 @@ async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, reques
 
 
 @app.post("/api/admin/users/{user_id}/credits")
-async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, request: Request, admin: dict = Depends(get_admin_user)):
+async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, request: Request, admin: dict = Depends(get_admin_or_above)):
     """Manually grant credits to a user (admin only)"""
     conn = get_db()
     cursor = conn.cursor()
@@ -5046,7 +5024,7 @@ async def list_pricing_tiers(current_user: dict = Depends(get_current_user)):
 
 
 @app.post("/api/admin/pricing/tiers")
-async def admin_create_pricing_tier(req: PricingTierCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_pricing_tier(req: PricingTierCreateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import create_pricing_tier
 
     tier_id = create_pricing_tier(
@@ -5069,7 +5047,7 @@ async def admin_create_pricing_tier(req: PricingTierCreateRequest, request: Requ
 
 
 @app.put("/api/admin/pricing/tiers/{tier_id}")
-async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import update_pricing_tier
 
     updates = {}
@@ -5097,7 +5075,7 @@ async def admin_update_pricing_tier(tier_id: int, req: PricingTierUpdateRequest,
 # ==================== ADMIN PROMO MANAGEMENT ====================
 
 @app.post("/api/admin/promos")
-async def admin_create_promo(req: PromoCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_promo(req: PromoCreateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import create_promo_code
 
     promo_id = create_promo_code(
@@ -5154,7 +5132,7 @@ async def admin_list_promos(admin_user: dict = Depends(get_admin_user)):
 
 
 @app.put("/api/admin/promos/{promo_id}")
-async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import update_promo_code
 
     updates = {}
@@ -5194,7 +5172,7 @@ async def admin_update_promo(promo_id: int, req: PromoUpdateRequest, request: Re
 
 
 @app.delete("/api/admin/promos/{promo_id}")
-async def admin_deactivate_promo(promo_id: int, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_deactivate_promo(promo_id: int, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import deactivate_promo_code
 
     ok = deactivate_promo_code(promo_id)
@@ -5219,7 +5197,7 @@ async def admin_promo_usage(promo_id: int, admin_user: dict = Depends(get_admin_
 # ==================== ADMIN PACKAGES & PLANS ====================
 
 @app.post("/api/admin/payments/packages")
-async def admin_create_credit_package(req: CreditPackageCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_credit_package(req: CreditPackageCreateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import create_credit_package
 
     features_json = json.dumps(req.features) if req.features is not None else None
@@ -5272,7 +5250,7 @@ async def admin_list_credit_packages(admin_user: dict = Depends(get_admin_user))
 
 
 @app.put("/api/admin/payments/packages/{package_id}")
-async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import update_credit_package
 
     updates = {}
@@ -5303,7 +5281,7 @@ async def admin_update_credit_package(package_id: int, req: CreditPackageUpdateR
 
 
 @app.delete("/api/admin/payments/packages/{package_id}")
-async def admin_delete_credit_package(package_id: int, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_delete_credit_package(package_id: int, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import delete_credit_package
 
     ok = delete_credit_package(package_id)
@@ -5319,7 +5297,7 @@ async def admin_delete_credit_package(package_id: int, request: Request, admin_u
 
 
 @app.post("/api/admin/subscriptions/plans")
-async def admin_create_subscription_plan(req: SubscriptionPlanCreateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_create_subscription_plan(req: SubscriptionPlanCreateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import create_subscription_plan
 
     features_json = json.dumps(req.features) if req.features is not None else None
@@ -5375,7 +5353,7 @@ async def admin_list_subscription_plans(admin_user: dict = Depends(get_admin_use
 
 
 @app.put("/api/admin/subscriptions/plans/{plan_id}")
-async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpdateRequest, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import update_subscription_plan
 
     updates = {}
@@ -5405,7 +5383,7 @@ async def admin_update_subscription_plan(plan_id: int, req: SubscriptionPlanUpda
 
 
 @app.delete("/api/admin/subscriptions/plans/{plan_id}")
-async def admin_delete_subscription_plan(plan_id: int, request: Request, admin_user: dict = Depends(get_admin_user)):
+async def admin_delete_subscription_plan(plan_id: int, request: Request, admin_user: dict = Depends(get_admin_or_above)):
     from db.payment_crud import delete_subscription_plan
 
     ok = delete_subscription_plan(plan_id)

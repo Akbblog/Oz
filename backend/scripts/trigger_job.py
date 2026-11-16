@@ -1,10 +1,11 @@
+import os
 import requests
 import json
 
 BASE = 'http://127.0.0.1:8001'
 
 # login
-r = requests.post(f'{BASE}/api/auth/login', json={'username':'akb@tool.com','password':'tool.com'})
+r = requests.post(f'{BASE}/api/auth/login', json={'username': os.environ['IL_USERNAME'], 'password': os.environ['IL_PASSWORD']})
 print('login status', r.status_code, r.text)
 if r.status_code != 200:
     raise SystemExit('Login failed')

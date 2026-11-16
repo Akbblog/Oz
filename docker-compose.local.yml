@@ -9,7 +9,7 @@ services:
       SECRET_KEY: ${LOCAL_JWT_SECRET:?Set LOCAL_JWT_SECRET in backend/.env}
       DEFAULT_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in backend/.env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in backend/.env}
-      DEFAULT_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-akb@tool.com}
+      DEFAULT_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@localhost.test}
       PLAYWRIGHT_HEADLESS: 'true'
     volumes:
       - local_sqlite_data:/data

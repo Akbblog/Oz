@@ -1,3 +1,4 @@
+import os
 import json
 import sys
 try:
@@ -6,7 +7,7 @@ except Exception:
     requests=None
 
 url='http://127.0.0.1:8001/api/auth/login'
-cred={'username':'akb@tool.com','password':'tool.com'}
+cred={'username': os.environ['IL_USERNAME'], 'password': os.environ['IL_PASSWORD']}
 
 if requests:
     r=requests.post(url,json=cred,timeout=10)

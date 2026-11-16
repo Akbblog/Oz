@@ -427,21 +427,29 @@ def _ensure_results_email_column(logger=None) -> None:
 
 def _ensure_default_admin_user(logger=None) -> None:
     """
-    Ensure at least one admin exists.
+    Create a first admin for a brand-new install, only when explicitly configured.
 
-    Repo docs expect a default admin for new/dev installs. This only creates (or
-    promotes) the configured DEFAULT_ADMIN_* identity, and only if no admin user
-    currently exists.
+    Security (CLAUDE_DEEP_AUDIT C-2):
+    * There is no built-in password any more: DEFAULT_ADMIN_PASSWORD must be set
+      (12+ characters) or nothing is created.
+    * An existing account whose username/email happens to match is never
+      promoted - previously a self-registered user named "admin" became an
+      approved admin on the next restart.
+    * DISABLE_DEFAULT_ADMIN=true still turns the bootstrap off entirely.
     """
-    default_username = os.getenv("DEFAULT_ADMIN_USERNAME", "admin").strip()
-    default_email = os.getenv("DEFAULT_ADMIN_EMAIL", "akb@tool.com").strip()
-    default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "tool.com")
-
-    if not default_username or not default_email:
+    if os.getenv("DISABLE_DEFAULT_ADMIN", "false").lower() in ("true", "1", "t", "yes", "y"):
         return
 
-    # Allow disabling this behavior explicitly (recommended for production).
-    if os.getenv("DISABLE_DEFAULT_ADMIN", "false").lower() in ("true", "1", "t", "yes", "y"):
+    default_username = os.getenv("DEFAULT_ADMIN_USERNAME", "admin").strip()
+    default_email = os.getenv("DEFAULT_ADMIN_EMAIL", "").strip()
+    default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
+
+    if not default_username or not default_email or len(default_password) < 12:
+        if logger:
+            logger.info(
+                "Default admin bootstrap skipped (set DEFAULT_ADMIN_EMAIL and a 12+ character "
+                "DEFAULT_ADMIN_PASSWORD to create the first admin on an empty database)."
+            )
         return
 
     conn = get_db()
@@ -449,7 +457,7 @@ def _ensure_default_admin_user(logger=None) -> None:
         cursor = conn.cursor()
 
         # If any admin exists, do nothing.
-        cursor.execute("SELECT id FROM users WHERE is_admin = 1 LIMIT 1")
+        cursor.execute("SELECT id FROM users WHERE is_admin = 1 OR role IN ('admin', 'owner') LIMIT 1")
         if cursor.fetchone():
             return
 
@@ -458,33 +466,27 @@ def _ensure_default_admin_user(logger=None) -> None:
             f"SELECT id FROM users WHERE username = {ph} OR email = {ph} LIMIT 1",
             (default_username, default_email),
         )
-        existing = cursor.fetchone()
-        now = datetime.now().isoformat()
-
-        if existing:
-            user_id = int(existing[0])
-            cursor.execute(
-                f"UPDATE users SET is_admin = 1, is_approved = 1 WHERE id = {ph}",
-                (user_id,),
-            )
-            conn.commit()
+        if cursor.fetchone():
             if logger:
-                logger.info(f"✓ Promoted existing user id={user_id} to admin (username/email match).")
+                logger.warning(
+                    "Default admin bootstrap skipped: an account with that username/email already "
+                    "exists and will not be promoted automatically. Promote it manually if intended."
+                )
             return
 
         from auth import get_password_hash
 
+        now = datetime.now().isoformat()
         cursor.execute(
             f"""
-            INSERT INTO users (username, email, password_hash, is_approved, is_admin, created_at)
-            VALUES ({ph}, {ph}, {ph}, 1, 1, {ph})
+            INSERT INTO users (username, email, password_hash, is_approved, is_admin, role, created_at)
+            VALUES ({ph}, {ph}, {ph}, 1, 1, 'owner', {ph})
             """,
             (default_username, default_email, get_password_hash(default_password), now),
         )
         conn.commit()
         if logger:
-            logger.info(f"✓ Created default admin user '{default_username}' ({default_email}).")
-            logger.info("  Set DISABLE_DEFAULT_ADMIN=true to disable this auto-bootstrap.")
+            logger.info(f"Created first admin user '{default_username}'.")
     finally:
         conn.close()
 

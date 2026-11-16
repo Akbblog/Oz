@@ -1,3 +1,4 @@
+import os
 import time
 import json
 try:
@@ -6,7 +7,7 @@ except Exception:
     requests=None
 
 BASE='http://127.0.0.1:8000'
-cred={'username':'akb@tool.com','password':'tool.com'}
+cred={'username': os.environ['IL_USERNAME'], 'password': os.environ['IL_PASSWORD']}
 
 print('Logging in...')
 if requests:

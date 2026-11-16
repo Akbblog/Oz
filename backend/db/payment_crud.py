@@ -405,6 +405,34 @@ def create_webhook_event(
     return event_id
 
 
+def begin_webhook_event(webhook_id: str, provider: str, event_type: str, payload: str):
+    """Idempotent webhook ingestion (CLAUDE_DEEP_AUDIT H-4).
+
+    Returns ``(db_id, already_processed)``. A redelivered event that was already
+    processed is reported as such (caller acknowledges without re-processing);
+    a previously failed/pending event reuses its row so provider retries can
+    succeed instead of hitting the UNIQUE(webhook_id) constraint forever.
+    """
+    ph = get_placeholder()
+    row = execute_query(
+        f"SELECT id, status FROM webhook_events WHERE webhook_id = {ph}",
+        (webhook_id,), fetch_one=True, commit=False,
+    )
+    if row:
+        return int(row[0]), str(row[1] or "") == "processed"
+    try:
+        return create_webhook_event(webhook_id, provider, event_type, payload, status="pending"), False
+    except Exception:
+        # Concurrent delivery inserted it first.
+        row = execute_query(
+            f"SELECT id, status FROM webhook_events WHERE webhook_id = {ph}",
+            (webhook_id,), fetch_one=True, commit=False,
+        )
+        if not row:
+            raise
+        return int(row[0]), str(row[1] or "") == "processed"
+
+
 def get_pending_webhooks(limit: int = 100) -> List[Dict]:
     """Get pending webhook events"""
     query = f"""

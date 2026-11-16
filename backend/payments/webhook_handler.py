@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from db.payment_crud import create_webhook_event, mark_webhook_failed, mark_webhook_processed
+from db.payment_crud import begin_webhook_event, mark_webhook_failed, mark_webhook_processed
 from payments.coinbase_service import CoinbaseCommerceService
 from payments.payment_processor import PaymentProcessor
 from payments.stripe_service import StripeService
@@ -25,13 +25,14 @@ class WebhookHandler:
         webhook_id = str(event.get("id") or "")
         event_type = str(event.get("type") or "")
 
-        webhook_db_id = create_webhook_event(
+        webhook_db_id, already_processed = begin_webhook_event(
             webhook_id=webhook_id,
             provider="stripe",
             event_type=event_type,
             payload=json.dumps(event),
-            status="pending",
         )
+        if already_processed:
+            return {"received": True, "duplicate": True}
 
         try:
             obj = (event.get("data") or {}).get("object") or {}
@@ -92,13 +93,14 @@ class WebhookHandler:
         event = json.loads(raw_body.decode("utf-8"))
         webhook_id = str(event.get("id") or "")
         event_type = str(event.get("type") or "")
-        webhook_db_id = create_webhook_event(
+        webhook_db_id, already_processed = begin_webhook_event(
             webhook_id=webhook_id,
             provider="coinbase",
             event_type=event_type,
             payload=json.dumps(event),
-            status="pending",
         )
+        if already_processed:
+            return {"received": True, "duplicate": True}
 
         try:
             data = (event.get("data") or {})

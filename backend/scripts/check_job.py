@@ -1,7 +1,8 @@
+import os
 import requests, time
 BASE='http://127.0.0.1:8001'
 # Use admin login to get token
-r = requests.post(f'{BASE}/api/auth/login', json={'username':'akb@tool.com','password':'tool.com'})
+r = requests.post(f'{BASE}/api/auth/login', json={'username': os.environ['IL_USERNAME'], 'password': os.environ['IL_PASSWORD']})
 if r.status_code!=200:
     print('login failed', r.status_code, r.text); raise SystemExit
 token=r.json()['access_token']
