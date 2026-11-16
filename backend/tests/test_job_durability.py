@@ -695,3 +695,28 @@ def test_sweep_never_refunds_jobs_finished_by_old_code(db_connection):
     job_service.settle_unsettled_terminal_jobs()
     assert _balance(db_connection, uid) == 1000
     assert _job(db_connection, "old-code-job")["settled_at"] is None
+
+
+def test_job_row_update_after_concurrent_heartbeat_does_not_conflict(db_connection):
+    """MariaDB with REPEATABLE READ + innodb_snapshot_isolation (its default)
+    raised 1020 'Record has changed since last read' when a worker read the job
+    row, the heartbeat thread updated it, and the worker then updated it.
+    Connections must use READ COMMITTED (as production does)."""
+    import job_service
+    from database import get_db
+
+    uid = _insert_user(db_connection)
+    job_id = _create(uid)["job_id"]
+    assert job_service.claim_job(job_id, "w1")
+
+    a = get_db()
+    try:
+        ca = a.cursor()
+        ca.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))  # opens the snapshot
+        assert ca.fetchone()[0] == "running"
+        assert job_service.heartbeat(job_id, "w1")  # another connection changes the row
+        ca.execute("UPDATE jobs SET progress = 50 WHERE job_id = ? AND worker_id = 'w1'", (job_id,))
+        assert ca.rowcount == 1
+        a.commit()
+    finally:
+        a.close()

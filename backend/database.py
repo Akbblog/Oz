@@ -218,6 +218,14 @@ def _create_mysql_connection():
         # heartbeats within one clock tick) reports 0 and a healthy worker
         # concluded it had lost its job.
         client_flag=mysql_client.constants.CLIENT.FOUND_ROWS,
+        # Production (MariaDB 11.8) runs READ COMMITTED globally. With MariaDB's
+        # default REPEATABLE READ + innodb_snapshot_isolation=ON, a job-row
+        # UPDATE fails with 1020 "Record has changed since last read" whenever
+        # the heartbeat thread touched the row after this transaction's first
+        # read. All job/credit logic relies on conditional UPDATEs and row
+        # locks, not snapshots, so pin READ COMMITTED regardless of server
+        # defaults.
+        init_command="SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
         write_timeout=write_timeout,
