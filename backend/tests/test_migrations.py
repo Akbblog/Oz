@@ -43,7 +43,7 @@ def test_migrations_applied(db_connection):
     assert "013" in applied, "Migration 013 (user suspension) should be applied"
 
 
-def test_migration_status():
+def test_migration_status(test_db):
     """Test migration status reporting"""
     status = get_migration_status()
     assert isinstance(status, list), "Status should return a list"

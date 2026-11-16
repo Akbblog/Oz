@@ -18,6 +18,25 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _never_touch_real_databases(tmp_path_factory):
+    """Point every test - even ones without a DB fixture - at a temp SQLite file.
+
+    config.py loads backend/.env at import time; without this a test that
+    forgets the fixture would read/write the developer's (or production) DB.
+    """
+    guard_db = tmp_path_factory.mktemp("guard") / "guard.db"
+    saved = {k: os.environ.get(k) for k in ("DATABASE_URL", "DB_TYPE")}
+    os.environ["DATABASE_URL"] = f"sqlite:///{guard_db}"
+    os.environ["DB_TYPE"] = "sqlite"
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 @pytest.fixture(scope="session")
 def test_db_path(tmp_path_factory):
     """Create a temporary database file for testing"""
