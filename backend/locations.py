@@ -151,3 +151,33 @@ def derive_job_location(cities: Iterable[str]) -> Dict[str, object]:
         if r and r not in regions:
             regions.append(r)
     return {"country": country, "region": regions[0] if regions else None, "regions": regions}
+
+
+# Names people type for the country keys above (search only; display names
+# live in the frontend).
+COUNTRY_ALIASES: Dict[str, List[str]] = {
+    "USA": ["united states", "united states of america", "america", "us"],
+    "UK": ["united kingdom", "great britain", "britain", "england"],
+    "UAE": ["united arab emirates", "emirates"],
+    "KSA": ["saudi arabia", "saudi", "kingdom of saudi arabia"],
+}
+
+
+def country_query_suffixes(query: str, limit: int = 250) -> List[str]:
+    """Region names (and the country key) of every country a search text names.
+
+    Stored city strings look like ``"Toronto, Ontario"``, so a search for
+    "Canada" is answered by matching the ``, <region>`` suffixes. A country
+    matches when the text equals its key/alias, or (3+ characters) is part of
+    one. Capped so a short query can't build an unbounded SQL clause.
+    """
+    q = (query or "").strip().casefold()
+    if not q:
+        return []
+    out: List[str] = []
+    for country in COUNTRY_DATA_FILES.keys():
+        names = [country.casefold()] + COUNTRY_ALIASES.get(country, [])
+        if any(q == n for n in names) or (len(q) >= 3 and any(q in n for n in names)):
+            out.append(country)
+            out.extend(r for r in load_country_data(country).keys() if isinstance(r, str))
+    return out[:limit]

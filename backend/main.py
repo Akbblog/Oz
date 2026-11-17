@@ -3952,36 +3952,114 @@ _JOB_LIST_STATUS_FILTERS = {
 }
 
 
+_JOB_LIST_SORTS = {
+    "newest": "j.created_at DESC, j.id DESC",
+    "oldest": "j.created_at ASC, j.id ASC",
+    "most_leads": "result_count DESC, j.created_at DESC, j.id DESC",
+}
+
+
+def _like_param(text: str) -> str:
+    """Case-folded LIKE pattern with ! as the (portable) escape character."""
+    t = text.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return f"%{t}%"
+
+
+def _list_bound(value: Optional[str], name: str) -> Optional[str]:
+    """ISO instant from the client -> stored (naive server-local) text form."""
+    if not value:
+        return None
+    from job_service import _parse_local
+
+    dt = _parse_local(value)
+    if dt is None:
+        raise HTTPException(status_code=422, detail=f"{name} must be an ISO date-time")
+    return dt.isoformat(timespec="seconds")
+
+
 @app.get("/api/jobs")
 async def get_user_jobs(
     limit: Optional[int] = Query(None, ge=1, le=100),
     offset: int = Query(0, ge=0),
     status_filter: Optional[str] = Query(None, alias="status"),
+    q: Optional[str] = Query(None, max_length=200),
+    created_from: Optional[str] = Query(None, alias="from"),
+    created_to: Optional[str] = Query(None, alias="to"),
+    sort: str = Query("newest"),
     current_user: dict = Depends(get_current_user),
 ):
-    """Jobs of the current user, newest first.
+    """Jobs of the current user. Filtering, sorting and paging all run here.
 
-    Optional ``limit`` (1-100) / ``offset`` paginate and ``status`` filters
-    (all | active | completed | cancelled | failed; active = pending + running).
-    Without ``limit`` every matching job is returned (backward compatible).
-    ``total`` counts jobs matching the status filter; ``counts`` is per status
-    for all of the user's jobs. ``country`` / ``region`` are derived at read
-    time from the stored city strings and are never written back.
+    - ``q``: case-insensitive text match on category, city names or job id.
+    - ``from`` / ``to``: ISO instants (the client sends local-day boundaries);
+      ``from`` inclusive, ``to`` exclusive, on ``created_at``.
+    - ``status``: all | active | completed | cancelled | failed (active = pending + running).
+    - ``sort``: newest (default) | oldest | most_leads.
+    - ``limit`` (1-100) / ``offset`` page the filtered list. Without ``limit``
+      every matching job is returned (backward compatible).
+    Response: ``total`` = jobs matching every filter; ``counts`` = per status
+    tab for the q/date filters; ``overall_total`` = all of the user's jobs.
+    ``country`` / ``region`` are derived at read time and never written back.
     """
+    import job_service
+
     key = (status_filter or "all").strip().lower()
     if key not in _JOB_LIST_STATUS_FILTERS:
         raise HTTPException(
             status_code=422,
             detail="status must be one of: " + ", ".join(_JOB_LIST_STATUS_FILTERS),
         )
+    sort_key = (sort or "newest").strip().lower()
+    if sort_key not in _JOB_LIST_SORTS:
+        raise HTTPException(status_code=422, detail="sort must be one of: " + ", ".join(_JOB_LIST_SORTS))
     wanted = _JOB_LIST_STATUS_FILTERS[key]
     user_id = current_user["id"]
+    lower_bound = _list_bound(created_from, "from")
+    upper_bound = _list_bound(created_to, "to")
+    text = (q or "").strip()
+
+    # Filters shared by the tab counts and the list (everything except status).
+    base_where = "j.user_id = ?"
+    base_params: List = [user_id]
+    created_expr = "REPLACE(j.created_at, ' ', 'T')"  # rows may use either separator
+    if lower_bound:
+        base_where += f" AND {created_expr} >= ?"
+        base_params.append(lower_bound)
+    if upper_bound:
+        base_where += f" AND {created_expr} < ?"
+        base_params.append(upper_bound)
+    if text:
+        folded = text.casefold()
+        # cities_data is JSON text with non-ASCII escaped (json.dumps default),
+        # so match the escaped spelling there as well as the plain one.
+        escaped = json.dumps(folded)[1:-1]
+        base_where += (
+            " AND (LOWER(j.category) LIKE ? ESCAPE '!' OR LOWER(j.cities_data) LIKE ? ESCAPE '!'"
+            " OR LOWER(j.cities_data) LIKE ? ESCAPE '!' OR LOWER(j.job_id) LIKE ? ESCAPE '!')"
+        )
+        base_params.extend([_like_param(folded), _like_param(escaped), _like_param(folded), _like_param(folded)])
+        # A country name ("Canada", "United Kingdom") matches searches whose
+        # stored "City, Region" strings end in one of that country's regions.
+        from locations import country_query_suffixes
+
+        suffixes = country_query_suffixes(text)
+        if suffixes:
+            terms = []
+            for suffix in suffixes:
+                tail = json.dumps(", " + suffix.casefold())[1:-1] + '"'
+                terms.append("LOWER(j.cities_data) LIKE ? ESCAPE '!'")
+                base_params.append("%" + _like_param(tail)[1:-1] + "%")
+            base_where = base_where[:-1] + " OR " + " OR ".join(terms) + ")"
 
     conn = get_db()
     try:
         cursor = conn.cursor()
 
-        cursor.execute("SELECT status, COUNT(*) FROM jobs WHERE user_id = ? GROUP BY status", (user_id,))
+        cursor.execute("SELECT COUNT(*) FROM jobs j WHERE j.user_id = ?", (user_id,))
+        overall_total = int((cursor.fetchone() or [0])[0] or 0)
+
+        cursor.execute(f"SELECT j.status, COUNT(*) FROM jobs j WHERE {base_where} GROUP BY j.status",
+                       tuple(base_params))
         per_status = {str(r[0]): int(r[1] or 0) for r in cursor.fetchall()}
         counts = {
             "all": sum(per_status.values()),
@@ -3992,31 +4070,33 @@ async def get_user_jobs(
         }
         total = counts["all"] if wanted is None else sum(per_status.get(s, 0) for s in wanted)
 
-        where = "j.user_id = ?"
-        params: List = [user_id]
+        where = base_where
+        params: List = list(base_params)
         if wanted is not None:
             where += " AND j.status IN (" + ",".join("?" * len(wanted)) + ")"
             params.extend(wanted)
         page_sql = ""
         if limit is not None:
             page_sql = f" LIMIT {int(limit)} OFFSET {int(offset)}"
+        elif offset:
+            page_sql = f" LIMIT 1000000 OFFSET {int(offset)}"
 
         cursor.execute(f"""
             SELECT j.job_id, j.category, j.status, j.progress,
                    j.total_cities, j.credit_estimate, j.credit_charged,
                    j.created_at, j.completed_at, j.cities_data,
-                   (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count,
+                   (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) AS result_count,
                    j.completed_cities, j.credit_refunded, j.error, j.current_city,
                    j.max_results_per_city, j.failed_cities, j.settled_at
-            FROM jobs j WHERE {where} ORDER BY j.created_at DESC, j.id DESC{page_sql}
+            FROM jobs j WHERE {where} ORDER BY {_JOB_LIST_SORTS[sort_key]}{page_sql}
         """, tuple(params))
 
         job_rows = cursor.fetchall()
-        if limit is None and offset:
-            job_rows = job_rows[offset:]
         job_ids = [row[0] for row in job_rows]
+        lead_counts = job_service.lead_counts_by_city(cursor, job_ids)
+        timeouts = job_service.timed_out_keys_by_job(cursor, job_ids)
 
-        # Batch-fetch top city per job
+        # Top city per job (most saved leads).
         top_cities = {}
         if job_ids:
             placeholders = ",".join("?" * len(job_ids))
@@ -4046,6 +4126,13 @@ async def get_user_jobs(
         result_count = row[10] or 0
         tc = top_cities.get(job_id)
         top_city_text = f"{tc['name']} ({tc['count']})" if tc else None
+        outcomes = job_service.city_outcomes(
+            cities,
+            status=row[2],
+            completed_cities=int(row[11] or 0),
+            lead_counts=lead_counts.get(job_id, {}),
+            timed_out=timeouts.get(job_id, set()),
+        )
 
         jobs.append({
             "job_id": job_id,
@@ -4068,14 +4155,23 @@ async def get_user_jobs(
             "failed_cities": int(row[16] or 0),
             "settled": bool(row[17]),
             "settled_at": _api_ts(row[17]),
+            "city_summary": outcomes["city_summary"],
             **_derive_job_location(cities),
         })
 
-    return {"jobs": jobs, "total": total, "counts": counts}
+    return {
+        "jobs": jobs,
+        "total": total,
+        "counts": counts,
+        "overall_total": overall_total,
+        "sort": sort_key,
+    }
 
 @app.get("/api/jobs/{job_id}/results")
 async def get_job_results(job_id: str, current_user: dict = Depends(get_current_user)):
     """Get scraping results"""
+    import job_service
+
     conn = get_db()
     cursor = conn.cursor()
     
@@ -4086,25 +4182,12 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Get results
-    cursor.execute("""
-        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
-        FROM results WHERE job_id = ?
-    """, (job_id,))
-    
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "business_name": row[0],
-            "phone": row[1],
-            "website": row[2],
-            "email": row[3],
-            "address": row[4],
-            "category": row[5],
-            "city": row[6],
-            "state": row[7],
-            "google_maps_url": row[8]
-        })
+    # Get results (lead_id / lead_key: see job_service.RESULT_API_COLUMNS)
+    cursor.execute(
+        f"SELECT {job_service.RESULT_API_COLUMNS} FROM results WHERE job_id = ? ORDER BY id",
+        (job_id,),
+    )
+    results = [job_service.result_api_dict(row) for row in cursor.fetchall()]
     
     conn.close()
     

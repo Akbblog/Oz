@@ -743,6 +743,132 @@ def _result_dict(row: Iterable[Any]) -> Dict[str, Any]:
     return dict(zip(keys, row))
 
 
+# API reads add two identifiers (exports keep RESULT_COLUMNS unchanged):
+#   lead_id  - results-row primary key; stable for the life of the lead and
+#              unique across all searches (what a future CRM would reference).
+#   lead_key - per-business dedupe key; the same Google place gets the same key
+#              in every search, unique within one search. May be null on rows
+#              saved before migration 014.
+RESULT_API_COLUMNS = "id, dedupe_key, " + RESULT_COLUMNS
+
+
+def result_api_dict(row: Any) -> Dict[str, Any]:
+    row = tuple(row)
+    out = _result_dict(row[2:])
+    out["lead_id"] = int(row[0])
+    out["lead_key"] = row[1] or None
+    return out
+
+
+# ------------------------------------------------------- city outcomes -----
+# Written by the runner (main.py _run_job_core) when a city times out; the
+# prefix is part of the contract with this parser.
+_TIMEOUT_LOG_RE = re.compile(r"^Timeout scraping ([^,]+), (.+?) after \d+s")
+
+CITY_OUTCOMES = ("with_leads", "empty", "timed_out", "skipped", "searching", "interrupted", "not_searched")
+
+
+def _city_key(city: Any, state: Any) -> Tuple[str, str]:
+    return (str(city or "").strip().casefold(), str(state or "").strip().casefold())
+
+
+def city_key_from_entry(entry: str) -> Tuple[str, str]:
+    parts = str(entry).split(",")
+    if len(parts) < 2:
+        return _city_key(entry, "")
+    return _city_key(parts[0], parts[1])
+
+
+def timed_out_city_keys(log_messages: Iterable[str]) -> set:
+    keys = set()
+    for msg in log_messages:
+        m = _TIMEOUT_LOG_RE.match(str(msg or ""))
+        if m:
+            keys.add(_city_key(m.group(1), m.group(2)))
+    return keys
+
+
+def city_outcomes(
+    cities: List[str],
+    *,
+    status: str,
+    completed_cities: int,
+    lead_counts: Dict[Tuple[str, str], int],
+    timed_out: set,
+) -> Dict[str, Any]:
+    """Per-city outcome of a search plus summary counts.
+
+    Facts only: lead numbers are saved leads (duplicates of a business already
+    saved for an earlier city are not counted again), ``timed_out`` comes from
+    the runner's own log line, and cities after the resume point are
+    ``not_searched`` (or ``searching`` / ``interrupted`` for the current one).
+    """
+    status = str(status or "")
+    completed = max(0, min(int(completed_cities or 0), len(cities)))
+    rows = []
+    for i, entry in enumerate(cities):
+        key = city_key_from_entry(entry)
+        leads = int(lead_counts.get(key, 0))
+        if i < completed:
+            if len(str(entry).split(",")) < 2:
+                outcome = "skipped"
+            elif key in timed_out:
+                outcome = "timed_out"
+            else:
+                outcome = "with_leads" if leads > 0 else "empty"
+        elif i == completed and status in ACTIVE_STATUSES:
+            outcome = "searching"
+        elif i == completed and status in ("failed", "cancelled") and (leads > 0 or status == "failed"):
+            outcome = "interrupted"
+        else:
+            outcome = "not_searched"
+        rows.append({"city": str(entry).strip(), "leads": leads, "outcome": outcome})
+
+    def n(*names: str) -> int:
+        return sum(1 for r in rows if r["outcome"] in names)
+
+    summary = {
+        "cities_total": len(rows),
+        "cities_searched": n("with_leads", "empty", "timed_out", "skipped"),
+        "cities_with_leads": sum(1 for r in rows if r["leads"] > 0),
+        "cities_empty": n("empty"),
+        "cities_timed_out": n("timed_out"),
+        "cities_interrupted": n("interrupted"),
+        "cities_not_searched": n("not_searched"),
+    }
+    return {"city_outcomes": rows, "city_summary": summary}
+
+
+def lead_counts_by_city(cursor, job_ids: List[str]) -> Dict[str, Dict[Tuple[str, str], int]]:
+    out: Dict[str, Dict[Tuple[str, str], int]] = {}
+    if not job_ids:
+        return out
+    ph = ",".join("?" * len(job_ids))
+    cursor.execute(
+        f"SELECT job_id, city, state, COUNT(*) FROM results WHERE job_id IN ({ph}) GROUP BY job_id, city, state",
+        tuple(job_ids),
+    )
+    for jid, city, state, cnt in cursor.fetchall():
+        per = out.setdefault(jid, {})
+        k = _city_key(city, state)
+        per[k] = per.get(k, 0) + int(cnt or 0)
+    return out
+
+
+def timed_out_keys_by_job(cursor, job_ids: List[str]) -> Dict[str, set]:
+    out: Dict[str, set] = {}
+    if not job_ids:
+        return out
+    ph = ",".join("?" * len(job_ids))
+    cursor.execute(
+        f"SELECT job_id, log_message FROM job_logs WHERE job_id IN ({ph}) AND log_message LIKE 'Timeout scraping %'",
+        tuple(job_ids),
+    )
+    for jid, msg in cursor.fetchall():
+        out.setdefault(jid, set()).update(timed_out_city_keys([msg]))
+    return out
+
+
 def fetch_job_row(cursor, job_id: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     sql = f"SELECT {_JOB_COLUMNS} FROM jobs WHERE job_id = ?"
     params: Tuple[Any, ...] = (job_id,)
@@ -791,8 +917,8 @@ def job_payload(
 
     results: List[Dict[str, Any]] = []
     if include_results:
-        cursor.execute(f"SELECT {RESULT_COLUMNS} FROM results WHERE job_id = ? ORDER BY id", (job_id,))
-        results = [_result_dict(r) for r in cursor.fetchall()]
+        cursor.execute(f"SELECT {RESULT_API_COLUMNS} FROM results WHERE job_id = ? ORDER BY id", (job_id,))
+        results = [result_api_dict(r) for r in cursor.fetchall()]
 
     status = str(job.get("status") or "pending")
     total = int(job.get("total_cities") or 0)
@@ -806,6 +932,14 @@ def job_payload(
     cities = parse_cities(job.get("cities_data"))
     from locations import derive_job_location
 
+    outcomes = city_outcomes(
+        cities,
+        status=status,
+        completed_cities=completed,
+        lead_counts=lead_counts_by_city(cursor, [job_id]).get(job_id, {}),
+        timed_out=timed_out_keys_by_job(cursor, [job_id]).get(job_id, set()),
+    )
+
     return {
         "job_id": job_id,
         "status": status,
@@ -818,6 +952,7 @@ def job_payload(
         "total_cities": total,
         "completed_cities": completed,
         "failed_cities": int(job.get("failed_cities") or 0),
+        **outcomes,
         "current_city": job.get("current_city") or "",
         "result_count": result_count,
         "results": results,
