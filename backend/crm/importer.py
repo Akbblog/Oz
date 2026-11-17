@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import matching
 from .common import (
-    CRMError, begin_write, chunks, db_ts, fetch_all, fetch_one, for_update, from_json, invalid, is_unique_violation,
+    CRMError, begin_write, chunks, db_ts, fetch_all, fetch_one, for_update, from_json, invalid, is_retryable,
     new_id, not_found, placeholders, scalar, to_json, utcnow,
 )
 from .records import add_event, first_open_stage, insert_company, insert_record, stage_map, touch
@@ -246,7 +246,7 @@ def _insert_import(cur, ws_id: str, user_id: int, key: str, req_hash: str, job_i
 
 
 def _with_retries(conn, fn, attempts: int = 3):
-    """Run ``fn`` in a write transaction; a unique-key race (concurrent identical import) retries."""
+    """Run ``fn`` in a write transaction; a unique-key race or deadlock (concurrent identical import) retries."""
     for attempt in range(attempts):
         begin_write(conn)
         try:
@@ -258,7 +258,7 @@ def _with_retries(conn, fn, attempts: int = 3):
             raise
         except Exception as exc:
             conn.rollback()
-            if is_unique_violation(exc) and attempt < attempts - 1:
+            if is_retryable(exc) and attempt < attempts - 1:
                 continue
             raise
 

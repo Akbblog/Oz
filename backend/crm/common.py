@@ -232,6 +232,18 @@ def is_unique_violation(exc: Exception) -> bool:
         return False
 
 
+def is_retryable(exc: Exception) -> bool:
+    """Unique-key race or a MariaDB deadlock (1213): the whole transaction can be retried."""
+    if is_unique_violation(exc):
+        return True
+    try:
+        if int(getattr(exc, "args", [None])[0]) == 1213:
+            return True
+    except Exception:
+        pass
+    return "deadlock" in str(exc).lower()
+
+
 def fetch_all(cur, sql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
     cur.execute(sql, tuple(params))
     cols = [d[0] for d in (cur.description or [])]

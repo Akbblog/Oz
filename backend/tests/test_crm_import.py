@@ -278,3 +278,39 @@ def test_import_rate_limit(crm, monkeypatch):
     b = crm.user("bob")
     jb = crm.job(b.id)
     b.import_ids(jb, [crm.result(jb, 2)])
+
+
+def test_concurrent_imports_of_the_same_rows_with_different_keys(crm):
+    import threading
+
+    from crm import importer
+    from crm.workspace import get_or_create
+    from database import get_db
+
+    a = crm.user("alice")
+    job = crm.job(a.id)
+    ids = crm.results(job, 20)
+    a.ok(a.get("/workspace"))
+    user = {"id": a.id}
+    results, errors = [], []
+
+    def worker(n):
+        conn = get_db()
+        try:
+            ws = get_or_create(conn, user)
+            results.append(importer.run_import(conn, ws, user, {"job_id": job, "result_ids": ids,
+                                                                 "idempotency_key": f"race-key-{n:04d}"}))
+        except Exception as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    assert sum(r["summary"]["created"] for r in results) == 20
+    assert all(r["summary"]["created"] + r["summary"]["already_added"] == 20 for r in results)
+    assert _count(crm.conn, "crm_records") == 20 and _count(crm.conn, "crm_source_links") == 20
