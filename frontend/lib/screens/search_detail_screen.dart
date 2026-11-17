@@ -9,11 +9,13 @@ import '../core/theme/app_breakpoints.dart';
 import '../core/utils/refresh_bus.dart';
 import '../providers/active_searches_provider.dart';
 import '../providers/credit_provider.dart';
+import '../providers/crm_provider.dart';
 import '../providers/scraper_provider.dart';
 import '../providers/search_setup_provider.dart';
 import '../services/api_service.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/country_flag_badge.dart';
+import '../widgets/crm/crm_results.dart';
 import '../widgets/job_log_panel.dart';
 import '../widgets/search_actions.dart';
 import 'results_screen.dart';
@@ -494,6 +496,7 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
   // ------------------------------------------------------------- running
 
   Widget _buildRunning(BuildContext context, ScraperProvider scraper, ScrapingJob job, Map<String, dynamic> map) {
+    final crm = context.watch<CrmProvider?>();
     final stopping = _stopping(job);
     final status = searchPageStatus(map, stopping: stopping);
     final total = _totalCities(job);
@@ -639,6 +642,10 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
         const SizedBox(height: 16),
         credits,
       ],
+      if (crm != null && crm.isEnabled && !job.isQueued) ...[
+        const SizedBox(height: 16),
+        CrmRunningSearchCard(jobId: _id, api: crm.api, savedLeads: job.resultCount),
+      ],
       const SizedBox(height: 16),
       SearchCard(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -682,6 +689,7 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
 
   Widget _buildFinished(BuildContext context, ScraperProvider scraper, ScrapingJob job, Map<String, dynamic> map) {
     final back = _backLink(context);
+    final crm = context.watch<CrmProvider?>();
     return ResultsScreen(
       key: ValueKey('results-$_id'),
       jobId: _id,
@@ -690,6 +698,8 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
       category: job.category,
       overrideResults: job.resultsLoaded ? job.results : null,
       resultsPending: !job.resultsLoaded,
+      crmEnabled: crm?.isEnabled ?? false,
+      crmApi: crm?.api,
       leading: [
         if (back != null) back,
         for (final n in _notices(scraper, job)) n,

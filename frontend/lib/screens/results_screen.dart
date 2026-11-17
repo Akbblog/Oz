@@ -15,7 +15,9 @@ import '../core/theme/app_typography.dart';
 import '../core/utils/refresh_bus.dart';
 import '../providers/scraper_provider.dart';
 import '../services/api_service.dart';
+import '../services/crm_api.dart';
 import '../widgets/app_shell_common.dart';
+import '../widgets/crm/crm_results.dart';
 import '../widgets/search_actions.dart';
 
 /// Sort orders of the lead list. The API returns leads in the order they
@@ -133,6 +135,12 @@ class ResultsScreen extends StatefulWidget {
   /// [overrideResults]: show "Loading leads…" instead of fetching.
   final bool resultsPending;
 
+  /// CRM actions (state chip per lead, Add selected / Add all, review of
+  /// possible matches, "View this search in CRM"). Off by default: the
+  /// admin jobs screen reuses this widget without CRM.
+  final bool crmEnabled;
+  final CrmApi? crmApi;
+
   const ResultsScreen({
     super.key,
     this.jobId,
@@ -144,6 +152,8 @@ class ResultsScreen extends StatefulWidget {
     this.category,
     this.api,
     this.resultsPending = false,
+    this.crmEnabled = false,
+    this.crmApi,
   });
 
   @override
@@ -176,6 +186,51 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   int? _tableSortColumn;
   bool _tableSortAscending = true;
 
+  /// CRM state of this search's leads (null when CRM is off).
+  CrmResultsController? _crm;
+  int _crmStateFor = -1;
+
+  String? get _crmJobId => widget.jobId ?? _loadedJobId;
+
+  /// Creates/drops the CRM controller for the current search and reloads
+  /// the per-lead CRM state when the number of leads changed.
+  void _syncCrm() {
+    final jobId = _crmJobId;
+    if (!widget.crmEnabled || jobId == null) {
+      _crm?.removeListener(_onCrmChanged);
+      _crm?.dispose();
+      _crm = null;
+      _crmStateFor = -1;
+      return;
+    }
+    if (_crm == null || _crm!.jobId != jobId) {
+      _crm?.removeListener(_onCrmChanged);
+      _crm?.dispose();
+      _crm = CrmResultsController(jobId: jobId, api: widget.crmApi ?? CrmApi())..addListener(_onCrmChanged);
+      _crmStateFor = -1;
+    }
+    if (_crmStateFor != _all.length) {
+      _crmStateFor = _all.length;
+      _crm!.loadState();
+    }
+  }
+
+  void _onCrmChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _addSelectedToCrm() async {
+    final crm = _crm;
+    if (crm == null) return;
+    final ids = _selection.selectedLeadIds(_all);
+    if (ids.isEmpty) return;
+    final result = await crm.addIds(context, ids);
+    if (result == null || !mounted) return;
+    // Leads now in the CRM leave the selection; failures stay selected for a retry.
+    final done = result.inCrm;
+    _selection.deselectAll(_all.where((l) => done.contains(leadIdOf(l))));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -204,11 +259,13 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
     _loadedJobId = jobId;
     _selection.setScope(jobId);
     _selection.attach(leads);
+    _syncCrm();
   }
 
   @override
   void didUpdateWidget(covariant ResultsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.crmEnabled != oldWidget.crmEnabled) _syncCrm();
     final jobChanged = widget.jobId != oldWidget.jobId;
     if (jobChanged) {
       _searchController.clear();
@@ -231,6 +288,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   @override
   void dispose() {
     RefreshBus.jobsChanged.removeListener(_load);
+    _crm?.removeListener(_onCrmChanged);
+    _crm?.dispose();
     _selection.removeListener(_onSelectionChanged);
     _selection.dispose();
     _searchController.dispose();
@@ -561,6 +620,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         sliver: SliverList(
           delegate: SliverChildListDelegate([
             for (final w in widget.leading) ...[w, SizedBox(height: phone ? 10 : 16)],
+            if (_crm != null && !_loading && _error == null && _all.isNotEmpty) ...[
+              CrmResultsStrip(controller: _crm!, leads: _all),
+              SizedBox(height: phone ? 10 : 12),
+            ],
             _buildToolbar(canTable: canTable, visible: visible, compact: phone),
             const SizedBox(height: 12),
           ]),
@@ -643,6 +706,7 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                   selected: _selection.isSelected(lead),
                   onSelected: (v) => _selection.toggle(lead, v),
                   actions: _actions,
+                  footer: _crm == null ? null : CrmLeadChip(lead: lead, controller: _crm!),
                 );
               }
 
@@ -967,6 +1031,7 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                 liveRegion: true,
                 child: Text(summary, style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
               ),
+              if (_crm != null) ..._crmSelectionActions(selected, compact),
               OutlinedButton.icon(
                 style: buttonStyle,
                 onPressed: () => _exportCsv(_selectedLeads(), 'selected'),
@@ -1001,6 +1066,35 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         ),
       ),
     );
+  }
+
+  /// "Add selected to CRM" (disabled with the reason when a selected lead
+  /// has no saved `lead_id`).
+  List<Widget> _crmSelectionActions(int selected, bool compact) {
+    final crm = _crm!;
+    final without = _selection.selectedWithoutLeadId(_all);
+    final ids = _selection.selectedLeadIds(_all);
+    final reason = without > 0
+        ? "${plural(without, 'selected lead is', 'selected leads are')} not saved yet and can't be added to the CRM. "
+            'Deselect ${without == 1 ? 'it' : 'them'} to add the rest.'
+        : null;
+    return [
+      FilledButton.icon(
+        style: searchPrimaryButtonStyle().copyWith(
+          minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+          padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: compact ? 10 : 14)),
+        ),
+        onPressed: crm.busy || reason != null || ids.isEmpty ? null : _addSelectedToCrm,
+        icon: const Icon(Icons.playlist_add_rounded, size: 18),
+        label: Text('Add selected to CRM',
+            semanticsLabel: reason ?? 'Add ${plural(selected, 'selected lead', 'selected leads')} to CRM'),
+      ),
+      if (reason != null)
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Text(reason, style: const TextStyle(color: UiTokens.partialFg, fontSize: 13)),
+        ),
+    ];
   }
 
   static const List<String> _tableKeys = ['business_name', 'category', 'city', 'phone', 'email', 'website'];
@@ -1077,6 +1171,7 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
             col('Phone'),
             col('Email'),
             col('Website'),
+            if (_crm != null) const DataColumn(label: Text('CRM')),
             const DataColumn(label: Text('Actions')),
           ],
           rows: [
@@ -1114,6 +1209,7 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                           )
                         : text(''),
                   ),
+                  if (_crm != null) DataCell(CrmLeadChip(lead: lead, controller: _crm!, compact: true)),
                   DataCell(LeadActionButtons(lead: lead, actions: _actions, compact: true)),
                 ],
               ),
@@ -1536,12 +1632,16 @@ class LeadCard extends StatelessWidget {
   final ValueChanged<bool> onSelected;
   final LeadActions actions;
 
+  /// Optional extra row under the actions (the CRM state chip).
+  final Widget? footer;
+
   const LeadCard({
     super.key,
     required this.lead,
     required this.selected,
     required this.onSelected,
     required this.actions,
+    this.footer,
   });
 
   @override
@@ -1662,6 +1762,11 @@ class LeadCard extends StatelessWidget {
             padding: const EdgeInsets.only(left: 4, top: 2),
             child: LeadActionButtons(lead: lead, actions: actions),
           ),
+          if (footer != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Align(alignment: AlignmentDirectional.centerStart, child: footer!),
+            ),
         ],
       ),
     );
