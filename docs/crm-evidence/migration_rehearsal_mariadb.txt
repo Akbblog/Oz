@@ -1,0 +1,14 @@
+MariaDB 11.8.9-MariaDB
+== 1. upgrade from the release candidate schema
+  RC applied: ['014', '015', '016'] (17 versions)
+  CRM backend applied: ['017']
+  crm tables: 15 -> ['crm_activities', 'crm_companies', 'crm_events', 'crm_imports', 'crm_lost_reasons', 'crm_memberships', 'crm_notes', 'crm_people', 'crm_pipelines', 'crm_records', 'crm_record_tags', 'crm_source_links', 'crm_stages', 'crm_tags', 'crm_workspaces']
+  existing tables unchanged (CHECKSUM TABLE users/jobs/results/credit_ledger/job_logs): True
+  crm engine/collation: (('InnoDB', 'utf8mb4_uca1400_ai_ci'),)
+== 2. repeated startup
+  versions unchanged on second start: True
+== 3. previous (release-candidate) backend on the upgraded schema
+  RC init ok: True; smoke: {'health': 200, 'login': 200, 'jobs': 200, 'n': 1}
+== 4. fresh install with the CRM backend
+  fresh versions: 18, last ['016', '017']
+  fresh crm tables: 15
