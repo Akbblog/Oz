@@ -206,4 +206,5 @@ def test_query_by_country_name_matches_region_suffixes(db_connection):
     assert get("can") == [ca]
     assert get("qatar") == [qa]
     assert sorted(get("dentists")) == sorted([ca, qa])
-    assert get("ca") == []  # 2 letters: exact key/alias only
+    # 2 letters: no country/region expansion; only a literal match (e.g. inside a random job id) may appear
+    assert all("ca" in jid for jid in get("ca"))
