@@ -3,7 +3,7 @@ FastAPI Backend for Google Business Scraper
 Provides REST API for scraping functionality with authentication
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request, Response, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -425,59 +425,15 @@ def _startup_init_db() -> None:
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
-_COUNTRY_DATA_FILES: Dict[str, str] = {
-    "USA": config.USA_DATA_FILE,
-    "UK": config.UK_DATA_FILE,
-    "UAE": config.UAE_DATA_FILE,
-    "KSA": config.KSA_DATA_FILE,
-    "Australia": config.AUSTRALIA_DATA_FILE,
-    "Canada": config.CANADA_DATA_FILE,
-    "India": config.INDIA_DATA_FILE,
-    "Qatar": config.QATAR_DATA_FILE,
-    "Indonesia": config.INDONESIA_DATA_FILE,
-    "Malaysia": config.MALAYSIA_DATA_FILE,
-    "Singapore": config.SINGAPORE_DATA_FILE,
-    "China": config.CHINA_DATA_FILE,
-    "Finland": config.FINLAND_DATA_FILE,
-    "Germany": config.GERMANY_DATA_FILE,
-    "France": config.FRANCE_DATA_FILE,
-}
-
-_COUNTRY_REGION_FIELD: Dict[str, str] = {
-    "USA": "state",
-    "UK": "region",
-    "UAE": "emirate",
-    "KSA": "region",
-    "Australia": "state",
-    "Canada": "province",
-    "India": "state",
-    "Qatar": "region",
-    "Indonesia": "province",
-    "Malaysia": "state",
-    "Singapore": "region",
-    "China": "province",
-    "Finland": "region",
-    "Germany": "state",
-    "France": "region",
-}
-
-
-@lru_cache(maxsize=None)
-def _load_country_data(country: str) -> dict:
-    filename = _COUNTRY_DATA_FILES.get(country)
-    if not filename:
-        raise KeyError(f"Unknown country: {country}")
-    path = os.path.join(_BACKEND_DIR, filename)
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _find_country_for_region(region: str) -> Optional[str]:
-    for country in _COUNTRY_DATA_FILES.keys():
-        data = _load_country_data(country)
-        if region in data:
-            return country
-    return None
+# Country/region data registry lives in locations.py (shared with job_service);
+# the old private names stay importable from main for compatibility.
+from locations import (  # noqa: E402
+    COUNTRY_DATA_FILES as _COUNTRY_DATA_FILES,
+    COUNTRY_REGION_FIELD as _COUNTRY_REGION_FIELD,
+    load_country_data as _load_country_data,
+    find_country_for_region as _find_country_for_region,
+    derive_job_location as _derive_job_location,
+)
 
 # Audit middleware (attaches request_id, client_ip, user_agent to request.state)
 from audit.middleware import AuditMiddleware
@@ -2426,8 +2382,15 @@ class BulkCreditRequestIdsRequest(BaseModel):
 
 @app.get("/api/credits/config")
 async def get_credits_config(current_user: dict = Depends(get_current_user)):
-    """Get credit system configuration"""
-    return get_credit_config()
+    """Credit system configuration, the active refund policy (delivered |
+    unattempted | none) and the cost of the smallest search (1 city x 10 leads)."""
+    import job_service
+
+    return {
+        **get_credit_config(),
+        "refund_policy": job_service.refund_policy(),
+        "min_job_cost": estimate_credit_cost(1, 10),
+    }
 
 
 @app.get("/api/credits/balance")
@@ -3876,64 +3839,106 @@ async def get_job_status(
         raise HTTPException(status_code=404, detail="Job not found")
     return payload
 
+_JOB_LIST_STATUS_FILTERS = {
+    "all": None,
+    "active": ("pending", "running"),
+    "completed": ("completed",),
+    "cancelled": ("cancelled",),
+    "failed": ("failed",),
+}
+
+
 @app.get("/api/jobs")
-async def get_user_jobs(current_user: dict = Depends(get_current_user)):
-    """Get all jobs for current user"""
+async def get_user_jobs(
+    limit: Optional[int] = Query(None, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Jobs of the current user, newest first.
+
+    Optional ``limit`` (1-100) / ``offset`` paginate and ``status`` filters
+    (all | active | completed | cancelled | failed; active = pending + running).
+    Without ``limit`` every matching job is returned (backward compatible).
+    ``total`` counts jobs matching the status filter; ``counts`` is per status
+    for all of the user's jobs. ``country`` / ``region`` are derived at read
+    time from the stored city strings and are never written back.
+    """
+    key = (status_filter or "all").strip().lower()
+    if key not in _JOB_LIST_STATUS_FILTERS:
+        raise HTTPException(
+            status_code=422,
+            detail="status must be one of: " + ", ".join(_JOB_LIST_STATUS_FILTERS),
+        )
+    wanted = _JOB_LIST_STATUS_FILTERS[key]
+    user_id = current_user["id"]
+
     conn = get_db()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT j.job_id, j.category, j.status, j.progress,
-               j.total_cities, j.credit_estimate, j.credit_charged,
-               j.created_at, j.completed_at, j.cities_data,
-               (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count,
-               j.completed_cities, j.credit_refunded, j.error, j.current_city
-        FROM jobs j WHERE j.user_id = ? ORDER BY j.created_at DESC
-    """, (current_user["id"],))
+        cursor.execute("SELECT status, COUNT(*) FROM jobs WHERE user_id = ? GROUP BY status", (user_id,))
+        per_status = {str(r[0]): int(r[1] or 0) for r in cursor.fetchall()}
+        counts = {
+            "all": sum(per_status.values()),
+            "active": per_status.get("pending", 0) + per_status.get("running", 0),
+            "completed": per_status.get("completed", 0),
+            "cancelled": per_status.get("cancelled", 0),
+            "failed": per_status.get("failed", 0),
+        }
+        total = counts["all"] if wanted is None else sum(per_status.get(s, 0) for s in wanted)
 
-    job_rows = cursor.fetchall()
-    job_ids = [row[0] for row in job_rows]
+        where = "j.user_id = ?"
+        params: List = [user_id]
+        if wanted is not None:
+            where += " AND j.status IN (" + ",".join("?" * len(wanted)) + ")"
+            params.extend(wanted)
+        page_sql = ""
+        if limit is not None:
+            page_sql = f" LIMIT {int(limit)} OFFSET {int(offset)}"
 
-    # Batch-fetch top city per job
-    top_cities = {}
-    if job_ids:
-        placeholders = ",".join("?" * len(job_ids))
         cursor.execute(f"""
-            SELECT job_id, city, state, COUNT(*) as cnt
-            FROM results
-            WHERE job_id IN ({placeholders}) AND city IS NOT NULL AND city != ''
-            GROUP BY job_id, city, state
-            ORDER BY job_id, cnt DESC
-        """, job_ids)
-        for tc_row in cursor.fetchall():
-            jid = tc_row[0]
-            if jid not in top_cities:
-                city_name = tc_row[1]
-                state_name = tc_row[2] or ""
-                label = f"{city_name}, {state_name}" if state_name else city_name
-                top_cities[jid] = {"name": label, "count": tc_row[3]}
+            SELECT j.job_id, j.category, j.status, j.progress,
+                   j.total_cities, j.credit_estimate, j.credit_charged,
+                   j.created_at, j.completed_at, j.cities_data,
+                   (SELECT COUNT(*) FROM results r WHERE r.job_id = j.job_id) as result_count,
+                   j.completed_cities, j.credit_refunded, j.error, j.current_city,
+                   j.max_results_per_city, j.failed_cities, j.settled_at
+            FROM jobs j WHERE {where} ORDER BY j.created_at DESC, j.id DESC{page_sql}
+        """, tuple(params))
+
+        job_rows = cursor.fetchall()
+        if limit is None and offset:
+            job_rows = job_rows[offset:]
+        job_ids = [row[0] for row in job_rows]
+
+        # Batch-fetch top city per job
+        top_cities = {}
+        if job_ids:
+            placeholders = ",".join("?" * len(job_ids))
+            cursor.execute(f"""
+                SELECT job_id, city, state, COUNT(*) as cnt
+                FROM results
+                WHERE job_id IN ({placeholders}) AND city IS NOT NULL AND city != ''
+                GROUP BY job_id, city, state
+                ORDER BY job_id, cnt DESC
+            """, job_ids)
+            for tc_row in cursor.fetchall():
+                jid = tc_row[0]
+                if jid not in top_cities:
+                    city_name = tc_row[1]
+                    state_name = tc_row[2] or ""
+                    label = f"{city_name}, {state_name}" if state_name else city_name
+                    top_cities[jid] = {"name": label, "count": tc_row[3]}
+    finally:
+        conn.close()
+
+    from job_service import parse_cities
 
     jobs = []
     for row in job_rows:
         job_id = row[0]
-        # Parse cities from cities_data JSON
-        cities = []
-        cities_data_raw = row[9]
-        if cities_data_raw:
-            try:
-                cities_data_parsed = json.loads(cities_data_raw) if isinstance(cities_data_raw, str) else cities_data_raw
-                if isinstance(cities_data_parsed, list):
-                    for item in cities_data_parsed:
-                        if isinstance(item, dict):
-                            city = item.get("city", "")
-                            state = item.get("state", "")
-                            if city:
-                                cities.append(f"{city}, {state}" if state else city)
-                        elif isinstance(item, str) and item.strip():
-                            cities.append(item.strip())
-            except (json.JSONDecodeError, TypeError):
-                pass
-
+        cities = parse_cities(row[9])
         result_count = row[10] or 0
         tc = top_cities.get(job_id)
         top_city_text = f"{tc['name']} ({tc['count']})" if tc else None
@@ -3955,10 +3960,14 @@ async def get_user_jobs(current_user: dict = Depends(get_current_user)):
             "credit_refunded": int(row[12] or 0),
             "error": row[13],
             "current_city": row[14] or "",
+            "max_results_per_city": int(row[15]) if row[15] is not None else None,
+            "failed_cities": int(row[16] or 0),
+            "settled": bool(row[17]),
+            "settled_at": _api_ts(row[17]),
+            **_derive_job_location(cities),
         })
 
-    conn.close()
-    return {"jobs": jobs}
+    return {"jobs": jobs, "total": total, "counts": counts}
 
 @app.get("/api/jobs/{job_id}/results")
 async def get_job_results(job_id: str, current_user: dict = Depends(get_current_user)):
@@ -4001,6 +4010,77 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
         "results": results
     }
 
+# --- Export hardening (D4) -------------------------------------------------
+# Scraped strings are untrusted: a business name such as '=HYPERLINK(...)' must
+# never become a formula, control characters must not crash openpyxl, and only
+# well-formed http(s)/mailto targets become hyperlinks.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_SHEET_TITLE_FORBIDDEN_RE = re.compile(r"[\[\]:*?/\\]")
+_EXPORT_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$")
+
+
+def _xlsx_clean(value) -> str:
+    """str(value) without the control characters openpyxl rejects."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    if value is None:
+        return ""
+    return ILLEGAL_CHARACTERS_RE.sub("", str(value))
+
+
+def _xlsx_set_text(cell, value) -> None:
+    """Store ``value`` as literal text. Values that a spreadsheet would read as a
+    formula keep their exact text (no apostrophe prefix) but are typed as string
+    with the Text number format, so '+1 555 0100' still reads naturally."""
+    text = _xlsx_clean(value)
+    cell.value = text
+    if text.startswith(_FORMULA_PREFIXES):
+        cell.data_type = "s"
+        cell.number_format = "@"
+
+
+def _safe_http_url(value) -> Optional[str]:
+    from urllib.parse import urlparse
+
+    text = _xlsx_clean(value).strip()
+    if not text or any(ch.isspace() for ch in text):
+        return None
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        return None
+    return text
+
+
+def _safe_email(value) -> Optional[str]:
+    text = _xlsx_clean(value).strip()
+    return text if text and len(text) <= 254 and _EXPORT_EMAIL_RE.match(text) else None
+
+
+def safe_sheet_title(raw: str) -> str:
+    """Excel sheet name: no []:*?/\\ or control characters, no leading/trailing
+    apostrophe, at most 31 characters, never blank or the reserved 'History'."""
+    title = _SHEET_TITLE_FORBIDDEN_RE.sub("", _xlsx_clean(raw))
+    title = re.sub(r"[\t\r\n]", " ", title).strip().strip("'").strip()
+    title = title[:31].strip().strip("'").strip()
+    if not title or title.lower() == "history":
+        return "Leads"
+    return title
+
+
+def safe_download_filename(*parts: str) -> str:
+    """ASCII letters, digits, '-' and '_' only, ending in '.xlsx'."""
+    import unicodedata
+
+    raw = "_".join(p for p in parts if p)
+    ascii_text = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", ascii_text)
+    stem = re.sub(r"_+", "_", stem).strip("_-")[:100].strip("_-")
+    return f"{stem or 'Leads'}.xlsx"
+
+
 def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> bytes:
     """Create a professionally formatted Excel file"""
     # openpyxl is relatively heavy; keep import local to avoid slowing API cold-start.
@@ -4010,9 +4090,8 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
     wb = Workbook()
     ws = wb.active
 
-    # Generate sheet title from category and location
-    sheet_title = f"{location}_{category}".replace(" ", "_")[:31]  # Excel sheet name limit
-    ws.title = sheet_title
+    # Generate sheet title from category and location (Excel rules enforced).
+    ws.title = safe_sheet_title(f"{location}_{category}".replace(" ", "_"))
 
     # Define styles
     header_font = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
@@ -4056,6 +4135,14 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
     # Set row height for header
     ws.row_dimensions[1].height = 25
 
+    def text_cell(row_idx, col, value, font=cell_font):
+        cell = ws.cell(row=row_idx, column=col)
+        _xlsx_set_text(cell, value)
+        cell.font = font
+        cell.alignment = cell_alignment
+        cell.border = thin_border
+        return cell
+
     # Write data
     for row_idx, result in enumerate(results, 2):
         # Row number
@@ -4064,68 +4151,33 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = thin_border
 
-        # Business Name
-        cell = ws.cell(row=row_idx, column=2, value=result.get('business_name', 'N/A'))
-        cell.font = Font(name='Calibri', size=11, bold=True)
-        cell.alignment = cell_alignment
-        cell.border = thin_border
+        text_cell(row_idx, 2, result.get('business_name') or 'N/A', Font(name='Calibri', size=11, bold=True))
+        text_cell(row_idx, 3, result.get('phone') or 'N/A')
 
-        # Phone
-        phone = result.get('phone', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=3, value=phone)
-        cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
-
-        # Website (as hyperlink if valid)
-        website = result.get('website', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=4)
-        if website and website != 'N/A' and website.startswith('http'):
-            cell.value = website
-            cell.hyperlink = website
+        # Website (hyperlink only for well-formed http(s) URLs)
+        website = result.get('website') or 'N/A'
+        cell = text_cell(row_idx, 4, website)
+        url = _safe_http_url(website)
+        if url:
+            cell.hyperlink = url
             cell.font = link_font
-        else:
-            cell.value = website
-            cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
 
-        # Email
-        email = result.get('email', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=5)
-        if email and email != 'N/A':
-            cell.value = email
-            cell.hyperlink = f"mailto:{email}"
+        # Email (mailto only for well-formed addresses)
+        email = result.get('email') or 'N/A'
+        cell = text_cell(row_idx, 5, email)
+        addr = _safe_email(email)
+        if addr:
+            cell.hyperlink = f"mailto:{addr}"
             cell.font = link_font
-        else:
-            cell.value = email
-            cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
 
-        # Address
-        address = result.get('address', '') or 'N/A'
-        cell = ws.cell(row=row_idx, column=6, value=address)
-        cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
-
-        # City
-        cell = ws.cell(row=row_idx, column=7, value=result.get('city', 'N/A'))
-        cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
-
-        # State
-        cell = ws.cell(row=row_idx, column=8, value=result.get('state', 'N/A'))
-        cell.font = cell_font
-        cell.alignment = cell_alignment
-        cell.border = thin_border
+        text_cell(row_idx, 6, result.get('address') or 'N/A')
+        text_cell(row_idx, 7, result.get('city') or 'N/A')
+        text_cell(row_idx, 8, result.get('state') or 'N/A')
 
         # Google Maps URL (as hyperlink)
-        maps_url = result.get('google_maps_url', '') or 'N/A'
+        maps_url = _safe_http_url(result.get('google_maps_url'))
         cell = ws.cell(row=row_idx, column=9)
-        if maps_url and maps_url != 'N/A' and maps_url.startswith('http'):
+        if maps_url:
             cell.value = 'View on Maps'
             cell.hyperlink = maps_url
             cell.font = link_font
@@ -4156,32 +4208,40 @@ def create_formatted_xlsx(results: List[Dict], category: str, location: str) -> 
 
 @app.get("/api/jobs/{job_id}/download")
 async def download_results(job_id: str, current_user: dict = Depends(get_current_user)):
-    """Download results as formatted Excel (.xlsx) file"""
+    """Download saved leads as a formatted Excel (.xlsx) file.
+
+    Completed, cancelled and failed searches can be downloaded as long as at
+    least one lead was saved (partial results are still paid-for leads).
+    """
+    import job_service
+
     conn = get_db()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    # Verify job ownership and get job details
-    cursor.execute("SELECT status, category FROM jobs WHERE job_id = ? AND user_id = ?", (job_id, current_user["id"]))
-    job = cursor.fetchone()
-    if not job:
+        # Verify job ownership and get job details
+        cursor.execute("SELECT status, category FROM jobs WHERE job_id = ? AND user_id = ?",
+                       (job_id, current_user["id"]))
+        job = cursor.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job[0] not in job_service.TERMINAL_STATUSES:
+            raise HTTPException(status_code=409, detail="This search is still running")
+
+        category = job[1] or "Business"
+
+        cursor.execute(f"SELECT {job_service.RESULT_COLUMNS} FROM results WHERE job_id = ? ORDER BY id", (job_id,))
+        rows = cursor.fetchall()
+    finally:
         conn.close()
-        raise HTTPException(status_code=404, detail="Job not found")
 
-    if job[0] != "completed":
-        conn.close()
-        raise HTTPException(status_code=400, detail="Job not completed")
-
-    category = job[1] or "Business"
-
-    # Get results
-    cursor.execute("""
-        SELECT business_name, phone, website, email, address, category, city, state, google_maps_url
-        FROM results WHERE job_id = ?
-    """, (job_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="No leads were saved for this search")
 
     results = []
     cities_set = set()
-    for row in cursor.fetchall():
+    for row in rows:
         results.append({
             "business_name": row[0],
             "phone": row[1],
@@ -4196,11 +4256,9 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
         if row[6]:
             cities_set.add(row[6])
 
-    conn.close()
-
     # Generate location name for filename
     if len(cities_set) == 1:
-        location = list(cities_set)[0].replace(" ", "_")
+        location = str(list(cities_set)[0]).replace(" ", "_")
     elif len(cities_set) > 1:
         location = f"{len(cities_set)}_Cities"
     else:
@@ -4210,10 +4268,8 @@ async def download_results(job_id: str, current_user: dict = Depends(get_current
     xlsx_bytes = create_formatted_xlsx(results, category, location)
     xlsx_base64 = base64.b64encode(xlsx_bytes).decode('utf-8')
 
-    # Generate filename: Location_Category.xlsx (e.g., "City_of_London_Hotels.xlsx")
-    safe_category = category.replace(" ", "_").replace("/", "_")
-    safe_location = location.replace(" ", "_").replace("/", "_")
-    filename = f"{safe_location}_{safe_category}.xlsx"
+    # Filename: Location_Category.xlsx (e.g., "City_of_London_Hotels.xlsx"), ASCII-safe.
+    filename = safe_download_filename(location, category)
 
     return {
         "filename": filename,

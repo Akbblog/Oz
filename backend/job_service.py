@@ -803,11 +803,16 @@ def job_payload(
     elif status in ACTIVE_STATUSES:
         progress = min(progress, 99)
 
+    cities = parse_cities(job.get("cities_data"))
+    from locations import derive_job_location
+
     return {
         "job_id": job_id,
         "status": status,
         "category": job.get("category"),
-        "cities": parse_cities(job.get("cities_data")),
+        "cities": cities,
+        # Derived at read time from the stored city strings; never written back.
+        **derive_job_location(cities),
         "max_results_per_city": job.get("max_results_per_city"),
         "progress": progress,
         "total_cities": total,
