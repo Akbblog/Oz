@@ -861,8 +861,10 @@ def timed_out_keys_by_job(cursor, job_ids: List[str]) -> Dict[str, set]:
         return out
     ph = ",".join("?" * len(job_ids))
     cursor.execute(
-        f"SELECT job_id, log_message FROM job_logs WHERE job_id IN ({ph}) AND log_message LIKE 'Timeout scraping %'",
-        tuple(job_ids),
+        # The LIKE pattern is a parameter: a literal "%" in the SQL text breaks
+        # the MySQL/MariaDB driver's %-style parameter formatting.
+        f"SELECT job_id, log_message FROM job_logs WHERE job_id IN ({ph}) AND log_message LIKE ?",
+        (*job_ids, "Timeout scraping %"),
     )
     for jid, msg in cursor.fetchall():
         out.setdefault(jid, set()).update(timed_out_city_keys([msg]))
