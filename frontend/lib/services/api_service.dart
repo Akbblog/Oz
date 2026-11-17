@@ -904,7 +904,8 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('Failed to grant credits');
+      ErrorHandler.handleHttpError(response, context: 'Grant credits');
+      throw ApiException('Failed to grant credits');
     }
   }
 

@@ -43,6 +43,21 @@ class AdminRoles {
           Map<String, dynamic>? viewer, Map<String, dynamic> user) =>
       roleOf(viewer) == 'owner' && canManage(viewer, user);
 
+  /// Permanent deletion: owners only (and only for accounts they manage).
+  static bool canDelete(Map<String, dynamic>? viewer, Map<String, dynamic> user) =>
+      roleOf(viewer) == 'owner' && canManage(viewer, user);
+
+  /// Credit grants: admins to support/user accounts; owners also to admins
+  /// and themselves, never to another owner.
+  static bool canGrantCredits(Map<String, dynamic>? viewer, Map<String, dynamic> user) {
+    final mine = roleOf(viewer);
+    if (isSelf(viewer, user)) return mine == 'owner';
+    return rank[mine]! >= rank['admin']! && rank[mine]! > rank[roleOf(user)]!;
+  }
+
+  /// Live payments toggle: owners only.
+  static bool canToggleLivePayments(Map<String, dynamic>? viewer) => roleOf(viewer) == 'owner';
+
   static String protectedNote(
       Map<String, dynamic>? viewer, Map<String, dynamic> user) {
     if (isSelf(viewer, user)) return 'This is your account';

@@ -1966,26 +1966,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   )
                 else
                   Expanded(child: _protectedLabel(user)),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: _smallButton(
-                    label: 'Grant Credits',
-                    color: AppColors.elevatedCardDark,
-                    textColor: Colors.white,
-                    onTap: () => _showGrantCreditsDialog(user),
+                if (AdminRoles.canGrantCredits(_viewer, user)) ...[
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: _smallButton(
+                      label: 'Grant Credits',
+                      color: AppColors.elevatedCardDark,
+                      textColor: Colors.white,
+                      onTap: () => _showGrantCreditsDialog(user),
+                    ),
                   ),
-                ),
+                ],
               ] else if (!_canManage(user)) ...[
                 Expanded(child: _protectedLabel(user)),
               ] else ...[
-                Expanded(
-                  child: _smallButton(
-                    label: 'Delete',
-                    color: AppColors.dangerRed,
-                    onTap: () => _deleteUser(user),
+                // Permanent deletion is owner-only.
+                if (AdminRoles.canDelete(_viewer, user)) ...[
+                  Expanded(
+                    child: _smallButton(
+                      label: 'Delete',
+                      color: AppColors.dangerRed,
+                      onTap: () => _deleteUser(user),
+                    ),
                   ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
+                  const SizedBox(width: AppSpacing.sm),
+                ],
                 Expanded(
                   child: _smallButton(
                     label: 'Restore',
@@ -2230,8 +2235,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               children: [
                 SwitchListTile(
                   value: _settingBool('enable_live_payments', fallback: false),
-                  onChanged: (v) => _updateSetting(
-                      'enable_live_payments', v ? 'true' : 'false'),
+                  // Owner-only (the server refuses other roles).
+                  onChanged: AdminRoles.canToggleLivePayments(_viewer)
+                      ? (v) => _updateSetting(
+                          'enable_live_payments', v ? 'true' : 'false')
+                      : null,
                   activeThumbColor: AppColors.successGreen,
                   title: Text(
                     'Live Payment Methods',
@@ -2241,7 +2249,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     ),
                   ),
                   subtitle: Text(
-                    'Enable or disable live payment experiences for users.',
+                    AdminRoles.canToggleLivePayments(_viewer)
+                        ? 'Enable or disable live payment experiences for users.'
+                        : 'Enable or disable live payment experiences for users. Only an owner can change this.',
                     style:
                         AppTypography.bodySmall.copyWith(color: Colors.white60),
                   ),
@@ -3463,14 +3473,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                                       AppColors.dangerRed);
                                   return;
                                 }
+                                if (reasonController.text.trim().isEmpty) {
+                                  _showSnackBar(
+                                      'Please enter a reason (saved in the ledger)',
+                                      AppColors.dangerRed);
+                                  return;
+                                }
                                 setDialogState(() => isGranting = true);
                                 try {
                                   await _apiService.grantCredits(
                                     userId: user['id'],
                                     amount: amount,
-                                    reason: reasonController.text.isEmpty
-                                        ? null
-                                        : reasonController.text,
+                                    reason: reasonController.text.trim(),
                                   );
                                   if (context.mounted)
                                     Navigator.pop(context, true);

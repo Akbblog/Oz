@@ -53,4 +53,25 @@ void main() {
     expect(AdminRoles.roleOf({'id': 7}), 'user');
     expect(AdminRoles.canManage(admin, {'id': 7, 'is_admin': true}), isFalse);
   });
+
+  test('delete and live payments are owner-only', () {
+    expect(AdminRoles.canDelete(owner, user), isTrue);
+    expect(AdminRoles.canDelete(owner, admin), isTrue);
+    expect(AdminRoles.canDelete(admin, user), isFalse);
+    expect(AdminRoles.canDelete(owner, owner2), isFalse);
+    expect(AdminRoles.canToggleLivePayments(owner), isTrue);
+    expect(AdminRoles.canToggleLivePayments(admin), isFalse);
+  });
+
+  test('credit grants: admins to support/user only; owners also to admins and self, never other owners', () {
+    expect(AdminRoles.canGrantCredits(admin, user), isTrue);
+    expect(AdminRoles.canGrantCredits(admin, support), isTrue);
+    expect(AdminRoles.canGrantCredits(admin, admin2), isFalse);
+    expect(AdminRoles.canGrantCredits(admin, admin), isFalse);
+    expect(AdminRoles.canGrantCredits(admin, owner), isFalse);
+    expect(AdminRoles.canGrantCredits(owner, admin), isTrue);
+    expect(AdminRoles.canGrantCredits(owner, owner), isTrue);
+    expect(AdminRoles.canGrantCredits(owner, owner2), isFalse);
+    expect(AdminRoles.canGrantCredits(support, user), isFalse);
+  });
 }
