@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:business_scraper_app/app_router.dart';
 import 'package:business_scraper_app/core/error_handler.dart';
 import 'package:business_scraper_app/providers/active_searches_provider.dart';
 import 'package:business_scraper_app/providers/auth_provider.dart';
@@ -720,6 +721,40 @@ void main() {
         {'result_id': 103, 'action': 'link', 'record_id': 'rec-9'}
       ]);
       expect(find.text('1 linked'), findsOneWidget);
+    });
+  });
+
+  group('routes', () {
+    Widget app(FakeCrmApi api, String initial) {
+      final base = _FakeApi();
+      return MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AuthProvider>.value(value: _FakeAuth()),
+          ChangeNotifierProvider(create: (_) => ScraperProvider(api: base)),
+          ChangeNotifierProvider<CreditProvider>.value(value: CreditProvider.instance),
+          ChangeNotifierProvider(create: (_) => ActiveSearchesProvider(api: base)),
+          ChangeNotifierProvider<CrmProvider>.value(value: _crm(api)),
+        ],
+        child: MaterialApp(initialRoute: initial, onGenerateRoute: AppRouter.onGenerateRoute),
+      );
+    }
+
+    testWidgets('a direct record URL opens the record', (tester) async {
+      _size(tester, const Size(1440, 900));
+      final api = FakeCrmApi();
+      await tester.pumpWidget(app(api, '/crm/records/rec-1'));
+      await _settle(tester);
+      expect(find.byType(CrmRecordScreen), findsOneWidget);
+      expect(api.callsOf('record').first.args['id'], 'rec-1');
+    });
+
+    testWidgets('list filters come from the URL', (tester) async {
+      _size(tester, const Size(1440, 900));
+      final api = FakeCrmApi();
+      await tester.pumpWidget(app(api, '/crm/leads?source=job-7&outcome=all&archived=all'));
+      await _settle(tester);
+      final q = api.callsOf('records').first.args;
+      expect([q['source_job_id'], q['outcome'], q['archived']], ['job-7', 'all', 'all']);
     });
   });
 
