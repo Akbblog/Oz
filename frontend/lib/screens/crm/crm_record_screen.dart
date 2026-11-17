@@ -134,7 +134,7 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         _loading = false;
         if (!silent || _r.isEmpty) _error = e;
       });
-      if (silent && _r.isNotEmpty) showSearchSnack(context, crmActionError('Reloading the record', e), error: true);
+      if (silent && _r.isNotEmpty) crmSnack(context, crmActionError('Reloading the record', e), error: true);
     }
   }
 
@@ -153,7 +153,7 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
       final crm = context.read<CrmProvider?>();
       await _load(silent: true);
       unawaited(crm?.refreshCounts());
-      if (done != null && mounted) showSearchSnack(context, done);
+      if (done != null && mounted) crmSnack(context, done);
       return true;
     } catch (e) {
       if (!mounted) return false;
@@ -166,7 +166,7 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         });
         await _load(silent: true);
       } else {
-        showSearchSnack(context, crmActionError(what, e), error: true);
+        crmSnack(context, crmActionError(what, e), error: true);
       }
       return false;
     }
@@ -443,7 +443,7 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingEvents = false);
-      showSearchSnack(context, crmActionError('Loading older history', e), error: true);
+      crmSnack(context, crmActionError('Loading older history', e), error: true);
     }
   }
 
@@ -456,9 +456,9 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
   Future<void> _launch(Uri uri, String what) async {
     try {
       final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!ok && mounted) showSearchSnack(context, "Couldn't open $what", error: true);
+      if (!ok && mounted) crmSnack(context, "Couldn't open $what", error: true);
     } catch (_) {
-      if (mounted) showSearchSnack(context, "Couldn't open $what", error: true);
+      if (mounted) crmSnack(context, "Couldn't open $what", error: true);
     }
   }
 

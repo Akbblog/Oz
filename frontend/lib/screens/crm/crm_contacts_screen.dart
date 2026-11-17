@@ -86,7 +86,7 @@ class _CrmContactsScreenState extends State<CrmContactsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingMore = false);
-      showSearchSnack(context, crmActionError('Loading more contacts', e), error: true);
+      crmSnack(context, crmActionError('Loading more contacts', e), error: true);
     }
   }
 

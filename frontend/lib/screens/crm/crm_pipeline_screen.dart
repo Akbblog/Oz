@@ -228,7 +228,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
           if (i >= 0) to.items[i] = {...optimistic, ...saved, 'stage': saved['stage'] ?? optimistic['stage']};
         }
       });
-      showSearchSnack(context, 'Moved $title to ${to.name}.');
+      crmSnack(context, 'Moved $title to ${to.name}.');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -236,7 +236,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
         _busy.remove(id);
       });
       final conflict = crmErrorKind(e) == CrmErrorKind.conflict;
-      showSearchSnack(
+      crmSnack(
         context,
         conflict
             ? '$title was changed elsewhere, so it was not moved. The pipeline has been reloaded.'
@@ -271,7 +271,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => column.loadingMore = false);
-      showSearchSnack(context, crmActionError('Loading more cards', e), error: true);
+      crmSnack(context, crmActionError('Loading more cards', e), error: true);
     }
   }
 

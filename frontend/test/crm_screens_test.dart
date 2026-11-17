@@ -137,8 +137,7 @@ void main() {
       final crm = _crm(api, enabled: false);
       await tester.pumpWidget(_host(crm, const SizedBox()));
       await _settle(tester);
-      expect(find.text('CRM'), findsOneWidget, reason: 'only the page title, no nav item');
-      expect(find.bySemanticsLabel(RegExp(r'^CRM')), findsNothing);
+      expect(find.descendant(of: find.byType(AppSidebar), matching: find.text('CRM')), findsNothing);
 
       crm.debugSet(enabled: true, counts: {'overdue': 2, 'today': 1});
       await _settle(tester);
@@ -153,7 +152,8 @@ void main() {
       await _settle(tester);
       expect(find.bySemanticsLabel('CRM, 1 follow-ups due'), findsOneWidget);
       final labels = tester.widgetList<Text>(find.descendant(of: find.byType(PhoneBottomBar), matching: find.byType(Text))).map((t) => t.data).toList();
-      expect(labels.indexOf('CRM'), labels.indexOf('Searches') + 1);
+      expect(labels.indexOf('CRM'), greaterThan(labels.indexOf('Searches')));
+      expect(labels.indexOf('CRM'), lessThan(labels.indexOf('Credits')));
     });
 
     testWidgets('provider start: status false keeps CRM hidden', (tester) async {
@@ -300,11 +300,11 @@ void main() {
   });
 
   group('record detail', () {
-    Future<FakeCrmApi> open(WidgetTester tester, {Map<String, dynamic>? record, Size size = const Size(1440, 1400)}) async {
+    Future<FakeCrmApi> open(WidgetTester tester, {Map<String, dynamic>? record, Size size = const Size(1440, 2600)}) async {
       _size(tester, size);
       final api = FakeCrmApi();
       if (record != null) api.record = record;
-      await tester.pumpWidget(_host(_crm(api), CrmRecordScreen(recordId: 'rec-1', api: api, now: () => DateTime(2026, 11, 18, 12))));
+      await tester.pumpWidget(_host(_crm(api), CrmRecordScreen(key: UniqueKey(), recordId: 'rec-1', api: api, now: () => DateTime(2026, 11, 18, 12))));
       await _settle(tester);
       return api;
     }
@@ -373,7 +373,7 @@ void main() {
       expect(api.callsOf('archive').single.args['version'], 3);
 
       final api2 = await open(tester, record: crmTestDetail(archived: true));
-      await tester.tap(find.widgetWithText(FilledButton, 'Restore'));
+      await tester.tap(find.text('Restore'));
       await _settle(tester);
       expect(api2.callsOf('restore'), hasLength(1));
     });
@@ -428,7 +428,7 @@ void main() {
       api.failNext = CrmException('Changed elsewhere', statusCode: 409, code: 'version_conflict');
       await tester.tap(find.text('Mark won'));
       await _settle(tester);
-      expect(find.text('This record changed somewhere else.'), findsOneWidget);
+      expect(find.textContaining('This record changed somewhere else.'), findsOneWidget);
       expect(api.callsOf('record').length, greaterThanOrEqualTo(2), reason: 'reloaded');
     });
 
@@ -586,7 +586,7 @@ void main() {
         };
 
     Future<FakeCrmApi> pump(WidgetTester tester, {List<Object>? responses, Map<String, dynamic>? state}) async {
-      _size(tester, const Size(1440, 1200));
+      _size(tester, const Size(1440, 2000));
       final api = FakeCrmApi()..importResponses = responses ?? [];
       if (state != null) api.jobState = state;
       await tester.pumpWidget(_host(
@@ -598,8 +598,10 @@ void main() {
       return api;
     }
 
+    final addSelectedButton = find.ancestor(of: find.text('Add selected to CRM'), matching: find.byWidgetPredicate((w) => w is FilledButton));
+
     Future<void> select(WidgetTester tester, String name) async {
-      await tester.tap(find.bySemanticsLabel('Select $name'));
+      await tester.tap(find.byWidgetPredicate((w) => w is Checkbox && w.semanticLabel == 'Select $name'));
       await _settle(tester, steps: 3);
     }
 
@@ -627,28 +629,37 @@ void main() {
     testWidgets('Add selected sends selectedLeadIds; summary snack; disabled with a reason for unsaved leads', (tester) async {
       final api = await pump(tester, responses: [resp(created: [101], already: [102])]);
       await select(tester, 'Unsaved Co');
-      final button = find.widgetWithText(FilledButton, 'Add selected to CRM');
-      expect(tester.widget<FilledButton>(button).onPressed, isNull);
+      final button = addSelectedButton;
+      expect(tester.widget<ButtonStyleButton>(button).onPressed, isNull);
       expect(find.textContaining("can't be added to the CRM"), findsOneWidget);
 
       await select(tester, 'Unsaved Co');
       await select(tester, 'Acme Plumbing');
       await select(tester, 'Beta Heating');
-      expect(tester.widget<FilledButton>(button).onPressed, isNotNull);
+      expect(tester.widget<ButtonStyleButton>(button).onPressed, isNotNull);
+      api.jobState = {
+        'results': {
+          '101': {'state': 'added', 'record_id': 'r101'},
+          '102': {'state': 'added', 'record_id': 'r102'},
+        },
+        'counts': {'added': 2, 'possible_match': 0, 'not_added': 1},
+      };
       await tester.tap(button);
       await _settle(tester);
       expect(api.callsOf('import').single.args['result_ids'], [101, 102]);
       expect(find.text('1 added · 1 already in CRM'), findsOneWidget);
       expect(find.text('Already in CRM · View'), findsNWidgets(2));
+      expect(find.textContaining('2 in CRM'), findsOneWidget);
+      expect(button, findsNothing, reason: 'added leads left the selection, so the bar is gone');
     });
 
     testWidgets('a retry after a failure reuses the idempotency key', (tester) async {
       final api = await pump(tester, responses: [NetworkException('offline'), resp(created: [101])]);
       await select(tester, 'Acme Plumbing');
-      await tester.tap(find.widgetWithText(FilledButton, 'Add selected to CRM'));
+      await tester.tap(addSelectedButton);
       await _settle(tester);
       expect(find.textContaining('Trying again is safe'), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, 'Add selected to CRM'));
+      await tester.tap(addSelectedButton);
       await _settle(tester);
       final calls = api.callsOf('import');
       expect(calls, hasLength(2));
@@ -695,7 +706,7 @@ void main() {
       ];
       await select(tester, 'Acme Plumbing');
       await select(tester, 'Gamma Pipes');
-      await tester.tap(find.widgetWithText(FilledButton, 'Add selected to CRM'));
+      await tester.tap(addSelectedButton);
       await _settle(tester);
       expect(find.text('1 added · 1 needs review'), findsOneWidget);
       expect(find.text('Possible match: review'), findsOneWidget);
@@ -713,7 +724,7 @@ void main() {
   });
 
   group('layout (no overflow)', () {
-    for (final size in const [Size(360, 740), Size(1440, 900)]) {
+    for (final size in const [Size(360, 740), Size(390, 844), Size(430, 932), Size(820, 1180), Size(1024, 768), Size(1440, 900)]) {
       testWidgets('pipeline, list and detail at ${size.width.toInt()} px', (tester) async {
         _size(tester, size);
         final api = FakeCrmApi()

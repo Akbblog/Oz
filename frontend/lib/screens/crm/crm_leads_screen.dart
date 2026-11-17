@@ -102,7 +102,7 @@ class _CrmLeadsScreenState extends State<CrmLeadsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingMore = false);
-      showSearchSnack(context, crmActionError('Loading more records', e), error: true);
+      crmSnack(context, crmActionError('Loading more records', e), error: true);
     }
   }
 
@@ -156,7 +156,7 @@ class _CrmLeadsScreenState extends State<CrmLeadsScreen> {
         await saveCsv(clean, base, context: context);
       }
     } catch (e) {
-      if (mounted) showSearchSnack(context, crmActionError('The export', e), error: true);
+      if (mounted) crmSnack(context, crmActionError('The export', e), error: true);
     } finally {
       if (mounted) setState(() => _exporting = null);
     }

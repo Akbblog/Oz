@@ -100,7 +100,7 @@ class CrmResultsController extends ChangeNotifier {
       _progress = null;
       _adding.clear();
       _notify();
-      if (context.mounted) showSearchSnack(context, result.summary);
+      if (context.mounted) crmSnack(context, result.summary);
       unawaited(loadState());
       if (result.possibleMatches.isNotEmpty && context.mounted) {
         await review(context, result.possibleMatches.values.toList());
@@ -113,7 +113,7 @@ class CrmResultsController extends ChangeNotifier {
       _notify();
       if (context.mounted) {
         final retry = crmErrorKind(e) == CrmErrorKind.offline || crmErrorKind(e) == CrmErrorKind.other;
-        showSearchSnack(
+        crmSnack(
           context,
           '${crmActionError('Adding to CRM', e)}${retry ? ' Trying again is safe: nothing is added twice.' : ''}',
           error: true,

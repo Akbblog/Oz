@@ -101,7 +101,7 @@ class _CrmAgendaScreenState extends State<CrmAgendaScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingMore = false);
-      showSearchSnack(context, crmActionError('Loading more activities', e), error: true);
+      crmSnack(context, crmActionError('Loading more activities', e), error: true);
     }
   }
 
@@ -119,10 +119,10 @@ class _CrmAgendaScreenState extends State<CrmAgendaScreen> {
     try {
       await call();
       if (!mounted) return;
-      showSearchSnack(context, done);
+      crmSnack(context, done);
       await _load(silent: true);
     } catch (e) {
-      if (mounted) showSearchSnack(context, crmActionError(what, e), error: true);
+      if (mounted) crmSnack(context, crmActionError(what, e), error: true);
     } finally {
       if (mounted) setState(() => _busy.remove(id));
     }

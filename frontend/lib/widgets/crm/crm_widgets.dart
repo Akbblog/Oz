@@ -26,6 +26,13 @@ void crmReplaceUrl(String route) {
   } catch (_) {}
 }
 
+/// Snack that replaces the one showing (results of quick actions must
+/// not queue behind an older message).
+void crmSnack(BuildContext context, String message, {bool error = false}) {
+  ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+  showSearchSnack(context, message, error: error);
+}
+
 /// Whether animations should be skipped (reduced motion).
 bool crmReduceMotion(BuildContext context) => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
