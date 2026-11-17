@@ -71,9 +71,9 @@ def phone_key(phone: Any) -> Optional[str]:
     digits = re.sub(r"\D", "", str(phone or ""))
     if len(digits) < 7:
         return None
-    # Compare national significant digits so "+974 4444 5555" equals "4444 5555"-style
-    # variants with/without a country code.
-    return digits[-9:] if len(digits) > 9 else digits
+    # Compare the last 8 digits so "+974 4444 5555" equals "4444 5555": variants with
+    # and without a country / trunk prefix. Always combined with a compatible name.
+    return digits[-8:]
 
 
 def _strip_accents(text: str) -> str:
