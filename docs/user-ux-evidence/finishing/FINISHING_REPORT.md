@@ -95,3 +95,18 @@ Decisions needed (from ADMIN_UX_PLAN.md §9, narrowed): **D2** — confirm owner
 fix) and whether delete/live-payments become owner-only; **D3** — allow signed credit deductions?; **D1** — support:
 read-only, and unmasked contact data or audited reveal?; **D5** — business timezone for "today"; **D4** — Jobs tab
 first, or straight to the admin shell; also whether admins may grant credits to owner/admin accounts.
+
+## 7. Release checks (2026-11-18, release candidate `53ed2dc`)
+
+Owner decisions applied: owners can't act on other owners; deleting users and the live-payments toggle are
+owner-only; admins can't grant (or approve credit requests) for owner/admin accounts; grants need 1–1,000,000 and a
+reason. Remaining admin work: `docs/ADMIN_BACKLOG_AFTER_CRM.md`.
+
+| Check | Result |
+|---|---|
+| Backend pytest, SQLite | 184 collected; all pass after the test update in `c738580` |
+| Backend pytest, **MariaDB 11.8.9** (portable server, READ-COMMITTED, snapshot isolation on, default collation) | **180 passed, 4 skipped** (SQLite-catalog tests). Found and fixed one defect: literal `%` in a LIKE broke the MySQL driver (`53ed2dc`) |
+| Real Google Maps, isolated MariaDB staging DB, refund policy `delivered` | **A** 1 city × 3: completed in 30 s, 3 leads, ledger −18 = charged 18 − refunded 0, Excel 3 rows = 3 leads (15/15 checks). **B** cancelled after the first lead: settled in 4 s, 1 lead kept, charged 34 / refunded 19, ledger −15, balance 985 = 1000 − 15, partial Excel 1 row = 1 lead (21/21 checks) |
+| Flutter test / analyze | 141 passed / 48 pre-existing issues |
+| `build_web.sh` (release) | passed at `53ed2dc` |
+| Frontend preview (Vercel project `frontend`) | https://frontend-d1b4js67h-akbs-projects-69c135c0.vercel.app — serves this build; its `/api` still goes to the live backend (no jobs run there) |
