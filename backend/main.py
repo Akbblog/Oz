@@ -5769,8 +5769,8 @@ async def get_all_jobs_admin(
             "total_cities": row[6],
             "credit_estimate": row[7],
             "credit_charged": row[8],
-            "created_at": row[9],
-            "completed_at": row[10],
+            "created_at": _api_ts(row[9]),
+            "completed_at": _api_ts(row[10]),
             "result_count": row[11],
         }
         for row in cursor.fetchall()
