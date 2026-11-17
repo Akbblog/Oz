@@ -141,3 +141,94 @@ Tables: `crm_workspaces`, `crm_memberships`, `crm_pipelines`, `crm_stages`, `crm
   review dialog for possible matches, summary snack `18 added · 2 already in CRM · 1 needs review`, and
   **View this search in CRM** (`/crm/leads?source=<job_id>&outcome=all`). Disabled with a reason for leads without
   `lead_id`.
+
+## 5. Backend implementation notes and deviations (crm/backend)
+
+Code: `backend/crm/` (router, workspace, importer, matching, records, activities, reports), wired by two lines at
+the end of `backend/main.py`. Migration files: `backend/migrations/017_crm.sql` (MariaDB) and `017_crm_sqlite.sql`.
+Where this section differs from sections 0–3, this section is what the backend does.
+
+**Conventions**
+- The flag check runs before authentication: with `CRM_ENABLED` off, every `/api/crm/*` route except `/status`
+  answers `404 crm_disabled` even without a token. Unexpected failures answer `500 {"code": "server_error"}`; body /
+  query validation failures answer `422 {"code": "validation_error"}` with a plain sentence (never FastAPI's list).
+- Code `result_not_persisted` is not used: a row that is not saved yet has no ID, so it is `rejected: not_found`.
+- Money (`value`, totals) is a JSON number with 2 decimals. A value needs a currency (the record's, or the workspace
+  default); otherwise `422`. `tz_offset_minutes` = minutes east of UTC (UTC+3 ⇒ `180`), range ±840.
+- Time buckets (agenda, `due` filter, pipeline summary): **overdue** = open activity due before now; **today** =
+  due from now until the end of the client's local day; **upcoming** = due after the end of the local day. They do
+  not overlap. Activities of archived records are not in the agenda.
+
+**Data model**
+- `crm_companies.match_place_key` is `id:<Maps feature/place id>` parsed from `google_maps_url` with the same
+  patterns as `job_service.dedupe_key_for` (`results.dedupe_key` is a SHA-1 hash, so it can't be read back).
+- Extra columns: `crm_records.last_open_stage_id` (reopen target), `converted_at` (also set for records created as
+  opportunities), `next_activity_at` (denormalized earliest open activity, used for sort/filters);
+  `crm_source_links.snapshot` (the raw row at import); `crm_people.record_id`; `crm_imports.request_hash`,
+  `user_id`; `crm_imports.cursor` is named `cursor_result_id` (`cursor` is reserved in MariaDB). `crm_stages.key`
+  is `stage_key` for the same reason (the API still says `key`). Events use an auto-increment id (strict order).
+- Source links belong to a record (`record_id`); `source_job_id` filters and detail `sources` use the record's links.
+
+**Import / resolve**
+- Possible match: same place key; or same website host + compatible name; or same phone (last 8 digits) +
+  compatible name. Names are compatible when equal after normalization (case, accents, punctuation, legal words
+  such as LLC/Ltd removed), one's words contain the other's, or word overlap ≥ 60 %. If both sides have a place key
+  and they differ, they are different places (chain branches) and nothing else is checked. Social / site-builder
+  hosts (facebook.com, wixsite.com, …) are not a website signal. Reasons: `same_maps_place`,
+  `same_website_and_name`, `same_phone_and_name`. Candidate items also carry `outcome` and `archived`; `stage` is
+  `{id, key, name}`.
+- Reusing an `idempotency_key` with a different request ⇒ `422 validation_error` (a finished identical request is
+  replayed byte-for-byte).
+- `all: true`: `created/already_added/possible_matches/rejected` list **this batch**; `processed` and `summary`
+  are cumulative for the whole import; `remaining` counts saved rows after the cursor at that moment (a running
+  search may add more later — a new import picks them up). Retrying an unfinished `all` call continues with the next
+  batch; only a finished import is replayed.
+- Resolve keys are stored separately from import keys (the same key may be reused). The response also has
+  `already_added`; a `link` to a record outside the workspace is `rejected` with reason `record_not_found`.
+  `skip` writes nothing, so the job state keeps showing `possible_match` for that result.
+- Rate limit: 30 calls/min/user across import + resolve, in-process (per worker), env `CRM_IMPORT_RATE_PER_MIN`.
+
+**Records**
+- `GET /records?stage_id=<won stage>` without `outcome` lists won records (so the Won column paginates);
+  `tz_offset_minutes` is accepted by `/records` and `/pipeline` for `due=today` / `due_today`.
+- PATCH and every transition return the **detail** shape (a superset of the list item; list items also carry
+  `priority`). Detail adds `converted_at`, `assignee_user_id`, `last_activity_at`, `events_next_cursor`, and each
+  source has `result_id`, `job_created_at`, `snapshot`. Events: `{id, type, actor_user_id, before, after,
+  occurred_at}`; `/events` returns `{items, next_cursor, total}` newest first.
+- PATCH with an unknown field (including company `name`) ⇒ 422. A no-op PATCH writes nothing.
+- `version` changes only when the record's own fields/stage/outcome change; notes, people, tags and activities
+  update `updated_at` but not `version`. An idempotent transition (already in the target state) succeeds even with an
+  old `version`.
+- `POST …/stage` to the Won stage performs Mark won (`won` event). Stage/convert/won/lost/reopen on an archived
+  record ⇒ `409 invalid_transition`; won→lost and lost→won need a reopen first (`409`). Reopen returns to the stage
+  the record was in when it closed and clears `closed_at`, `lost_reason`, `lost_note` (the `won`/`lost` events keep
+  them). `custom_reason` reuses an existing reason with the same name (case-insensitive).
+
+**Notes, people, tags, activities**
+- Editing another member's note ⇒ 404. `DELETE /people/{id}` ⇒ `{"deleted": true}`. `GET /tags` ⇒ `{"items": [...]}`;
+  `POST /tags` with an existing name (case-insensitive) returns that tag with `"created": false`;
+  `PUT …/tags` ⇒ `{record_id, tags}`; an unknown tag id ⇒ 404. People/activities/PATCH reject unknown fields.
+- Activity responses: `{id, record_id, type, subject, notes, due_at, status, completed_at, outcome, overdue,
+  assignee_user_id, created_at, updated_at}`; agenda items add `record_title`; agenda returns
+  `{bucket, items, next_cursor, total}` (default bucket `today`). `done` / `reopen` are idempotent.
+
+**Reports / export**
+- `from`/`to` are local calendar dates (inclusive, in `tz_offset_minutes`); without them the period is all time.
+  The response adds `period`. `open_leads`, `by_stage`, `overdue_activities`, `records_without_value` and
+  `value_by_currency.open_total` describe **now**; the other metrics use their event date in the period (see
+  `definitions`). `won_rate` counts all records closed in the period (leads and opportunities).
+  `records_without_value` = open opportunities without a value.
+- Export adds `encoding: "base64"` and `count`, is capped at 10 000 rows, CSV cells starting with `= + - @ \t \r`
+  get a leading apostrophe, XLSX cells use the job-download text helper (never formulas). Timestamps in the file
+  are UTC.
+
+**Frontend alignment (confirmed 2026-11-18)**
+- Resolve takes its own `idempotency_key` per submission (reuse it only to retry that same resolve); it need not
+  equal the import key. `tz_offset_minutes` is minutes east of UTC (local = UTC + offset; New York = `-300`).
+- Transitions return the detail shape, which includes every list-item field (`id`, `version`, `stage`, …). Pipeline
+  moves: drop on Won ⇒ `/won`; won card to an open column ⇒ `/reopen` then `/stage` with the returned `version`.
+  "Load more": `GET /records?stage_id=..&outcome=open|won&archived=false&cursor=..` (explicit `outcome=won` with the
+  Won stage works).
+- Notes carry `author: {id, name}` (`name` = username), `author_name`, and `can_edit` (true only for the author /
+  current viewer). Agenda items carry `record: {id, title}` (and `record_title`). Workspace and detail `tags` are
+  plain lists; `GET /tags` wraps them in `{items}`.

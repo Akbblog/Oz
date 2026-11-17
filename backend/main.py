@@ -6476,6 +6476,12 @@ async def analytics_user_journey_endpoint(
     return {"user_id": user_id, "events": get_user_journey(user_id=user_id, limit=min(limit, 500))}
 
 
+# CRM Phase 1 (/api/crm, off unless CRM_ENABLED=true; docs/CRM_PHASE1_CONTRACT.md).
+from crm import install as _install_crm  # noqa: E402
+
+_install_crm(app, get_current_user)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
