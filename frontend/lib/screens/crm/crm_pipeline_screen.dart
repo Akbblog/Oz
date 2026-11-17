@@ -589,6 +589,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
       },
       builder: (context, candidate, rejected) {
         return Container(
+          key: ValueKey('crm-column-${c.id}'),
           decoration: BoxDecoration(
             color: highlight ? UiTokens.selectedSurface : const Color(0xFF1E1E21),
             borderRadius: BorderRadius.circular(UiTokens.radius),
