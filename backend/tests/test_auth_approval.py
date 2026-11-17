@@ -172,12 +172,23 @@ def test_admin_suspend_restore_and_delete_workflow(db_connection):
         is_approved=1,
     )
 
+    _insert_user(
+        db_connection,
+        username="owner_user",
+        email="owner@example.com",
+        password="pw",
+        is_approved=1,
+        is_admin=1,
+        role="owner",
+    )
+
     client = TestClient(app)
     admin_headers = _auth_headers(client, "admin_user", "pw")
+    owner_headers = _auth_headers(client, "owner_user", "pw")  # permanent deletion is owner-only
 
     delete_active = client.delete(
         f"/api/admin/users/{managed_user_id}",
-        headers=admin_headers,
+        headers=owner_headers,
     )
     assert delete_active.status_code == 400
     assert delete_active.json().get("detail") == "Suspend the user before deleting."
@@ -223,9 +234,15 @@ def test_admin_suspend_restore_and_delete_workflow(db_connection):
     )
     assert resuspend.status_code == 200
 
-    delete_suspended = client.delete(
+    admin_delete = client.delete(
         f"/api/admin/users/{managed_user_id}",
         headers=admin_headers,
+    )
+    assert admin_delete.status_code == 403
+
+    delete_suspended = client.delete(
+        f"/api/admin/users/{managed_user_id}",
+        headers=owner_headers,
     )
     assert delete_suspended.status_code == 200
 
