@@ -10,6 +10,12 @@ import 'screens/admin_dashboard_screen.dart';
 import 'screens/admin_pricing_management_screen.dart';
 import 'screens/admin_promo_management_screen.dart';
 import 'screens/admin_revenue_dashboard_screen.dart';
+import 'screens/crm/crm_agenda_screen.dart';
+import 'screens/crm/crm_contacts_screen.dart';
+import 'screens/crm/crm_leads_screen.dart';
+import 'screens/crm/crm_pipeline_screen.dart';
+import 'screens/crm/crm_record_screen.dart';
+import 'screens/crm/crm_reports_screen.dart';
 import 'screens/find/details_step.dart';
 import 'screens/find/location_step.dart';
 import 'screens/forgot_password_screen.dart';
@@ -38,6 +44,9 @@ import 'widgets/app_shell.dart';
 /// * `/searches`, `/searches/<id>`, `/credits` (`/wallet`), `/account` →
 ///   signed-in only; without a session the sign-in form is shown in place
 ///   and the page appears right after signing in.
+/// * `/crm` (pipeline), `/crm/leads`, `/crm/activities`, `/crm/contacts`,
+///   `/crm/reports`, `/crm/records/<id>` → signed-in CRM pages; filters
+///   live in the query string (`/crm/leads?source=<job>&outcome=all`).
 /// * `/login?next=<route>` → sign in, then open `<route>`.
 class AppRouter {
   AppRouter._();
@@ -114,6 +123,16 @@ class AppRouter {
           requiresAuth: true,
           child: ProfileScreen(),
         ));
+      case '/crm':
+        return _crm(settings, 'pipeline', CrmPipelineScreen(initialQuery: uri.queryParameters));
+      case '/crm/leads':
+        return _crm(settings, 'leads', CrmLeadsScreen(initialQuery: uri.queryParameters));
+      case '/crm/activities':
+        return _crm(settings, 'activities', CrmAgendaScreen(initialQuery: uri.queryParameters));
+      case '/crm/contacts':
+        return _crm(settings, 'contacts', CrmContactsScreen(initialQuery: uri.queryParameters));
+      case '/crm/reports':
+        return _crm(settings, 'reports', CrmReportsScreen(initialQuery: uri.queryParameters));
       case '/login':
         final args = settings.arguments;
         final next = safeReturnRoute(uri.queryParameters['next'] ??
@@ -174,6 +193,12 @@ class AppRouter {
         ));
       }
     }
+    if (path.startsWith('/crm/records/')) {
+      final id = Uri.decodeComponent(path.substring('/crm/records/'.length));
+      if (id.isNotEmpty && !id.contains('/')) {
+        return _crm(settings, 'record-$id', CrmRecordScreen(recordId: id));
+      }
+    }
     if (path.startsWith('/reset-password/')) {
       final token = path.substring('/reset-password/'.length);
       return _page(settings, ResetPasswordScreen(token: token));
@@ -186,6 +211,18 @@ class AppRouter {
       child: _NotFound(),
     ));
   }
+
+  /// A signed-in CRM page (sign-in shown in place, then the page).
+  static Route<dynamic> _crm(RouteSettings settings, String key, Widget child) => _shell(
+        settings,
+        ShellPage(
+          key: ValueKey('crm-$key-${settings.name}'),
+          section: ShellSection.crm,
+          title: 'CRM',
+          requiresAuth: true,
+          child: child,
+        ),
+      );
 
   /// Shell sections switch without a transition animation.
   static Route<dynamic> _shell(RouteSettings settings, Widget page) => PageRouteBuilder<dynamic>(

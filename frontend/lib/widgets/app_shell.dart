@@ -12,7 +12,7 @@ import 'top_bar.dart';
 export 'app_shell_common.dart';
 
 /// Top-level sections of the signed-in app (plan §3).
-enum ShellSection { home, find, searches, credits, account }
+enum ShellSection { home, find, searches, crm, credits, account }
 
 /// One navigation destination (labels are exact, plan §3).
 class ShellDestination {
@@ -58,6 +58,14 @@ class ShellDestinations {
     selectedIcon: Icons.list_alt_rounded,
     route: '/searches',
   );
+  /// Shown only when the server has CRM enabled ([mainFor] / [phoneFor]).
+  static const crm = ShellDestination(
+    section: ShellSection.crm,
+    label: 'CRM',
+    icon: Icons.view_kanban_outlined,
+    selectedIcon: Icons.view_kanban_rounded,
+    route: '/crm',
+  );
   static const credits = ShellDestination(
     section: ShellSection.credits,
     label: 'Credits',
@@ -77,6 +85,14 @@ class ShellDestinations {
   static const main = [home, find, searches, credits];
   static const phone = [home, find, searches, credits, account];
 
+  /// [main] with CRM after My searches when [crmEnabled].
+  static List<ShellDestination> mainFor({required bool crmEnabled}) =>
+      crmEnabled ? const [home, find, searches, crm, credits] : main;
+
+  /// [phone] with CRM after Searches when [crmEnabled].
+  static List<ShellDestination> phoneFor({required bool crmEnabled}) =>
+      crmEnabled ? const [home, find, searches, crm, credits, account] : phone;
+
   static ShellDestination of(ShellSection s) {
     switch (s) {
       case ShellSection.home:
@@ -85,6 +101,8 @@ class ShellDestinations {
         return find;
       case ShellSection.searches:
         return searches;
+      case ShellSection.crm:
+        return crm;
       case ShellSection.credits:
         return credits;
       case ShellSection.account:

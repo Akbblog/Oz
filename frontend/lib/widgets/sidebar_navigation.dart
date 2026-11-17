@@ -2,11 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/crm_provider.dart';
 import 'app_shell.dart';
 import 'brand_mark.dart';
 
 /// "1 live" count for My searches.
 int _liveCount(BuildContext context) => LiveSearch.of(context).length;
+
+/// CRM nav state: shown only when the server enabled CRM; the badge is
+/// activities overdue + due today. (No [CrmProvider] in the tree = off.)
+({bool enabled, int due}) _crm(BuildContext context) {
+  final crm = context.watch<CrmProvider?>();
+  if (crm == null || !crm.isEnabled) return (enabled: false, due: 0);
+  return (enabled: true, due: crm.dueCount);
+}
+
+String _dueText(int due) => '$due due';
 
 /// Desktop sidebar (≥1024 px, 232 px): wordmark, Home, Find leads
 /// (emphasised), My searches (+ "N live"), Credits, Admin (admins) and
@@ -23,12 +34,16 @@ class AppSidebar extends StatelessWidget {
     final auth = context.watch<AuthProvider>();
     final signedIn = auth.isAuthenticated;
     final live = signedIn ? _liveCount(context) : 0;
+    final crm = signedIn ? _crm(context) : (enabled: false, due: 0);
 
     Widget item(ShellDestination d) => _SidebarItem(
           destination: d,
           selected: d.section == section,
           emphasised: d.section == ShellSection.find,
-          trailing: d.section == ShellSection.searches && live > 0 ? '$live live' : null,
+          trailing: d.section == ShellSection.searches && live > 0
+              ? '$live live'
+              : (d.section == ShellSection.crm && crm.due > 0 ? _dueText(crm.due) : null),
+          trailingWarning: d.section == ShellSection.crm,
           onTap: () => AppNav.go(context, d.route),
         );
 
@@ -45,7 +60,7 @@ class AppSidebar extends StatelessWidget {
           const _Wordmark(),
           const SizedBox(height: 20),
           if (signedIn) ...[
-            for (final d in ShellDestinations.main) ...[
+            for (final d in ShellDestinations.mainFor(crmEnabled: crm.enabled)) ...[
               item(d),
               const SizedBox(height: 4),
             ],
@@ -118,6 +133,9 @@ class _SidebarItem extends StatelessWidget {
   final bool selected;
   final bool emphasised;
   final String? trailing;
+
+  /// Amber badge (CRM follow-ups due) instead of the blue "live" one.
+  final bool trailingWarning;
   final VoidCallback onTap;
 
   const _SidebarItem({
@@ -126,6 +144,7 @@ class _SidebarItem extends StatelessWidget {
     required this.onTap,
     this.emphasised = false,
     this.trailing,
+    this.trailingWarning = false,
   });
 
   @override
@@ -177,9 +196,9 @@ class _SidebarItem extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
-                      color: UiTokens.searchingBg,
+                      color: trailingWarning ? UiTokens.partialBg : UiTokens.searchingBg,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: UiTokens.searchingFg),
+                      border: Border.all(color: trailingWarning ? UiTokens.partialFg : UiTokens.searchingFg),
                     ),
                     child: Text(
                       trailing!,
@@ -212,13 +231,17 @@ class AppNavRail extends StatelessWidget {
     final auth = context.watch<AuthProvider>();
     final signedIn = auth.isAuthenticated;
     final live = signedIn ? _liveCount(context) : 0;
+    final crm = signedIn ? _crm(context) : (enabled: false, due: 0);
 
     Widget item(ShellDestination d) => _RailItem(
           icon: d.section == section ? d.selectedIcon : d.icon,
           label: d.label,
           selected: d.section == section,
           emphasised: d.section == ShellSection.find,
-          badge: d.section == ShellSection.searches && live > 0 ? '$live live' : null,
+          badge: d.section == ShellSection.searches && live > 0
+              ? '$live live'
+              : (d.section == ShellSection.crm && crm.due > 0 ? _dueText(crm.due) : null),
+          badgeColor: d.section == ShellSection.crm ? UiTokens.partialFg : UiTokens.searchingFg,
           onTap: () => AppNav.go(context, d.route),
         );
 
@@ -237,7 +260,7 @@ class AppNavRail extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           if (signedIn) ...[
-            for (final d in ShellDestinations.main) ...[
+            for (final d in ShellDestinations.mainFor(crmEnabled: crm.enabled)) ...[
               item(d),
               const SizedBox(height: 4),
             ],
@@ -272,6 +295,7 @@ class _RailItem extends StatelessWidget {
   final bool selected;
   final bool emphasised;
   final String? badge;
+  final Color badgeColor;
   final VoidCallback onTap;
 
   const _RailItem({
@@ -281,6 +305,7 @@ class _RailItem extends StatelessWidget {
     required this.onTap,
     this.emphasised = false,
     this.badge,
+    this.badgeColor = UiTokens.searchingFg,
   });
 
   @override
@@ -331,8 +356,8 @@ class _RailItem extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
                       badge!,
-                      style: const TextStyle(
-                        color: UiTokens.searchingFg,
+                      style: TextStyle(
+                        color: badgeColor,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -359,17 +384,24 @@ class PhoneBottomBar extends StatelessWidget {
     final auth = context.watch<AuthProvider>();
     final signedIn = auth.isAuthenticated;
     final live = signedIn ? _liveCount(context) : 0;
+    final crm = signedIn ? _crm(context) : (enabled: false, due: 0);
 
     final items = <Widget>[];
     if (signedIn) {
-      for (final d in ShellDestinations.phone) {
+      for (final d in ShellDestinations.phoneFor(crmEnabled: crm.enabled)) {
+        final isCrm = d.section == ShellSection.crm;
         items.add(_BottomItem(
           icon: d.section == section ? d.selectedIcon : d.icon,
           label: d.phoneLabel,
           selected: d.section == section,
           emphasised: d.section == ShellSection.find,
-          badge: d.section == ShellSection.searches && live > 0 ? '$live' : null,
-          semanticsSuffix: d.section == ShellSection.searches && live > 0 ? '$live live' : null,
+          badge: d.section == ShellSection.searches && live > 0
+              ? '$live'
+              : (isCrm && crm.due > 0 ? '${crm.due}' : null),
+          badgeColor: isCrm ? UiTokens.partialFg : UiTokens.searchingFg,
+          semanticsSuffix: d.section == ShellSection.searches && live > 0
+              ? '$live live'
+              : (isCrm && crm.due > 0 ? '${crm.due} follow-ups due' : null),
           onTap: () => AppNav.go(context, d.route),
         ));
       }
@@ -414,6 +446,7 @@ class _BottomItem extends StatelessWidget {
   final bool selected;
   final bool emphasised;
   final String? badge;
+  final Color badgeColor;
   final String? semanticsSuffix;
   final VoidCallback onTap;
 
@@ -424,6 +457,7 @@ class _BottomItem extends StatelessWidget {
     required this.onTap,
     this.emphasised = false,
     this.badge,
+    this.badgeColor = UiTokens.searchingFg,
     this.semanticsSuffix,
   });
 
@@ -446,7 +480,7 @@ class _BottomItem extends StatelessWidget {
     if (badge != null) {
       iconWidget = Badge(
         label: Text(badge!),
-        backgroundColor: UiTokens.searchingFg,
+        backgroundColor: badgeColor,
         textColor: Colors.black,
         child: iconWidget,
       );

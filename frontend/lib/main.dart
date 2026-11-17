@@ -10,6 +10,7 @@ import 'core/theme/app_theme.dart';
 import 'providers/active_searches_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/credit_provider.dart';
+import 'providers/crm_provider.dart';
 import 'providers/scraper_provider.dart';
 import 'providers/search_setup_provider.dart';
 import 'providers/theme_provider.dart';
@@ -35,6 +36,7 @@ List<SingleChildWidget> buildAppProviders() => [
       ChangeNotifierProvider<CreditProvider>.value(value: CreditProvider.instance),
       ChangeNotifierProvider(create: (context) => SearchSetupProvider()),
       ChangeNotifierProvider(create: (context) => ActiveSearchesProvider()),
+      ChangeNotifierProvider(create: (context) => CrmProvider()),
     ];
 
 class MyApp extends StatefulWidget {
@@ -80,11 +82,14 @@ class _MyAppState extends State<MyApp> {
       unawaited(credits.loadConfig(force: true));
       context.read<ActiveSearchesProvider>().start();
       unawaited(context.read<ScraperProvider>().resumeAfterSignIn());
+      // CRM navigation appears only when the server has CRM enabled.
+      unawaited(context.read<CrmProvider>().start());
     } else if (_signedIn) {
       // Session ended without an explicit sign-out (e.g. rejected token).
       _signedIn = false;
       context.read<ActiveSearchesProvider>().stop();
       context.read<ScraperProvider>().detach();
+      context.read<CrmProvider>().clear();
       CreditProvider.instance.clear();
     }
   }
@@ -96,6 +101,7 @@ class _MyAppState extends State<MyApp> {
     final scraper = context.read<ScraperProvider>();
     final active = context.read<ActiveSearchesProvider>();
     active.stop();
+    context.read<CrmProvider>().clear();
     CreditProvider.instance.clear();
     await scraper.signOut();
     await setup.clear();
