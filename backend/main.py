@@ -6080,6 +6080,19 @@ async def get_states():
     """Get list of all available states/regions for all countries"""
     return {country: list(_load_country_data(country).keys()) for country in _COUNTRY_DATA_FILES.keys()}
 
+
+@app.get("/api/locations/summary")
+async def get_locations_summary():
+    """Region term and per-region city counts for every country (read-only, public like /api/states)."""
+    out = {}
+    for country in _COUNTRY_DATA_FILES.keys():
+        data = _load_country_data(country)
+        out[country] = {
+            "region_term": _COUNTRY_REGION_FIELD.get(country, "region"),
+            "regions": {region: len(cities or []) for region, cities in data.items()},
+        }
+    return {"countries": out}
+
 @app.get("/api/states/{state}/cities")
 async def get_cities(state: str):
     """Get list of cities for a specific state/region"""

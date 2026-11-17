@@ -499,3 +499,16 @@ def test_cancelled_job_with_leads_settles_and_downloads_partial(db_connection, m
     ws = wb.active
     assert [ws.cell(row=r, column=2).value for r in range(2, ws.max_row + 1)] == saved
     assert ws.cell(row=2, column=3).value == "+1 555 0100" and ws.cell(row=2, column=3).data_type == "s"
+
+
+def test_locations_summary_has_counts_for_every_region(test_db):
+    import locations
+    from main import app
+
+    client = TestClient(app)
+    data = client.get("/api/locations/summary").json()["countries"]
+    assert set(data) == set(locations.COUNTRY_DATA_FILES)
+    assert data["Canada"]["region_term"] == "province"
+    for country, info in data.items():
+        source = locations.load_country_data(country)
+        assert info["regions"] == {r: len(c) for r, c in source.items()}
