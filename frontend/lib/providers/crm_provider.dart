@@ -129,6 +129,12 @@ class CrmProvider extends ChangeNotifier {
     }
   }
 
+  /// Fresh counts fetched by a screen (keeps the nav badge in step).
+  void setCounts(Map<String, int> counts) {
+    _counts = Map<String, int>.from(counts);
+    notifyListeners();
+  }
+
   /// Sign-out: forget everything.
   void clear() {
     _generation++;
