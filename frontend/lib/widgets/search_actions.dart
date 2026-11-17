@@ -79,14 +79,27 @@ bool failureReasonWasReworded(String? error) {
 }
 
 /// The headline of a finished search (brief status copy), from API fields.
+/// "Completed with no leads" reads differently from a useful search, and a
+/// cancelled/failed search says how many leads it kept.
 String finishedSearchHeadline(Map<String, dynamic> job) {
   final leads = jobInt(job, 'result_count');
   final total = jobInt(job, 'total_cities');
+  final c = CitySummary.of(job);
   switch ('${job['status']}') {
     case 'completed':
+      if (leads == 0) {
+        return 'This search finished, but no leads were found in '
+            '${total == 1 ? 'the city' : 'any of the ${formatCount(total)} cities'} searched.';
+      }
+      if (c != null && c.withLeads > 0 && c.withLeads < total) {
+        return '${plural(leads, 'lead', 'leads')} found in '
+            '${formatCount(c.withLeads)} of ${plural(total, 'city', 'cities')}.';
+      }
       return '${plural(leads, 'lead', 'leads')} from ${plural(total, 'city', 'cities')}.';
     case 'cancelled':
-      return 'You cancelled this search. ${plural(leads, 'lead was', 'leads were')} saved.';
+      return leads > 0
+          ? 'You cancelled this search. ${plural(leads, 'lead was', 'leads were')} saved.'
+          : 'You cancelled this search before any leads were saved.';
     case 'failed':
       final reason = plainFailureReason(job['error'] as String?);
       if (leads > 0) {
@@ -99,9 +112,9 @@ String finishedSearchHeadline(Map<String, dynamic> job) {
   }
 }
 
-/// Status badge of the search page. A completed search where [zeroCities]
-/// cities produced nothing (known once leads are loaded) or `failed_cities`
-/// > 0 shows "Completed · {k} cities found nothing" (amber).
+/// Status badge of the search page: [searchStatusOf] plus "Stopping…" while
+/// a cancel request is being processed. ([zeroCities] is accepted for
+/// compatibility; per-city facts now come from `city_summary`.)
 SearchStatusInfo searchPageStatus(
   Map<String, dynamic> job, {
   int zeroCities = 0,
@@ -111,19 +124,6 @@ SearchStatusInfo searchPageStatus(
   if (stopping && (status == 'running' || status == 'pending')) {
     return const SearchStatusInfo(SearchStatusKind.searching, 'Stopping…',
         UiTokens.searchingFg, UiTokens.searchingBg, Icons.hourglass_bottom_rounded);
-  }
-  if (status == 'completed') {
-    final failed = jobInt(job, 'failed_cities');
-    final k = zeroCities > failed ? zeroCities : failed;
-    if (k > 0) {
-      return SearchStatusInfo(
-        SearchStatusKind.partial,
-        'Completed · ${plural(k, 'city', 'cities')} found nothing',
-        UiTokens.partialFg,
-        UiTokens.partialBg,
-        Icons.warning_amber_rounded,
-      );
-    }
   }
   return searchStatusOf(job);
 }

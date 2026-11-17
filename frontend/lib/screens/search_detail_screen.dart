@@ -13,6 +13,7 @@ import '../providers/scraper_provider.dart';
 import '../providers/search_setup_provider.dart';
 import '../services/api_service.dart';
 import '../widgets/app_shell.dart';
+import '../widgets/country_flag_badge.dart';
 import '../widgets/job_log_panel.dart';
 import '../widgets/search_actions.dart';
 import 'results_screen.dart';
@@ -147,8 +148,11 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
     final needSettlement =
         job.isTerminal && !_settled(job) && _settlementPolls < _maxSettlementPolls;
     final needLog = _logOpen && job.isActive;
+    // Per-city facts (city_summary/city_outcomes) are final only once the
+    // search has ended: refresh the side data when its status is behind.
+    final metaBehind = job.isTerminal && _meta != null && '${_meta!['status']}' != _statusString(job);
     if (needSettlement) _settlementPolls++;
-    if (needSettlement || needLog) _fetchMeta();
+    if (needSettlement || needLog || metaBehind) _fetchMeta();
   }
 
   // --------------------------------------------------------------- values
@@ -205,7 +209,20 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
       'error': job.error,
       'created_at': job.createdAt.toIso8601String(),
       'completed_at': job.completedAt?.toIso8601String(),
+      if ('${m['status']}' == _statusString(job)) ...{
+        'city_summary': m['city_summary'],
+        'city_outcomes': m['city_outcomes'],
+      },
     };
+  }
+
+  /// Marks where the leads start, for "View partial results".
+  final GlobalKey _leadsAnchor = GlobalKey();
+
+  void _scrollToLeads() {
+    final ctx = _leadsAnchor.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 350), curve: Curves.easeOutCubic);
   }
 
   bool _stopping(ScrapingJob job) {
@@ -230,8 +247,16 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
     return parts.join(' · ');
   }
 
-  /// Requested cities that produced no lead (known once leads are loaded).
-  List<String> _zeroCities(ScrapingJob job) {
+  /// Requested cities that produced no lead. Uses the server's per-city
+  /// outcomes when present, else the loaded leads (completed searches only).
+  List<String> _zeroCities(ScrapingJob job, Map<String, dynamic> map) {
+    final outcomes = map['city_outcomes'];
+    if (outcomes is List) {
+      return [
+        for (final o in outcomes)
+          if (o is Map && o['outcome'] == 'empty') '${o['city']}',
+      ];
+    }
     if (!job.resultsLoaded || job.status != ScrapingStatus.completed) return const [];
     final counts = leadCountsByCity(job.results);
     return [for (final c in job.cities) if (leadsForCity(c, counts) == 0) c];
@@ -513,7 +538,19 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
                 style: const TextStyle(color: UiTokens.text, fontSize: 22, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(height: 4),
-          Text(_subtitle(map, job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 14)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (jobCountry(map) != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, right: 6),
+                  child: CountryFlagBadge(countryName: jobCountry(map), size: 14),
+                ),
+              Flexible(
+                child: Text(_subtitle(map, job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 14)),
+              ),
+            ],
+          ),
           const SizedBox(height: 16),
           if (!job.isQueued) ...[
             Row(
@@ -657,13 +694,16 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
         if (back != null) back,
         for (final n in _notices(scraper, job)) n,
         _summaryCard(context, job, map),
+        SizedBox(key: _leadsAnchor, height: 0),
       ],
     );
   }
 
   Widget _summaryCard(BuildContext context, ScrapingJob job, Map<String, dynamic> map) {
-    final zero = _zeroCities(job);
-    final status = searchPageStatus(map, zeroCities: zero.length);
+    final zero = _zeroCities(job, map);
+    final status = searchPageStatus(map);
+    final partial = jobHasPartialResults(map);
+    final noLeads = job.status == ScrapingStatus.completed && job.resultCount == 0;
     final leads = job.resultCount;
     final settled = _settled(job);
     final charged = _charged(job);
@@ -682,7 +722,8 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
       }
     }
     final total = _totalCities(job);
-    if (total > 0 && (job.status == ScrapingStatus.completed || leads > 0)) {
+    // Phones skip the average: the facts line above already gives leads and cities.
+    if (!phone && total > 0 && leads > 0) {
       final avg = leads / total;
       final avgText = avg == avg.roundToDouble() ? avg.toStringAsFixed(0) : avg.toStringAsFixed(1);
       stats.add('Avg $avgText per city');
@@ -692,15 +733,22 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
     final logCount = _entries(job).length;
 
     final buttons = <Widget>[
-      if (leads > 0)
+      if (partial)
         FilledButton.icon(
           style: searchPrimaryButtonStyle(),
+          onPressed: _scrollToLeads,
+          icon: const Icon(Icons.list_alt_rounded, size: 18),
+          label: Text('View partial results (${formatCount(leads)})'),
+        ),
+      if (leads > 0)
+        (partial ? OutlinedButton.icon : FilledButton.icon)(
+          style: partial ? searchSecondaryButtonStyle() : searchPrimaryButtonStyle(),
           onPressed: _downloading ? null : _download,
           icon: _downloading
               ? const SizedBox(
                   width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.download_rounded, size: 18),
-          label: const Text('Download Excel'),
+          label: Text(partial ? 'Download partial Excel' : 'Download Excel'),
         ),
       if (leads > 0)
         OutlinedButton.icon(
@@ -762,7 +810,19 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
                 style: TextStyle(color: UiTokens.text, fontSize: phone ? 19 : 22, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(height: 2),
-          Text(_subtitle(map, job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13.5)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (jobCountry(map) != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, right: 6),
+                  child: CountryFlagBadge(countryName: jobCountry(map), size: 14),
+                ),
+              Flexible(
+                child: Text(_subtitle(map, job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13.5)),
+              ),
+            ],
+          ),
           const SizedBox(height: 10),
           Semantics(
             liveRegion: true,
@@ -771,14 +831,25 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
               style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w600, height: 1.35),
             ),
           ),
-          if (zero.isNotEmpty)
+          SizedBox(height: phone ? 6 : 10),
+          _OutcomeStats(job: map),
+          if (zero.isNotEmpty && !noLeads && !phone)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: 6),
               child: Text(
                 zero.length <= 3
-                    ? '${zero.map((c) => c.split(',').first.trim()).join(', ')}: no businesses found.'
-                    : '${plural(zero.length, 'city', 'cities')} found no businesses.',
-                style: const TextStyle(color: UiTokens.partialFg, fontSize: 13.5),
+                    ? 'No leads in ${zero.map((c) => c.split(',').first.trim()).join(', ')}.'
+                    : 'No leads in ${plural(zero.length, 'city', 'cities')} (see Cities below).',
+                style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13.5),
+              ),
+            ),
+          if (noLeads)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'Nothing was saved, so there is nothing to download. You can run it again with a broader '
+                'business type or different cities.',
+                style: TextStyle(color: UiTokens.textSecondary, fontSize: 13.5, height: 1.35),
               ),
             ),
           if (reworded) ...[
@@ -836,12 +907,90 @@ class _SearchDetailScreenState extends State<SearchDetailScreen> {
           if (_citiesOpen)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: _CitiesList(job: job),
+              child: _CitiesList(job: job, outcomes: map['city_outcomes']),
             ),
           if (_logOpen)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: JobLogPanel(entries: _entries(job), jobId: _id, category: job.category),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Leads found, cities searched, cities with leads and cities with no leads,
+/// side by side (plus timed out / not searched when they apply). Only facts
+/// the server reported; nothing is shown for older servers without
+/// `city_summary` except the lead count.
+class _OutcomeStats extends StatelessWidget {
+  final Map<String, dynamic> job;
+
+  const _OutcomeStats({required this.job});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = CitySummary.of(job);
+    final leads = jobInt(job, 'result_count');
+    final items = <(String, String, Color?)>[
+      (formatCount(leads), leads == 1 ? 'Lead found' : 'Leads found', null),
+      if (c != null) ...[
+        ('${formatCount(c.searched)} of ${formatCount(c.total)}', 'Cities searched', null),
+        (formatCount(c.withLeads), 'With leads', null),
+        (formatCount(c.empty), 'With no leads', c.empty > 0 ? UiTokens.partialFg : null),
+        if (c.timedOut > 0) (formatCount(c.timedOut), 'Timed out', UiTokens.partialFg),
+        if (c.interrupted + c.notSearched > 0)
+          (formatCount(c.interrupted + c.notSearched), 'Not finished', UiTokens.textSecondary),
+      ],
+    ];
+    final label = [for (final i in items) '${i.$2}: ${i.$1}'].join(', ');
+    // Phones: one compact line keeps the first lead on the first screen.
+    if (MediaQuery.sizeOf(context).width < AppBreakpoints.mobile) {
+      return Semantics(
+        container: true,
+        label: label,
+        excludeSemantics: true,
+        child: Text.rich(
+          TextSpan(children: [
+            for (var k = 0; k < items.length; k++) ...[
+              if (k > 0) const TextSpan(text: '  ·  ', style: TextStyle(color: UiTokens.textMuted)),
+              TextSpan(
+                  text: items[k].$1,
+                  style: TextStyle(color: items[k].$3 ?? UiTokens.text, fontWeight: FontWeight.w700)),
+              TextSpan(text: ' ${items[k].$2.toLowerCase()}'),
+            ],
+          ]),
+          style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13.5, height: 1.4),
+        ),
+      );
+    }
+    return Semantics(
+      container: true,
+      label: label,
+      excludeSemantics: true,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final i in items)
+            Container(
+              constraints: const BoxConstraints(minWidth: 96),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: UiTokens.background,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: UiTokens.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(i.$1,
+                      style: TextStyle(color: i.$3 ?? UiTokens.text, fontSize: 17, fontWeight: FontWeight.w700)),
+                  Text(i.$2, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5)),
+                ],
+              ),
             ),
         ],
       ),
@@ -930,7 +1079,7 @@ class _Disclosure extends StatelessWidget {
   }
 }
 
-enum _CityState { done, empty, searching, waiting, failed, stopped, notSearched }
+enum _CityState { done, empty, timedOut, skipped, searching, waiting, failed, stopped, notSearched }
 
 /// Per-city progress. A green check only means "searched and found leads"
 /// (or "searched" while the leads are not loaded yet); cities of a
@@ -939,7 +1088,10 @@ class _CitiesList extends StatelessWidget {
   final ScrapingJob job;
   final String? title;
 
-  const _CitiesList({required this.job, this.title});
+  /// `city_outcomes` from the API (finished searches); null = derive locally.
+  final Object? outcomes;
+
+  const _CitiesList({required this.job, this.title, this.outcomes});
 
   @override
   Widget build(BuildContext context) {
@@ -947,7 +1099,32 @@ class _CitiesList extends StatelessWidget {
     final counts = job.resultsLoaded ? leadCountsByCity(job.results) : const <String, int>{};
     final done = job.completedCities;
 
+    final server = <String, Map>{
+      if (outcomes is List)
+        for (final o in outcomes as List)
+          if (o is Map) '${o['city']}': o,
+    };
+
     _CityState stateOf(int i) {
+      final o = server[cities[i].trim()];
+      if (o != null) {
+        switch ('${o['outcome']}') {
+          case 'with_leads':
+            return _CityState.done;
+          case 'empty':
+            return _CityState.empty;
+          case 'timed_out':
+            return _CityState.timedOut;
+          case 'interrupted':
+            return job.status == ScrapingStatus.failed ? _CityState.failed : _CityState.stopped;
+          case 'searching':
+            return _CityState.searching;
+          case 'not_searched':
+            return job.isActive ? _CityState.waiting : _CityState.notSearched;
+          case 'skipped':
+            return _CityState.skipped;
+        }
+      }
       switch (job.status) {
         case ScrapingStatus.completed:
           if (!job.resultsLoaded) return _CityState.done;
@@ -974,7 +1151,9 @@ class _CitiesList extends StatelessWidget {
     Widget row(int i) {
       final city = cities[i];
       final st = stateOf(i);
-      final n = leadsForCity(city, counts);
+      final o = server[city.trim()];
+      final n = o != null && o['leads'] is num ? (o['leads'] as num).toInt() : leadsForCity(city, counts);
+      final known = job.resultsLoaded || o != null;
       late IconData icon;
       late Color color;
       late String label;
@@ -982,12 +1161,22 @@ class _CitiesList extends StatelessWidget {
         case _CityState.done:
           icon = Icons.check_rounded;
           color = UiTokens.completedFg;
-          label = job.resultsLoaded ? plural(n, 'lead', 'leads') : 'done';
+          label = known ? plural(n, 'lead', 'leads') : 'done';
           break;
         case _CityState.empty:
           icon = Icons.remove_circle_outline_rounded;
           color = UiTokens.partialFg;
-          label = 'no businesses found';
+          label = 'no leads';
+          break;
+        case _CityState.timedOut:
+          icon = Icons.timer_off_outlined;
+          color = UiTokens.partialFg;
+          label = n > 0 ? 'timed out · ${plural(n, 'lead', 'leads')} kept' : 'timed out · no leads';
+          break;
+        case _CityState.skipped:
+          icon = Icons.do_not_disturb_alt_rounded;
+          color = UiTokens.textMuted;
+          label = 'skipped (not a valid city)';
           break;
         case _CityState.searching:
           icon = Icons.autorenew_rounded;
@@ -1002,12 +1191,12 @@ class _CitiesList extends StatelessWidget {
         case _CityState.failed:
           icon = Icons.close_rounded;
           color = UiTokens.failedFg;
-          label = 'stopped here (failed)';
+          label = n > 0 ? 'stopped here (failed) · ${plural(n, 'lead', 'leads')} kept' : 'stopped here (failed)';
           break;
         case _CityState.stopped:
           icon = Icons.block_rounded;
           color = UiTokens.cancelledFg;
-          label = 'stopped here (cancelled)';
+          label = n > 0 ? 'stopped here (cancelled) · ${plural(n, 'lead', 'leads')} kept' : 'stopped here (cancelled)';
           break;
         case _CityState.notSearched:
           icon = Icons.radio_button_unchecked_rounded;
@@ -1027,14 +1216,19 @@ class _CitiesList extends StatelessWidget {
               Icon(icon, size: 18, color: color),
               const SizedBox(width: 10),
               Expanded(
+                flex: 3,
                 child: Text(city, style: const TextStyle(color: UiTokens.text, fontSize: 14)),
               ),
               const SizedBox(width: 8),
-              Text(label,
-                  style: TextStyle(
-                    color: st == _CityState.done ? UiTokens.text : color,
-                    fontSize: 13.5,
-                  )),
+              Flexible(
+                flex: 2,
+                child: Text(label,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      color: st == _CityState.done ? UiTokens.text : color,
+                      fontSize: 13.5,
+                    )),
+              ),
             ],
           ),
         ),

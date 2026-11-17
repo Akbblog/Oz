@@ -805,8 +805,11 @@ class _RecentTable extends StatelessWidget {
                   Text(jobCategory(job),
                       style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
                   const SizedBox(height: 2),
-                  Text(jobCitiesSummary(job),
-                      style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+                  JobCitiesLine(job: job, fontSize: 12),
+                  if (jobCityOutcomeLine(job) case final line?) ...[
+                    const SizedBox(height: 2),
+                    Text(line, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+                  ],
                 ],
               )),
               _cell(SearchStatusBadge(job: job)),
@@ -861,7 +864,11 @@ class _RecentRow extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 2),
-          Text(jobCitiesSummary(job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          JobCitiesLine(job: job),
+          if (jobCityOutcomeLine(job) case final line?) ...[
+            const SizedBox(height: 2),
+            Text(line, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          ],
           const SizedBox(height: 4),
           Text(
             '$leadsText · ${formatServerDateTime(job['created_at'])}',

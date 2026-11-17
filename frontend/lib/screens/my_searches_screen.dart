@@ -53,6 +53,35 @@ String searchDateFilterLabel(SearchDateFilter f) {
   }
 }
 
+/// API value of a sort.
+String searchSortApi(SearchSort s) {
+  switch (s) {
+    case SearchSort.newest:
+      return 'newest';
+    case SearchSort.oldest:
+      return 'oldest';
+    case SearchSort.mostLeads:
+      return 'most_leads';
+  }
+}
+
+/// Local-time `[from, to)` of a date filter (null = unbounded), sent to the
+/// server so "Today" means the user's today.
+(DateTime?, DateTime?) searchDateRange(SearchDateFilter f, {DateTime? now}) {
+  final n = (now ?? DateTime.now()).toLocal();
+  final today = DateTime(n.year, n.month, n.day);
+  switch (f) {
+    case SearchDateFilter.all:
+      return (null, null);
+    case SearchDateFilter.today:
+      return (today, null);
+    case SearchDateFilter.last7Days:
+      return (today.subtract(const Duration(days: 6)), null);
+    case SearchDateFilter.thisMonth:
+      return (DateTime(n.year, n.month), null);
+  }
+}
+
 String searchSortLabel(SearchSort s) {
   switch (s) {
     case SearchSort.newest:
@@ -97,9 +126,10 @@ bool searchMatchesDate(Map<String, dynamic> job, SearchDateFilter f, {DateTime? 
   }
 }
 
-/// My searches (`/searches`): status tabs with counts, server pagination
-/// (20 per page), search, date filter and sort, table on desktop and cards
-/// below, and per-search actions. Page body only (inside [AppShell]).
+/// My searches (`/searches`): status tabs with counts, search, date filter
+/// and sort — all applied by the server across every search — with exact
+/// server pagination (20 per page), table on desktop and cards below, and
+/// per-search actions. Page body only (inside [AppShell]).
 class MySearchesScreen extends StatefulWidget {
   final ApiService? api;
 
@@ -121,6 +151,7 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
   Object? _error;
   List<Map<String, dynamic>> _jobs = const [];
   int _total = 0;
+  int? _overallTotal;
   Map<String, int> _counts = const {};
   int _page = 0;
   int _generation = 0;
@@ -170,13 +201,15 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
       });
     }
     try {
-      final searching = _query.trim().isNotEmpty;
-      // With a query, every search of the tab is fetched and filtered here
-      // (the API has no text search); otherwise one page of 20.
+      final (from, to) = searchDateRange(_date);
       final page = await _api.getJobs(
-        limit: searching ? null : pageSize,
-        offset: searching ? null : _page * pageSize,
+        limit: pageSize,
+        offset: _page * pageSize,
         status: _tab.apiStatus,
+        q: _query,
+        from: from,
+        to: to,
+        sort: searchSortApi(_sort),
       );
       if (!mounted || generation != _generation) return;
       final jobs = List<Map<String, dynamic>>.from(page['jobs'] as List);
@@ -184,7 +217,8 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
       setState(() {
         _jobs = jobs;
         _total = (page['total'] as num?)?.toInt() ?? jobs.length;
-        if (counts.isNotEmpty) _counts = counts;
+        _overallTotal = (page['overall_total'] as num?)?.toInt();
+        _counts = counts;
         _loading = false;
         _error = null;
       });
@@ -201,14 +235,12 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
     _queryDebounce?.cancel();
     _queryDebounce = Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
-      final wasSearching = _query.trim().isNotEmpty;
+      if (value.trim() == _query.trim()) return;
       setState(() {
         _query = value;
         _page = 0;
       });
-      // Starting or ending a search changes what is fetched (every search
-      // vs one page); refining a query only filters what is loaded.
-      if (wasSearching != value.trim().isNotEmpty) _load();
+      _load();
     });
   }
 
@@ -231,26 +263,8 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
     }
   }
 
-  /// The loaded set after the client-side query, date filter and sort.
-  List<Map<String, dynamic>> get _shown {
-    final out = _jobs
-        .where((j) => searchMatchesQuery(j, _query) && searchMatchesDate(j, _date))
-        .toList();
-    int created(Map<String, dynamic> j) =>
-        parseServerTime(j['created_at'])?.millisecondsSinceEpoch ?? 0;
-    switch (_sort) {
-      case SearchSort.newest:
-        out.sort((a, b) => created(b).compareTo(created(a)));
-        break;
-      case SearchSort.oldest:
-        out.sort((a, b) => created(a).compareTo(created(b)));
-        break;
-      case SearchSort.mostLeads:
-        out.sort((a, b) => jobInt(b, 'result_count').compareTo(jobInt(a, 'result_count')));
-        break;
-    }
-    return out;
-  }
+  /// The server already filtered, sorted and paged [_jobs].
+  List<Map<String, dynamic>> get _shown => _jobs;
 
   int? _countFor(SearchTab t) {
     if (_counts.isEmpty) return null;
@@ -447,11 +461,13 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
       style: const TextStyle(color: UiTokens.text, fontSize: 14),
       decoration: InputDecoration(
         isDense: true,
-        hintText: 'Search by business type, city or ID',
+        labelText: 'Search your searches',
+        labelStyle: const TextStyle(color: UiTokens.textSecondary),
+        hintText: 'Business type, city, country or ID',
         hintStyle: const TextStyle(color: UiTokens.textMuted),
-        helperText: 'Searching looks through all your searches. Date and sort apply to the searches listed.',
+        helperText: 'Search, date and sort apply to all your searches.',
         helperMaxLines: 2,
-        helperStyle: const TextStyle(color: UiTokens.textMuted, fontSize: 12),
+        helperStyle: const TextStyle(color: UiTokens.textSecondary, fontSize: 12),
         prefixIcon: const Icon(Icons.search_rounded, size: 20, color: UiTokens.textMuted),
         suffixIcon: _queryController.text.isEmpty
             ? null
@@ -483,7 +499,14 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
       value: _date,
       values: SearchDateFilter.values,
       labelOf: searchDateFilterLabel,
-      onSelected: (v) => setState(() => _date = v),
+      onSelected: (v) {
+        if (v == _date) return;
+        setState(() {
+          _date = v;
+          _page = 0;
+        });
+        _load();
+      },
     );
     final sortMenu = _menu<SearchSort>(
       tooltip: 'Sort searches',
@@ -492,7 +515,14 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
       value: _sort,
       values: SearchSort.values,
       labelOf: searchSortLabel,
-      onSelected: (v) => setState(() => _sort = v),
+      onSelected: (v) {
+        if (v == _sort) return;
+        setState(() {
+          _sort = v;
+          _page = 0;
+        });
+        _load();
+      },
     );
     final refresh = IconButton(
       tooltip: 'Refresh',
@@ -587,7 +617,9 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
         ),
       );
     }
-    final noSearchesAtAll = (_countFor(SearchTab.all) ?? (_tab == SearchTab.all && _query.trim().isEmpty ? _total : 1)) == 0;
+    final noSearchesAtAll = _overallTotal != null
+        ? _overallTotal == 0
+        : (_countFor(SearchTab.all) ?? (_tab == SearchTab.all && !_filtersActive ? _total : 1)) == 0;
     if (noSearchesAtAll) {
       return SearchCard(
         child: Column(
@@ -646,19 +678,16 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
   }
 
   Widget _buildPager(int shownCount) {
-    if (_query.trim().isNotEmpty) {
-      return Text(
-        '${plural(shownCount, 'search matches', 'searches match')} "${_query.trim()}".',
-        style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
-      );
-    }
     final pages = (_total / pageSize).ceil();
     final from = _total == 0 ? 0 : _page * pageSize + 1;
     final to = (_page * pageSize + _jobs.length).clamp(0, _total);
-    final summary = Text(
-      'Showing $from–$to of ${formatCount(_total)}'
-      '${shownCount != _jobs.length ? ' · ${formatCount(shownCount)} match the date filter' : ''}',
-      style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+    final matching = _filtersActive ? ' matching' : '';
+    final summary = Semantics(
+      liveRegion: true,
+      child: Text(
+        'Showing $from–$to of ${formatCount(_total)}$matching ${_total == 1 ? 'search' : 'searches'}',
+        style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+      ),
     );
     if (pages <= 1) return summary;
     final style = TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44));
@@ -815,7 +844,11 @@ class _SearchesTable extends StatelessWidget {
                   Text(jobCategory(job),
                       style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
                   const SizedBox(height: 2),
-                  Text(jobCitiesSummary(job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+                  JobCitiesLine(job: job, fontSize: 12),
+                  if (jobCityOutcomeLine(job) case final line?) ...[
+                    const SizedBox(height: 2),
+                    Text(line, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+                  ],
                 ],
               )),
               _cell(SearchStatusBadge(job: job)),
@@ -876,7 +909,11 @@ class _SearchRow extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 2),
-          Text(jobCitiesSummary(job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          JobCitiesLine(job: job),
+          if (jobCityOutcomeLine(job) case final line?) ...[
+            const SizedBox(height: 2),
+            Text(line, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          ],
           const SizedBox(height: 4),
           Text('$leadsText · ${formatServerDateTime(job['created_at'])}',
               style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),

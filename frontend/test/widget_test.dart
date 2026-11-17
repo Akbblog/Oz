@@ -47,7 +47,7 @@ class FakeApi extends ApiService {
   Future<List<Map<String, dynamic>>> getActiveJobs() async => active;
 
   @override
-  Future<Map<String, dynamic>> getJobs({int? limit, int? offset, String? status}) async {
+  Future<Map<String, dynamic>> getJobs({int? limit, int? offset, String? status, String? q, DateTime? from, DateTime? to, String? sort}) async {
     if (jobsError != null) throw jobsError!;
     final page = limit == null ? jobs : jobs.take(limit).toList();
     return {'jobs': page, 'total': total ?? jobs.length, 'counts': <String, int>{}, 'paginated': true};
@@ -204,7 +204,7 @@ void main() {
     expect(find.text('Recent searches'), findsOneWidget);
     expect(find.text('View progress'), findsOneWidget);
     expect(find.text('Open results'), findsOneWidget);
-    expect(find.text('Open 3 leads'), findsOneWidget);
+    expect(find.text('View partial results'), findsOneWidget);
     expect(find.text('See why'), findsOneWidget);
     expect(find.text('9 so far'), findsOneWidget);
     expect(find.text('70 charged'), findsOneWidget);

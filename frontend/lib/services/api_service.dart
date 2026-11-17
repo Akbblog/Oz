@@ -392,22 +392,34 @@ class ApiService {
         .toList();
   }
 
-  /// One page of the user's searches, newest first.
+  /// One page of the user's searches. Text query ([q]), date range
+  /// ([from] inclusive / [to] exclusive, sent as UTC instants), status and
+  /// [sort] (`newest` | `oldest` | `most_leads`) are all applied by the
+  /// server across every search, then [limit]/[offset] page the result.
   ///
-  /// Returns a map with `jobs` (list of job maps), `total` (int), `counts`
-  /// (status -> int) and `paginated` (bool). `total`/`counts` come from the server when it
-  /// supports pagination. An older server that ignores `limit` returns every
-  /// job; then `total` is the length of that full list (still exact), the
-  /// window is applied locally and `counts` is empty.
+  /// Returns a map with `jobs` (list of job maps), `total` (int, matches all
+  /// filters), `counts` (status -> int for the q/date filters),
+  /// `overall_total` (int?, all searches) and `paginated` (bool). An older
+  /// server that ignores `limit` returns every job; then `total` is the
+  /// length of that full list, the window is applied locally and `counts` is
+  /// empty.
   Future<Map<String, dynamic>> getJobs({
     int? limit,
     int? offset,
     String? status,
+    String? q,
+    DateTime? from,
+    DateTime? to,
+    String? sort,
   }) async {
     final query = <String, String>{
       if (limit != null) 'limit': '$limit',
       if (offset != null) 'offset': '$offset',
       if (status != null && status.isNotEmpty) 'status': status,
+      if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+      if (from != null) 'from': from.toUtc().toIso8601String(),
+      if (to != null) 'to': to.toUtc().toIso8601String(),
+      if (sort != null && sort.isNotEmpty) 'sort': sort,
     };
     final data =
         await _getJson('/api/jobs', query: query, context: 'Loading searches');
@@ -434,10 +446,12 @@ class ApiService {
         if (value is num) counts['$key'] = value.toInt();
       });
     }
+    final overall = data is Map ? data['overall_total'] : null;
     return {
       'jobs': jobs,
       'total': total,
       'counts': counts,
+      'overall_total': overall is num ? overall.toInt() : null,
       'paginated': paginated,
     };
   }

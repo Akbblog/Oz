@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/utils/server_time.dart';
+import 'country_flag_badge.dart';
 
 /// Visual tokens of the user-facing redesign (dark theme, plan §10).
 class UiTokens {
@@ -160,6 +161,32 @@ String jobCitiesSummary(Map<String, dynamic> job) {
   return '$names · $place';
 }
 
+/// [jobCitiesSummary] with the country's flag in front (decorative; the
+/// country name is in the text). No flag when the country is unknown.
+class JobCitiesLine extends StatelessWidget {
+  final Map<String, dynamic> job;
+  final double fontSize;
+
+  const JobCitiesLine({super.key, required this.job, this.fontSize = 13});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Text(jobCitiesSummary(job), style: TextStyle(color: UiTokens.textSecondary, fontSize: fontSize));
+    final country = jobCountry(job);
+    if (country == null) return text;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2, right: 6),
+          child: CountryFlagBadge(countryName: country, size: fontSize - 1),
+        ),
+        Flexible(child: text),
+      ],
+    );
+  }
+}
+
 /// "4 cities in Quebec, Canada" (or "4 cities").
 String jobCitiesInPlace(Map<String, dynamic> job) {
   final total = jobInt(job, 'total_cities');
@@ -176,7 +203,7 @@ String jobCategory(Map<String, dynamic> job) {
 
 // ----------------------------------------------------------------- status
 
-enum SearchStatusKind { queued, searching, completed, partial, failed, cancelled, unknown }
+enum SearchStatusKind { queued, searching, completed, noLeads, partial, failed, cancelled, unknown }
 
 class SearchStatusInfo {
   final SearchStatusKind kind;
@@ -200,7 +227,81 @@ bool jobIsTerminal(Map<String, dynamic> job) {
   return s == 'completed' || s == 'failed' || s == 'cancelled';
 }
 
+// ---------------------------------------------------------- outcomes
+
+/// Per-city facts of a search from the API's `city_summary` (null on older
+/// servers). Lead counts are saved leads; "timed out" and "not searched" come
+/// from the runner, never from estimates.
+class CitySummary {
+  final int total;
+  final int searched;
+  final int withLeads;
+  final int empty;
+  final int timedOut;
+  final int interrupted;
+  final int notSearched;
+
+  const CitySummary({
+    required this.total,
+    required this.searched,
+    required this.withLeads,
+    required this.empty,
+    required this.timedOut,
+    required this.interrupted,
+    required this.notSearched,
+  });
+
+  static CitySummary? of(Map<String, dynamic> job) {
+    final raw = job['city_summary'];
+    if (raw is! Map) return null;
+    int v(String k) => raw[k] is num ? (raw[k] as num).toInt() : 0;
+    return CitySummary(
+      total: v('cities_total'),
+      searched: v('cities_searched'),
+      withLeads: v('cities_with_leads'),
+      empty: v('cities_empty'),
+      timedOut: v('cities_timed_out'),
+      interrupted: v('cities_interrupted'),
+      notSearched: v('cities_not_searched'),
+    );
+  }
+}
+
+/// Cities that timed out: from `city_summary` when present, else the
+/// runner's `failed_cities` counter.
+int jobTimedOutCities(Map<String, dynamic> job) =>
+    CitySummary.of(job)?.timedOut ?? jobInt(job, 'failed_cities');
+
+/// A final search that kept at least one lead but did not finish.
+bool jobHasPartialResults(Map<String, dynamic> job) {
+  final s = '${job['status']}';
+  return (s == 'cancelled' || s == 'failed') && jobInt(job, 'result_count') > 0;
+}
+
+/// "4 of 6 cities searched · 3 with leads · 1 with no leads · 2 not searched"
+/// for a finished search (facts only; null while running or when the server
+/// sent no per-city summary).
+String? jobCityOutcomeLine(Map<String, dynamic> job) {
+  // Running searches show live progress elsewhere; a list snapshot would lag.
+  if (!jobIsTerminal(job)) return null;
+  final c = CitySummary.of(job);
+  if (c == null || c.total == 0) return null;
+  final parts = <String>[
+    c.searched == c.total
+        ? (c.total == 1 ? '1 city searched' : 'All ${formatCount(c.total)} cities searched')
+        : '${formatCount(c.searched)} of ${plural(c.total, 'city', 'cities')} searched',
+    '${formatCount(c.withLeads)} with leads',
+    if (c.empty > 0) '${formatCount(c.empty)} with no leads',
+    if (c.timedOut > 0) '${formatCount(c.timedOut)} timed out',
+    if (c.interrupted > 0) '${formatCount(c.interrupted)} stopped part-way',
+    if (c.notSearched > 0) '${formatCount(c.notSearched)} not searched',
+  ];
+  return parts.join(' · ');
+}
+
 /// Badge text/colours from the API status (plan §6.5 / brief status copy).
+/// "Completed · no leads" is kept apart from a useful completed search, and
+/// a cancelled/failed search that kept leads says "partial results".
 SearchStatusInfo searchStatusOf(Map<String, dynamic> job) {
   final leads = jobInt(job, 'result_count');
   switch ('${job['status']}') {
@@ -211,11 +312,15 @@ SearchStatusInfo searchStatusOf(Map<String, dynamic> job) {
       return const SearchStatusInfo(SearchStatusKind.searching, 'Searching',
           UiTokens.searchingFg, UiTokens.searchingBg, Icons.autorenew_rounded);
     case 'completed':
-      final failedCities = jobInt(job, 'failed_cities');
-      if (failedCities > 0) {
+      if (leads == 0) {
+        return const SearchStatusInfo(SearchStatusKind.noLeads, 'Completed · no leads',
+            UiTokens.partialFg, UiTokens.partialBg, Icons.search_off_rounded);
+      }
+      final timedOut = jobTimedOutCities(job);
+      if (timedOut > 0) {
         return SearchStatusInfo(
           SearchStatusKind.partial,
-          'Completed · ${plural(failedCities, 'city', 'cities')} found nothing',
+          'Completed · ${plural(timedOut, 'city', 'cities')} timed out',
           UiTokens.partialFg,
           UiTokens.partialBg,
           Icons.warning_amber_rounded,
@@ -232,8 +337,13 @@ SearchStatusInfo searchStatusOf(Map<String, dynamic> job) {
         Icons.close_rounded,
       );
     case 'cancelled':
-      return const SearchStatusInfo(SearchStatusKind.cancelled, 'Cancelled',
-          UiTokens.cancelledFg, UiTokens.cancelledBg, Icons.block_rounded);
+      return SearchStatusInfo(
+        SearchStatusKind.cancelled,
+        leads > 0 ? 'Cancelled · partial results' : 'Cancelled',
+        UiTokens.cancelledFg,
+        UiTokens.cancelledBg,
+        Icons.block_rounded,
+      );
     default:
       return SearchStatusInfo(SearchStatusKind.unknown, '${job['status'] ?? 'Unknown'}',
           UiTokens.cancelledFg, UiTokens.cancelledBg, Icons.help_outline_rounded);
@@ -317,11 +427,11 @@ String jobActionLabel(Map<String, dynamic> job) {
     case 'running':
       return 'View progress';
     case 'completed':
-      return 'Open results';
+      return leads > 0 ? 'Open results' : 'See details';
     case 'cancelled':
-      return leads > 0 ? 'Open ${plural(leads, 'lead', 'leads')}' : 'See details';
+      return leads > 0 ? 'View partial results' : 'See details';
     case 'failed':
-      return 'See why';
+      return leads > 0 ? 'View partial results' : 'See why';
     default:
       return 'Open';
   }

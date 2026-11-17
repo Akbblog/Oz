@@ -79,6 +79,7 @@ class FakeApi extends ApiService {
   Map<String, dynamic> Function(bool includeResults) status = (_) => _payload();
   Map<String, dynamic> jobsPage = {'jobs': <Map<String, dynamic>>[], 'total': 0, 'counts': <String, int>{}};
   final List<String?> statusQueries = [];
+  final List<Map<String, Object?>> jobQueries = [];
 
   @override
   Future<bool> healthCheck() async => true;
@@ -96,8 +97,9 @@ class FakeApi extends ApiService {
       Map<String, dynamic>.from(status(includeResults));
 
   @override
-  Future<Map<String, dynamic>> getJobs({int? limit, int? offset, String? status}) async {
+  Future<Map<String, dynamic>> getJobs({int? limit, int? offset, String? status, String? q, DateTime? from, DateTime? to, String? sort}) async {
     statusQueries.add(status);
+    jobQueries.add({'limit': limit, 'offset': offset, 'status': status, 'q': q, 'from': from, 'to': to, 'sort': sort});
     return jobsPage;
   }
 }
@@ -192,19 +194,52 @@ void main() {
       expect(searchRunningCreditsLine(70, CreditProvider.refundPolicySentenceFor('weird')), '70 credits charged at start.');
     });
 
-    test('badges: partial completed, failed with leads, cancelled is neutral, stopping', () {
-      expect(searchPageStatus(_payload(status: 'completed', leads: 5), zeroCities: 1).label,
-          'Completed · 1 city found nothing');
-      expect(searchPageStatus(_payload(status: 'completed', leads: 5, failedCities: 2)).label,
-          'Completed · 2 cities found nothing');
+    test('badges: no-leads vs useful completed, timeouts, partial results, stopping', () {
+      // A completed search with leads stays green even when some cities were empty.
+      expect(searchPageStatus(_payload(status: 'completed', leads: 5), zeroCities: 1).label, 'Completed');
       expect(searchPageStatus(_payload(status: 'completed', leads: 5)).label, 'Completed');
+      final none = searchPageStatus(_payload(status: 'completed', leads: 0));
+      expect(none.label, 'Completed · no leads');
+      expect(none.kind, SearchStatusKind.noLeads);
+      // failed_cities counts timeouts, so the badge says "timed out", not "found nothing".
+      expect(searchPageStatus(_payload(status: 'completed', leads: 5, failedCities: 2)).label,
+          'Completed · 2 cities timed out');
       expect(searchPageStatus(_payload(status: 'failed', leads: 3)).label, 'Failed · partial results');
       expect(searchPageStatus(_payload(status: 'failed', leads: 0)).label, 'Failed');
       final cancelled = searchPageStatus(_payload(status: 'cancelled'));
       expect(cancelled.label, 'Cancelled');
       expect(cancelled.foreground, UiTokens.cancelledFg);
+      expect(searchPageStatus(_payload(status: 'cancelled', leads: 4)).label, 'Cancelled · partial results');
       expect(searchPageStatus(_payload(status: 'running'), stopping: true).label, 'Stopping…');
       expect(searchPageStatus(_payload(status: 'pending')).label, 'Queued');
+    });
+
+    test('outcome line and next step come from the server city summary', () {
+      Map<String, dynamic> withSummary(String status, int leads, Map<String, int> c) =>
+          {..._payload(status: status, leads: leads), 'city_summary': c};
+      final partial = withSummary('cancelled', 4, {
+        'cities_total': 4, 'cities_searched': 2, 'cities_with_leads': 2, 'cities_empty': 0,
+        'cities_timed_out': 0, 'cities_interrupted': 1, 'cities_not_searched': 1,
+      });
+      expect(jobCityOutcomeLine(partial),
+          '2 of 4 cities searched · 2 with leads · 1 stopped part-way · 1 not searched');
+      expect(jobActionLabel(partial), 'View partial results');
+      expect(jobHasPartialResults(partial), isTrue);
+      final empty = withSummary('completed', 0, {
+        'cities_total': 4, 'cities_searched': 4, 'cities_with_leads': 0, 'cities_empty': 4,
+        'cities_timed_out': 0, 'cities_interrupted': 0, 'cities_not_searched': 0,
+      });
+      expect(jobCityOutcomeLine(empty), 'All 4 cities searched · 0 with leads · 4 with no leads');
+      expect(jobActionLabel(empty), 'See details');
+      expect(finishedSearchHeadline(empty), startsWith('This search finished, but no leads were found'));
+      final useful = withSummary('completed', 9, {
+        'cities_total': 4, 'cities_searched': 4, 'cities_with_leads': 3, 'cities_empty': 1,
+        'cities_timed_out': 0, 'cities_interrupted': 0, 'cities_not_searched': 0,
+      });
+      expect(finishedSearchHeadline(useful), '9 leads found in 3 of 4 cities.');
+      expect(jobCityOutcomeLine(_payload(status: 'completed', leads: 2)), isNull); // older server
+      expect(jobActionLabel(_payload(status: 'failed', leads: 2)), 'View partial results');
+      expect(jobActionLabel(_payload(status: 'failed', leads: 0)), 'See why');
     });
 
     test('city lead matching ignores spacing and case', () {
@@ -287,10 +322,13 @@ void main() {
 
     expect(find.text('Failed · partial results'), findsOneWidget);
     expect(find.text('This search stopped early: Boom. 3 leads were saved.'), findsOneWidget);
+    // Partial results: "View partial results" is the primary action, the download says "partial".
     expect(
-      find.ancestor(of: find.text('Download Excel'), matching: find.byWidgetPredicate((w) => w is FilledButton)),
+      find.ancestor(
+          of: find.text('View partial results (3)'), matching: find.byWidgetPredicate((w) => w is FilledButton)),
       findsOneWidget,
     );
+    expect(find.text('Download partial Excel'), findsOneWidget);
     expect(find.text('70 credits charged, 40 returned — 30 used.'), findsOneWidget);
     expect(find.text('Biz 0'), findsOneWidget);
     expect(find.text('Verified Lead'), findsNothing);
@@ -349,7 +387,7 @@ void main() {
           );
     await tester.pumpWidget(_host(api, SearchDetailScreen(jobId: 'job-1', api: api)));
     await _settle(tester);
-    expect(find.text('Cancelled'), findsOneWidget);
+    expect(find.text('Cancelled · partial results'), findsOneWidget);
     expect(find.text('You cancelled this search. 2 leads were saved.'), findsOneWidget);
     expect(find.text('70 credits charged · calculating refund…'), findsOneWidget);
 
@@ -441,5 +479,59 @@ void main() {
       find.ancestor(of: find.text('Find leads'), matching: find.byWidgetPredicate((w) => w is FilledButton)),
       findsOneWidget,
     );
+  });
+
+  testWidgets('My searches: query, date and sort go to the server; pager uses the server total', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final api = FakeApi()
+      ..jobsPage = {
+        'jobs': [for (var i = 0; i < 20; i++) _payload(id: 'job-$i', leads: i)],
+        'total': 45,
+        'counts': <String, int>{'all': 45, 'active': 0, 'completed': 45, 'cancelled': 0, 'failed': 0},
+        'overall_total': 60,
+      };
+    await tester.pumpWidget(_host(api, MySearchesScreen(api: api)));
+    await _settle(tester);
+    expect(api.jobQueries.last['limit'], 20);
+    expect(api.jobQueries.last['offset'], 0);
+    expect(api.jobQueries.last['sort'], 'newest');
+    expect(find.textContaining('Showing 1–20 of 45'), findsOneWidget);
+    expect(find.text('Page 1 of 3'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, 'plumb');
+    await tester.pump(const Duration(milliseconds: 400));
+    await _settle(tester);
+    expect(api.jobQueries.last['q'], 'plumb');
+    expect(api.jobQueries.last['offset'], 0);
+    // Every loaded row is shown as-is: no client-side filtering of the page.
+    expect(find.text('Open results'), findsNWidgets(19)); // job-0 has 0 leads -> "See details"
+
+    await tester.ensureVisible(find.text('Next'));
+    await tester.pump();
+    await tester.tap(find.text('Next'));
+    await _settle(tester);
+    expect(api.jobQueries.last['offset'], 20);
+    expect(api.jobQueries.last['q'], 'plumb');
+
+    await tester.ensureVisible(find.textContaining('Sort:'));
+    await tester.pump();
+    await tester.tap(find.textContaining('Sort:'));
+    await _settle(tester);
+    await tester.tap(find.text('Most leads').last);
+    await _settle(tester);
+    expect(api.jobQueries.last['sort'], 'most_leads');
+    expect(api.jobQueries.last['offset'], 0);
+
+    await tester.ensureVisible(find.text('All dates'));
+    await tester.pump();
+    await tester.tap(find.text('All dates'));
+    await _settle(tester);
+    await tester.tap(find.text('Today').last);
+    await _settle(tester);
+    final from = api.jobQueries.last['from'] as DateTime;
+    final now = DateTime.now();
+    expect(from, DateTime(now.year, now.month, now.day));
   });
 }
