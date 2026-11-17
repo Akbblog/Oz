@@ -5,6 +5,7 @@ import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
 import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
+import '../widgets/app_shell.dart';
 import '../widgets/gradient_button.dart';
 
 class WalletComingSoonScreen extends StatefulWidget {
@@ -19,6 +20,12 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
 
   bool _loading = true;
   int _creditBalance = 0;
+
+  // Credit history (GET /api/credits/history), shown in both payment modes.
+  List<Map<String, dynamic>> _history = const [];
+  bool _historyLoading = true;
+  Object? _historyError;
+  int _historyShown = 20;
   List<String> _methods = const [];
   bool _enableLivePayments = false;
 
@@ -345,14 +352,10 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
                                             ),
                                           );
 
-                                          await Future.delayed(const Duration(
-                                              milliseconds: 1500));
                                           if (!mounted) return;
-                                          Navigator.of(this.context)
-                                              .pushNamedAndRemoveUntil(
-                                            '/home',
-                                            (route) => false,
-                                          );
+                                          // Stay here; the request shows up
+                                          // under "Your credit requests".
+                                          _load();
                                         } catch (e) {
                                           if (!mounted) return;
                                           setState(() => isSubmitting = false);
@@ -422,8 +425,32 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     _load();
   }
 
+  void _showMoreHistory() => setState(() => _historyShown += 20);
+
+  Future<void> _loadHistory() async {
+    setState(() {
+      _historyLoading = true;
+      _historyError = null;
+    });
+    try {
+      final items = await _apiService.getCreditHistory();
+      if (!mounted) return;
+      setState(() {
+        _history = items;
+        _historyLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _historyError = e;
+        _historyLoading = false;
+      });
+    }
+  }
+
   Future<void> _load() async {
     setState(() => _loading = true);
+    _loadHistory();
 
     Map<String, dynamic> balance = {};
     Map<String, dynamic> flags = {};
@@ -469,9 +496,14 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
         AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
     final padding = ResponsiveUtils.getScreenPadding(layoutType);
 
+    // Inside the app shell (/credits) the shell provides title and
+    // navigation: body only, no second header or back button.
+    final embedded = context.findAncestorWidgetOfExactType<AppShell>() != null;
+
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
       body: SafeArea(
+        top: !embedded,
         child: Stack(
           children: [
             // Background gradient
@@ -491,7 +523,7 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
             ),
             Column(
               children: [
-                _buildHeader(),
+                if (!embedded) _buildHeader(),
                 Expanded(
                   child: _loading
                       ? const Center(
@@ -513,6 +545,8 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
                                 _buildComingSoonBanner(),
                                 const SizedBox(height: AppSpacing.lg),
                                 _buildRequestCreditsCard(),
+                                const SizedBox(height: AppSpacing.lg),
+                                _buildHistorySection(),
                                 const SizedBox(height: AppSpacing.xl),
                               ],
                             ),
@@ -951,6 +985,191 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
             onPressed: _showCreditRequestDialog,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Credit history rows (both payment modes, plan §6.8).
+extension _CreditHistory on _WalletComingSoonScreenState {
+  static const Map<String, String> _typeLabels = {
+    'debit': 'Search charge',
+    'refund': 'Refund',
+    'credit': 'Credits added',
+    'bonus': 'Bonus credits',
+    'promotional': 'Promotional credits',
+  };
+
+  Widget _buildHistorySection() {
+    Widget body;
+    if (_historyLoading && _history.isEmpty) {
+      body = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    } else if (_historyError != null && _history.isEmpty) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "We couldn't load your credit history. Your balance is not affected.",
+            style: TextStyle(color: UiTokens.text, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: UiTokens.text,
+              side: const BorderSide(color: UiTokens.border),
+              minimumSize: const Size(44, 44),
+            ),
+            onPressed: _loadHistory,
+            child: const Text('Try again'),
+          ),
+        ],
+      );
+    } else if (_history.isEmpty) {
+      body = const Text('No credit activity yet.',
+          style: TextStyle(color: UiTokens.textSecondary, fontSize: 14));
+    } else {
+      final shown = _history.take(_historyShown).toList();
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < shown.length; i++) ...[
+            if (i > 0) const Divider(height: 1, color: UiTokens.border),
+            _historyRow(shown[i]),
+          ],
+          if (_history.length > _historyShown)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                    foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                onPressed: _showMoreHistory,
+                child: const Text('Show more'),
+              ),
+            ),
+          if (_history.length >= 50)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('Showing your 50 most recent credit changes.',
+                  style: TextStyle(color: UiTokens.textMuted, fontSize: 12)),
+            ),
+        ],
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: UiTokens.card,
+        borderRadius: BorderRadius.circular(UiTokens.radius),
+        border: Border.all(color: UiTokens.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 8,
+            children: [
+              Semantics(
+                header: true,
+                child: const Text('History',
+                    style: TextStyle(
+                        color: UiTokens.text, fontSize: 17, fontWeight: FontWeight.w700)),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    style: TextButton.styleFrom(
+                        foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                    onPressed: () =>
+                        Navigator.of(context).pushNamed('/wallet-request-credits'),
+                    child: const Text('Your credit requests'),
+                  ),
+                  IconButton(
+                    tooltip: 'Refresh history',
+                    style: IconButton.styleFrom(minimumSize: const Size(44, 44)),
+                    onPressed: _historyLoading ? null : _loadHistory,
+                    icon: const Icon(Icons.refresh_rounded, color: UiTokens.textSecondary),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          body,
+        ],
+      ),
+    );
+  }
+
+  Widget _historyRow(Map<String, dynamic> tx) {
+    final rawAmount = tx['amount'];
+    final amount =
+        rawAmount is num ? rawAmount.toInt() : int.tryParse('${rawAmount ?? ''}') ?? 0;
+    final type = '${tx['transaction_type'] ?? tx['type'] ?? ''}'.trim();
+    final reason = '${tx['reason'] ?? tx['description'] ?? ''}'.trim();
+    final typeLabel =
+        _typeLabels[type] ?? (amount >= 0 ? 'Credits added' : 'Credits used');
+    final description = reason.isEmpty || reason == 'null' ? typeLabel : reason;
+    final rawAfter = tx['balance_after'];
+    final balanceAfter =
+        rawAfter is num ? rawAfter.toInt() : int.tryParse('${rawAfter ?? ''}');
+    final jobId = '${tx['job_id'] ?? ''}'.trim();
+    final positive = amount > 0;
+    final sign = positive ? '+' : (amount < 0 ? '−' : '');
+    final amountText = '$sign${formatCount(amount.abs())}';
+
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(description,
+                    style: const TextStyle(
+                        color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    formatServerDateTime(tx['created_at']),
+                    if (type == 'refund' && description != typeLabel) 'Refund',
+                    if (balanceAfter != null) 'Balance after: ${formatCount(balanceAfter)}',
+                  ].join(' · '),
+                  style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            amountText,
+            semanticsLabel: positive
+                ? 'plus ${amount.abs()} credits'
+                : 'minus ${amount.abs()} credits',
+            style: TextStyle(
+              color: positive ? UiTokens.completedFg : UiTokens.text,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (jobId.isEmpty || jobId == 'null') return row;
+    return Tooltip(
+      message: 'Open this search',
+      child: InkWell(
+        onTap: () =>
+            Navigator.of(context).pushNamed('/searches/${Uri.encodeComponent(jobId)}'),
+        child: row,
       ),
     );
   }

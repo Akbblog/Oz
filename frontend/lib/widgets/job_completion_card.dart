@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/theme/app_theme.dart';
 
@@ -100,10 +101,9 @@ class JobCompletionCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '#$jobId   ${_formatJobCompactDateTime(completedAt)}',
+                      _formatJobCompactDateTime(completedAt),
                       style: AppTypography.bodySmall.copyWith(
-                        color: Colors.white54,
-                        fontFamily: 'monospace',
+                        color: Colors.white70,
                       ),
                     ),
                   ],
@@ -141,7 +141,7 @@ class JobCompletionCard extends StatelessWidget {
                   ],
                 ),
               ),
-              if (trailing != null) trailing!,
+              trailing ?? _CopyIdMenu(jobId: jobId),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -418,10 +418,9 @@ class JobStatusCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '#$jobId   ${_formatJobCompactDateTime(timestamp)}',
+                      _formatJobCompactDateTime(timestamp),
                       style: AppTypography.bodySmall.copyWith(
-                        color: Colors.white54,
-                        fontFamily: 'monospace',
+                        color: Colors.white70,
                       ),
                     ),
                   ],
@@ -455,7 +454,7 @@ class JobStatusCard extends StatelessWidget {
                   ],
                 ),
               ),
-              if (trailing != null) trailing!,
+              trailing ?? _CopyIdMenu(jobId: jobId),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -681,7 +680,32 @@ IconData _jobCategoryIcon(String category) {
   return Icons.work_history_rounded;
 }
 
-String _formatJobCompactDateTime(DateTime value) {
+/// "Overflow" menu with "Copy ID" (the raw ID is never a headline).
+class _CopyIdMenu extends StatelessWidget {
+  final String jobId;
+
+  const _CopyIdMenu({required this.jobId});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: 'More actions',
+      icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 20),
+      onSelected: (_) async {
+        await Clipboard.setData(ClipboardData(text: jobId));
+        if (!context.mounted) return;
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Search ID copied'), behavior: SnackBarBehavior.floating),
+        );
+      },
+      itemBuilder: (_) => const [PopupMenuItem(value: 'copy-id', child: Text('Copy ID'))],
+    );
+  }
+}
+
+/// Local time ("Nov 17, 13:04"); callers may pass UTC instants.
+String _formatJobCompactDateTime(DateTime utcOrLocal) {
+  final value = utcOrLocal.toLocal();
   const months = [
     'Jan',
     'Feb',

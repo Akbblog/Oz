@@ -525,6 +525,18 @@ class ApiService {
     }
   }
 
+  /// GET /api/locations/summary → `{countries: {Canada: {region_term:
+  /// "province", regions: {Quebec: 30, ...}}}}` (public, read-only).
+  /// Returns the inner `countries` map.
+  Future<Map<String, dynamic>> getLocationsSummary() async {
+    final data = await _getJson('/api/locations/summary',
+        context: 'Loading locations');
+    final countries = data is Map ? data['countries'] : null;
+    return countries is Map
+        ? Map<String, dynamic>.from(countries)
+        : <String, dynamic>{};
+  }
+
   Future<bool> healthCheck() async {
     try {
       final response = await http
@@ -2279,5 +2291,46 @@ class ApiService {
     } else {
       throw Exception('Failed to restore user');
     }
+  }
+
+  // ------------------------------------------------ search page (FE-SEARCH)
+
+  /// Excel file of a search's saved leads (GET /api/jobs/{id}/download):
+  /// `{filename, content (base64), content_type}`. Works for completed,
+  /// cancelled and failed searches with at least one saved lead. Errors keep
+  /// the server's own wording: [NotFoundException] ("No leads were saved for
+  /// this search" / "Job not found") and an [ApiException] with status 409
+  /// while the search is still running.
+  Future<Map<String, dynamic>> downloadJobExcel(String jobId) async {
+    final data = await _getJson(
+      '/api/jobs/${Uri.encodeComponent(jobId)}/download',
+      context: 'Download',
+      requestTimeout: const Duration(seconds: 90),
+    );
+    if (data is! Map || data['content'] is! String) {
+      throw ApiException('The download was empty. Please try again.');
+    }
+    return {
+      'filename': '${data['filename'] ?? 'leads.xlsx'}',
+      'content': data['content'],
+      'content_type': data['content_type'] ??
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    };
+  }
+
+  /// Saved leads of one search (GET /api/jobs/{id}/results) with readable
+  /// errors.
+  Future<List<Map<String, dynamic>>> getJobLeads(String jobId) async {
+    final data = await _getJson(
+      '/api/jobs/${Uri.encodeComponent(jobId)}/results',
+      context: 'Loading leads',
+      requestTimeout: const Duration(seconds: 60),
+    );
+    final raw = data is Map ? data['results'] : data;
+    if (raw is! List) return <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
   }
 }

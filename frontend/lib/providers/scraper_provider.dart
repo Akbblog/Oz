@@ -253,8 +253,12 @@ class ScraperProvider with ChangeNotifier {
     required List<String> citiesData,
     int maxResultsPerCity = 10,
   }) async {
-    if (hasActiveJob) {
-      _startError = 'A job is already running. Wait for it to finish or cancel it first.';
+    // Only block a second press while a start is in flight. A search that is
+    // already running keeps running on the server (it stays in the live chip
+    // and My searches); the server enforces the concurrent-search limit and
+    // its message is shown if it is reached.
+    if (_starting) {
+      _startError = 'Your search is already starting.';
       _notify();
       return false;
     }

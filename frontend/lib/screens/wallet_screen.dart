@@ -5,6 +5,7 @@ import '../core/theme/app_typography.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
+import '../widgets/app_shell.dart' show AppShell;
 import '../widgets/low_balance_alert.dart';
 import '../widgets/subscription_status_banner.dart';
 import 'pricing_screen.dart';
@@ -256,15 +257,20 @@ class _WalletScreenState extends State<WalletScreen>
       ResponsiveUtils.getScreenPadding(layoutType),
     );
 
+    // Inside the app shell (/credits) the shell provides the title and
+    // navigation: render the body only (no second header/back button).
+    final embedded = context.findAncestorWidgetOfExactType<AppShell>() != null;
+
     return Scaffold(
       backgroundColor: _WalletColors.background,
       body: SafeArea(
+        top: !embedded,
         child: Stack(
           children: [
             _buildBackground(),
             Column(
               children: [
-                _buildHeader(),
+                if (!embedded) _buildHeader(),
                 Expanded(
                   child: _isLoading
                       ? const SizedBox.expand(
@@ -294,6 +300,8 @@ class _WalletScreenState extends State<WalletScreen>
                                             if (!_alertDismissed)
                                               LowBalanceAlert(
                                                 currentBalance: _creditBalance,
+                                                livePayments:
+                                                    widget.enableLivePayments,
                                                 onBuyCredits: () => widget
                                                         .enableLivePayments
                                                     ? _navigateToPricing()

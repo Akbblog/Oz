@@ -1,24 +1,94 @@
 import 'dart:convert';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import '../core/download_helper.dart';
+import '../core/error_handler.dart';
+import '../core/theme/app_breakpoints.dart';
+import '../core/utils/refresh_bus.dart';
 import '../providers/scraper_provider.dart';
 import '../services/api_service.dart';
-import '../core/download_helper.dart';
-import '../core/theme/app_spacing.dart';
-import '../core/theme/app_typography.dart';
-import '../core/theme/app_colors.dart';
-import '../core/theme/app_breakpoints.dart';
-import '../core/utils/responsive_utils.dart';
-import '../widgets/progress_stepper.dart';
-import '../core/utils/refresh_bus.dart';
+import '../widgets/app_shell_common.dart';
 import '../widgets/infinity_data_table.dart';
+import '../widgets/search_actions.dart';
 
+/// Sort orders of the lead list. The API returns leads in the order they
+/// were found; there is no other "newest" ordering.
+enum LeadSort { original, name, category, city }
+
+/// Contact filters ("Has phone", ...). None selected = every lead is shown.
+enum LeadContact { phone, email, website, address }
+
+bool _has(Object? v) {
+  final s = '${v ?? ''}'.trim();
+  return s.isNotEmpty && s != 'N/A' && s != 'null';
+}
+
+bool leadHasContact(Map<String, dynamic> lead, LeadContact c) {
+  switch (c) {
+    case LeadContact.phone:
+      return _has(lead['phone']);
+    case LeadContact.email:
+      return _has(lead['email']);
+    case LeadContact.website:
+      return _has(lead['website']);
+    case LeadContact.address:
+      return _has(lead['address']) || _has(lead['google_maps_url']);
+  }
+}
+
+String leadName(Map<String, dynamic> lead) {
+  final n = '${lead['business_name'] ?? lead['name'] ?? ''}'.trim();
+  return n.isEmpty ? 'Unnamed business' : n;
+}
+
+String leadCityLabel(Map<String, dynamic> lead) {
+  final city = '${lead['city'] ?? ''}'.trim();
+  if (city.isEmpty || city == 'N/A') return '';
+  final state = '${lead['state'] ?? ''}'.trim();
+  return state.isEmpty || state == 'N/A' ? city : '$city, $state';
+}
+
+/// Stored Google Maps URL when it is a real http(s) link, else a maps search
+/// for the business name and address.
+Uri? leadMapsUri(Map<String, dynamic> lead) {
+  final stored = '${lead['google_maps_url'] ?? ''}'.trim();
+  if (stored.isNotEmpty) {
+    final u = Uri.tryParse(stored);
+    if (u != null && (u.scheme == 'https' || u.scheme == 'http') && u.host.isNotEmpty) return u;
+  }
+  final address = '${lead['address'] ?? ''}'.trim();
+  if (!_has(address)) return null;
+  final name = leadName(lead);
+  final q = name == 'Unnamed business' ? address : '$name, $address';
+  return Uri.parse('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
+}
+
+/// The leads of a search: search, city filter, contact filters (off by
+/// default), sort, cards or table (desktop), selection with CSV/JSON export
+/// at every width, and per-lead actions (call, email, website, map, copy).
+///
+/// * `embedded: true` – body of the search page (`/searches/<id>`): no own
+///   header; [leading] widgets scroll above the leads.
+/// * otherwise a full page with a simple header (used by the admin screens).
 class ResultsScreen extends StatefulWidget {
   final String? jobId;
   final List<Map<String, dynamic>>? overrideResults;
   final String? title;
   final bool showHeader;
+  final bool embedded;
+  final List<Widget> leading;
+
+  /// Business type, used in export file names.
+  final String? category;
+  final ApiService? api;
+
+  /// The caller is loading the leads and will pass them as
+  /// [overrideResults]: show "Loading leads…" instead of fetching.
+  final bool resultsPending;
 
   const ResultsScreen({
     super.key,
@@ -26,1986 +96,1136 @@ class ResultsScreen extends StatefulWidget {
     this.overrideResults,
     this.title,
     this.showHeader = true,
+    this.embedded = false,
+    this.leading = const <Widget>[],
+    this.category,
+    this.api,
+    this.resultsPending = false,
   });
 
   @override
   State<ResultsScreen> createState() => _ResultsScreenState();
 }
 
-class _ResultsScreenState extends State<ResultsScreen>
-    with SingleTickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
-  final ApiService _apiService = ApiService();
-  bool _isLoading = false;
-  bool _isDownloading = false;
-  String? _error;
-  String? _emptyMessage;
-  List<Map<String, dynamic>> _loadedResults = [];
+
+  late final ApiService _api = widget.api ?? ApiService();
+
+  bool _loading = false;
+  Object? _error;
+  List<Map<String, dynamic>> _all = const [];
   String? _loadedJobId;
+  bool _downloading = false;
 
-  // Search and filter state
   final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
-  String _sortOption = 'Newest'; // Newest, Name A-Z, Category
-  String _viewMode = 'Cards'; // Cards, Table
-  String _cityFilter = 'All Cities';
-  bool _contactMatchAll = false; // Any vs All selected contact filters
-  bool _requireWebsite = false;
-  Set<String> _contactFilters = {'Phone', 'Email', 'Website', 'Maps'};
-  // Contact type filters
+  String _query = '';
+  String _city = '';
+  final Set<LeadContact> _contacts = <LeadContact>{};
+  bool _matchAll = false;
+  LeadSort _sort = LeadSort.original;
+  bool _table = false;
+  bool _filtersOpen = false;
 
-  // Table view state (bulk actions)
-  Set<int> _selectedTableRows = {};
-  int? _tableSortColumnIndex;
+  /// Selected leads as indices into [_all].
+  Set<int> _selected = <int>{};
+  int? _tableSortColumn;
   bool _tableSortAscending = true;
-
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
 
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: AppSpacing.durationMedium,
-    );
-    _fadeAnimation = CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    );
-    _animationController.forward();
-    if (widget.jobId == null && widget.overrideResults == null) {
-      RefreshBus.jobsChanged.addListener(_reloadLatest);
-      RefreshBus.tabActivated.addListener(_onTabActivated);
+    if (widget.overrideResults != null) {
+      _all = widget.overrideResults!;
+      _loadedJobId = widget.jobId;
+    } else if (widget.resultsPending) {
+      _loading = true;
+    } else {
+      _load();
     }
-    _loadIfNeeded();
-  }
-
-  void _onTabActivated() {
-    if (RefreshBus.tabActivated.value == 3) _reloadLatest();
-  }
-
-  void _reloadLatest() {
-    if (mounted) _loadIfNeeded();
+    if (widget.jobId == null && widget.overrideResults == null) {
+      RefreshBus.jobsChanged.addListener(_load);
+    }
   }
 
   @override
   void didUpdateWidget(covariant ResultsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final jobIdChanged = widget.jobId != oldWidget.jobId;
-    final overrideResultsChanged =
-        widget.overrideResults != oldWidget.overrideResults;
-
-    if (jobIdChanged || overrideResultsChanged) {
+    final jobChanged = widget.jobId != oldWidget.jobId;
+    if (jobChanged) {
+      _searchController.clear();
+      _query = '';
+      _city = '';
+      _selected = <int>{};
+    }
+    if (widget.overrideResults != null &&
+        (jobChanged || !identical(widget.overrideResults, oldWidget.overrideResults))) {
+      _all = widget.overrideResults!;
+      _loadedJobId = widget.jobId;
       _error = null;
-      _emptyMessage = null;
-      _loadedResults = [];
-      _loadedJobId = null;
-      _selectedTableRows = {};
-      _tableSortColumnIndex = null;
-      _tableSortAscending = true;
-
-      if (jobIdChanged) {
-        _searchController.text = '';
-        _searchQuery = '';
-        _cityFilter = 'All Cities';
-      }
-
-      _loadIfNeeded();
+      _loading = false;
+      _selected = <int>{};
+    } else if (widget.overrideResults == null && widget.resultsPending) {
+      _loading = true;
+    } else if (widget.overrideResults == null && (jobChanged || oldWidget.resultsPending)) {
+      _load();
     }
   }
 
   @override
   void dispose() {
-    RefreshBus.jobsChanged.removeListener(_reloadLatest);
-    RefreshBus.tabActivated.removeListener(_onTabActivated);
-    _animationController.dispose();
+    RefreshBus.jobsChanged.removeListener(_load);
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadIfNeeded() async {
-    if (widget.overrideResults != null) return;
-
-    if (widget.jobId != null) {
-      await _loadJobResults(widget.jobId!);
-      return;
-    }
-
-    await _loadMostRecentResults();
-  }
-
-  Future<void> _refreshResults() async {
-    if (widget.overrideResults != null) {
-      return;
-    }
-
-    try {
-      final jobId = widget.jobId ?? _loadedJobId;
-      if (jobId == null) return;
-      await _loadJobResults(jobId, showLoading: false);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to refresh results: $e'),
-            backgroundColor: AppColors.dangerRed,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _loadJobResults(
-    String jobId, {
-    bool showLoading = true,
-  }) async {
-    if (jobId.trim().isEmpty) return;
-
-    if (showLoading) {
-      setState(() {
-        _isLoading = true;
-        _error = null;
-        _emptyMessage = null;
-        _loadedResults = [];
-        _loadedJobId = jobId;
-      });
-    } else {
-      setState(() {
-        _error = null;
-        _emptyMessage = null;
-        _loadedJobId = jobId;
-      });
-    }
-
-    try {
-      final data = await _apiService.getJobResults(jobId);
-      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
-      if (!mounted) return;
-      setState(() {
-        _loadedResults = results;
-        _isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = 'Failed to load results: $e';
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _loadMostRecentResults() async {
-    // If we have live results (current job), don't replace the UI with a loader.
-    final scraperProvider =
-        Provider.of<ScraperProvider>(context, listen: false);
-    final liveResults = scraperProvider.currentJob?.results;
-    if (liveResults != null && liveResults.isNotEmpty) {
-      return;
-    }
-
+  Future<void> _load({bool silent = false}) async {
+    if (!mounted) return;
     setState(() {
-      _isLoading = true;
+      _loading = !silent || _all.isEmpty;
       _error = null;
-      _emptyMessage = null;
-      _loadedResults = [];
-      _loadedJobId = null;
     });
-
     try {
-      final jobs = await _apiService.getUserJobs();
-      if (!mounted) return;
-
-      if (jobs.isEmpty) {
-        setState(() {
-          _isLoading = false;
-          _loadedResults = [];
-          _loadedJobId = null;
-          _emptyMessage = 'No jobs found. Start a new search to see results.';
-        });
-        return;
+      var jobId = widget.jobId;
+      if (jobId == null) {
+        final live = context.read<ScraperProvider>().currentJob;
+        if (live != null && live.resultsLoaded && live.results.isNotEmpty) {
+          if (!mounted) return;
+          setState(() {
+            _all = live.results;
+            _loadedJobId = live.jobId;
+            _loading = false;
+          });
+          return;
+        }
+        final page = await _api.getJobs(limit: 1);
+        final jobs = page['jobs'] as List;
+        if (jobs.isEmpty) {
+          if (!mounted) return;
+          setState(() {
+            _all = const [];
+            _loading = false;
+          });
+          return;
+        }
+        jobId = '${(jobs.first as Map)['job_id']}';
       }
-
-      final latestJob = jobs.first;
-      final latestJobId = (latestJob['job_id'] ?? '').toString();
-      if (latestJobId.trim().isEmpty) {
-        setState(() {
-          _isLoading = false;
-          _loadedResults = [];
-          _loadedJobId = null;
-          _emptyMessage = 'No recent job id found.';
-        });
-        return;
-      }
-
-      final data = await _apiService.getJobResults(latestJobId);
-      final results = List<Map<String, dynamic>>.from(data['results'] ?? []);
+      final leads = await _api.getJobLeads(jobId);
       if (!mounted) return;
       setState(() {
-        _loadedResults = results;
-        _loadedJobId = latestJobId;
-        _isLoading = false;
-        if (results.isEmpty) {
-          _emptyMessage = 'Your most recent job has no results yet.';
-        }
+        _all = leads;
+        _loadedJobId = jobId;
+        _loading = false;
+        _selected = <int>{};
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Failed to load results: $e';
-        _isLoading = false;
+        _error = e;
+        _loading = false;
       });
     }
   }
 
-  List<Map<String, dynamic>> _resolveResults(ScraperProvider scraperProvider) {
-    if (widget.overrideResults != null) {
-      return widget.overrideResults!;
-    }
-    if (widget.jobId != null) {
-      return _loadedResults;
-    }
-    final live = scraperProvider.currentJob?.results;
-    if (live != null && live.isNotEmpty) return live;
-    return _loadedResults;
+  Future<void> _refresh() async {
+    if (widget.jobId == null && widget.overrideResults != null) return;
+    await _load(silent: true);
   }
 
-  List<Map<String, dynamic>> _filterAndSortResults(
-      List<Map<String, dynamic>> results) {
-    var filtered = results.where((business) {
-      // Apply search filter
-      if (_searchQuery.isNotEmpty) {
-        final name = (business['business_name'] ?? business['name'] ?? '')
-            .toString()
-            .toLowerCase();
-        final category = (business['category'] ?? '').toString().toLowerCase();
-        final city = (business['city'] ?? '').toString().toLowerCase();
-        final address = (business['address'] ?? '').toString().toLowerCase();
-        final email = (business['email'] ?? '').toString().toLowerCase();
-        final query = _searchQuery.toLowerCase();
+  // ----------------------------------------------------------- filtering
 
-        if (!name.contains(query) &&
-            !category.contains(query) &&
-            !city.contains(query) &&
-            !email.contains(query) &&
-            !address.contains(query)) {
-          return false;
-        }
-      }
+  bool get _filtersActive =>
+      _query.trim().isNotEmpty || _city.isNotEmpty || _contacts.isNotEmpty || _sort != LeadSort.original;
 
-      // City filter
-      if (_cityFilter != 'All Cities') {
-        final city = (business['city'] ?? '').toString().trim();
-        final state = (business['state'] ?? '').toString().trim();
-        final cityState = state.isEmpty ? city : '$city, $state';
-        if (cityState != _cityFilter) {
-          return false;
-        }
-      }
-
-      // Apply contact type filters
-      final hasPhone = business['phone'] != null &&
-          (business['phone'] ?? '').toString().isNotEmpty &&
-          business['phone'] != 'N/A';
-      final hasEmail = business['email'] != null &&
-          (business['email'] ?? '').toString().isNotEmpty &&
-          business['email'] != 'N/A';
-      final hasWebsite = business['website'] != null &&
-          (business['website'] ?? '').toString().isNotEmpty &&
-          business['website'] != 'N/A';
-      final hasAddress = business['address'] != null &&
-          (business['address'] ?? '').toString().isNotEmpty &&
-          business['address'] != 'N/A';
-
-      if (_requireWebsite && !hasWebsite) return false;
-
-      // If no filters selected, show all
-      if (_contactFilters.isEmpty) return true;
-
-      if (_contactMatchAll) {
-        if (_contactFilters.contains('Phone') && !hasPhone) return false;
-        if (_contactFilters.contains('Email') && !hasEmail) return false;
-        if (_contactFilters.contains('Website') && !hasWebsite) return false;
-        if (_contactFilters.contains('Maps') && !hasAddress) return false;
-        return true;
-      }
-
-      // Match ANY selected filter (OR logic)
-      if (_contactFilters.contains('Phone') && hasPhone) return true;
-      if (_contactFilters.contains('Email') && hasEmail) return true;
-      if (_contactFilters.contains('Website') && hasWebsite) return true;
-      if (_contactFilters.contains('Maps') && hasAddress) return true;
-      return false;
-    }).toList();
-
-    // Apply sorting
-    if (_sortOption == 'Name A-Z') {
-      filtered.sort((a, b) {
-        final nameA =
-            (a['business_name'] ?? a['name'] ?? '').toString().toLowerCase();
-        final nameB =
-            (b['business_name'] ?? b['name'] ?? '').toString().toLowerCase();
-        return nameA.compareTo(nameB);
-      });
-    } else if (_sortOption == 'Category') {
-      filtered.sort((a, b) {
-        final catA = (a['category'] ?? '').toString().toLowerCase();
-        final catB = (b['category'] ?? '').toString().toLowerCase();
-        return catA.compareTo(catB);
-      });
-    } else if (_sortOption == 'City') {
-      filtered.sort((a, b) {
-        final cityA = (a['city'] ?? '').toString().toLowerCase();
-        final cityB = (b['city'] ?? '').toString().toLowerCase();
-        if (cityA != cityB) return cityA.compareTo(cityB);
-        final nameA =
-            (a['business_name'] ?? a['name'] ?? '').toString().toLowerCase();
-        final nameB =
-            (b['business_name'] ?? b['name'] ?? '').toString().toLowerCase();
-        return nameA.compareTo(nameB);
-      });
-    }
-    // 'Newest' keeps the original order
-
-    return filtered;
+  void _clearFilters() {
+    setState(() {
+      _searchController.clear();
+      _query = '';
+      _city = '';
+      _contacts.clear();
+      _matchAll = false;
+      _sort = LeadSort.original;
+      _selected = <int>{};
+    });
   }
 
-  Future<void> _launchUrl(String url) async {
-    if (url.isEmpty || url == 'N/A') return;
-
-    String finalUrl = url;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      finalUrl = 'https://$url';
+  /// Indices into [_all] of the leads shown, in display order.
+  List<int> _visibleIndices() {
+    final q = _query.trim().toLowerCase();
+    final out = <int>[];
+    for (var i = 0; i < _all.length; i++) {
+      final lead = _all[i];
+      if (q.isNotEmpty) {
+        final hay = [
+          leadName(lead),
+          lead['category'],
+          lead['city'],
+          lead['state'],
+          lead['address'],
+          lead['email'],
+          lead['phone'],
+          lead['website'],
+        ].map((v) => '${v ?? ''}'.toLowerCase()).join(' ');
+        if (!hay.contains(q)) continue;
+      }
+      if (_city.isNotEmpty && leadCityLabel(lead) != _city) continue;
+      if (_contacts.isNotEmpty) {
+        final matches = _contacts.where((c) => leadHasContact(lead, c)).length;
+        if (_matchAll ? matches != _contacts.length : matches == 0) continue;
+      }
+      out.add(i);
     }
+    int byText(int a, int b, String Function(Map<String, dynamic>) key) =>
+        key(_all[a]).toLowerCase().compareTo(key(_all[b]).toLowerCase());
+    switch (_sort) {
+      case LeadSort.original:
+        break;
+      case LeadSort.name:
+        out.sort((a, b) => byText(a, b, leadName));
+        break;
+      case LeadSort.category:
+        out.sort((a, b) {
+          final c = byText(a, b, (l) => '${l['category'] ?? ''}');
+          return c != 0 ? c : byText(a, b, leadName);
+        });
+        break;
+      case LeadSort.city:
+        out.sort((a, b) {
+          final c = byText(a, b, leadCityLabel);
+          return c != 0 ? c : byText(a, b, leadName);
+        });
+        break;
+    }
+    return out;
+  }
 
+  List<String> _cityOptions() {
+    final set = <String>{};
+    for (final l in _all) {
+      final c = leadCityLabel(l);
+      if (c.isNotEmpty) set.add(c);
+    }
+    return set.toList()..sort();
+  }
+
+  static String _sortLabel(LeadSort s) {
+    switch (s) {
+      case LeadSort.original:
+        return 'Original order';
+      case LeadSort.name:
+        return 'Name A–Z';
+      case LeadSort.category:
+        return 'Category';
+      case LeadSort.city:
+        return 'City';
+    }
+  }
+
+  static String _contactLabel(LeadContact c) {
+    switch (c) {
+      case LeadContact.phone:
+        return 'Has phone';
+      case LeadContact.email:
+        return 'Has email';
+      case LeadContact.website:
+        return 'Has website';
+      case LeadContact.address:
+        return 'Has address';
+    }
+  }
+
+  // -------------------------------------------------------------- export
+
+  String get _fileBase {
+    final id = (widget.jobId ?? _loadedJobId ?? '');
+    final shortId = id.length > 8 ? id.substring(0, 8) : id;
+    final cat = safeFileNamePart(widget.category ?? (widget.title ?? 'leads'), maxLength: 30);
+    return shortId.isEmpty ? 'leads_$cat' : 'leads_${cat}_$shortId';
+  }
+
+  List<Map<String, dynamic>> _selectedLeads() =>
+      (_selected.toList()..sort()).where((i) => i >= 0 && i < _all.length).map((i) => _all[i]).toList();
+
+  Future<void> _exportCsv(List<Map<String, dynamic>> leads, String suffix) async {
+    if (leads.isEmpty) return;
+    await saveCsv(leadsToCsv(leads), '${_fileBase}_${suffix}_${fileTimestamp()}', context: context);
+  }
+
+  Future<void> _exportJson(List<Map<String, dynamic>> leads, String suffix) async {
+    if (leads.isEmpty) return;
+    final clean = leads.map((l) => {for (final c in leadCsvColumns) c: l[c] ?? (c == 'business_name' ? l['name'] : null)}).toList();
+    await saveJson(jsonEncode(clean), '${_fileBase}_${suffix}_${fileTimestamp()}', context: context);
+  }
+
+  Future<void> _downloadExcel() async {
+    final id = widget.jobId ?? _loadedJobId;
+    if (id == null || _downloading) return;
+    setState(() => _downloading = true);
+    await downloadSearchExcel(context, _api, id);
+    if (mounted) setState(() => _downloading = false);
+  }
+
+  // ------------------------------------------------------------- actions
+
+  Future<void> _open(Uri uri, {bool external = true}) async {
     try {
-      final uri = Uri.parse(finalUrl);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not open: $url'),
-            backgroundColor: AppColors.dangerRed,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error opening URL: $e'),
-            backgroundColor: AppColors.dangerRed,
-          ),
-        );
-      }
+      final ok = await launchUrl(uri, mode: external ? LaunchMode.externalApplication : LaunchMode.platformDefault);
+      if (!ok && mounted) showSearchSnack(context, "Couldn't open ${uri.toString()}", error: true);
+    } catch (_) {
+      if (mounted) showSearchSnack(context, "Couldn't open ${uri.toString()}", error: true);
     }
   }
 
-  Future<void> _launchPhone(String phone) async {
-    if (phone.isEmpty || phone == 'N/A') return;
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$cleanPhone');
-
-    try {
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      }
-    } catch (e) {
-      debugPrint('Error launching phone: $e');
-    }
+  void _call(String phone) {
+    final clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (clean.isEmpty) return;
+    _open(Uri(scheme: 'tel', path: clean), external: false);
   }
 
-  Future<void> _launchMaps(String address) async {
-    if (address.isEmpty || address == 'N/A') return;
-
-    final encodedAddress = Uri.encodeComponent(address);
-    final uri = Uri.parse(
-      'https://www.google.com/maps/search/?api=1&query=$encodedAddress',
-    );
-
-    try {
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('Error launching maps: $e');
-    }
+  void _email(String email) {
+    final e = email.trim();
+    if (e.isEmpty) return;
+    _open(Uri(scheme: 'mailto', path: e), external: false);
   }
 
-  Future<void> _launchEmail(String email) async {
-    if (email.isEmpty || email == 'N/A') return;
-    final cleanEmail = email.trim();
-    final uri = Uri.parse('mailto:$cleanEmail');
-
-    try {
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      }
-    } catch (e) {
-      debugPrint('Error launching email: $e');
-    }
+  void _website(String website) {
+    var w = website.trim();
+    if (w.isEmpty) return;
+    if (!w.startsWith('http://') && !w.startsWith('https://')) w = 'https://$w';
+    final uri = Uri.tryParse(w);
+    if (uri != null) _open(uri);
   }
 
-  List<Widget> _buildContactFilterChips() {
-    const filters = ['Phone', 'Email', 'Website', 'Maps'];
-    return filters.map((filter) {
-      final isActive = _contactFilters.contains(filter);
-      return Padding(
-        padding: const EdgeInsets.only(right: AppSpacing.xs),
-        child: GestureDetector(
-          onTap: () {
-            setState(() {
-              if (isActive) {
-                _contactFilters.remove(filter);
-              } else {
-                _contactFilters.add(filter);
-              }
-              _selectedTableRows = {};
-            });
-          },
-          child: AnimatedContainer(
-            duration: AppSpacing.durationFast,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm,
-              vertical: AppSpacing.xs,
-            ),
-            decoration: BoxDecoration(
-              color: isActive
-                  ? AppColors.primaryBlue.withValues(alpha: 0.18)
-                  : AppColors.elevatedCardDark,
-              borderRadius: AppSpacing.borderRadiusSm,
-              border: Border.all(
-                color: isActive
-                    ? AppColors.primaryBlueLight.withValues(alpha: 0.85)
-                    : Colors.white.withValues(alpha: 0.08),
-                width: isActive ? 1.5 : 1,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  filter == 'Phone'
-                      ? Icons.phone_rounded
-                      : filter == 'Email'
-                          ? Icons.email_rounded
-                          : filter == 'Website'
-                              ? Icons.language_rounded
-                              : Icons.location_on_rounded,
-                  size: 14,
-                  color: isActive ? Colors.white : Colors.white70,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  filter,
-                  style: AppTypography.labelSmall.copyWith(
-                    color: isActive ? Colors.white : Colors.white70,
-                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+  void _maps(Map<String, dynamic> lead) {
+    final uri = leadMapsUri(lead);
+    if (uri != null) _open(uri);
+  }
+
+  LeadActions get _actions => LeadActions(
+        call: _call,
+        email: _email,
+        website: _website,
+        maps: _maps,
+        copy: (text, what) => copyWithSnack(context, text),
       );
-    }).toList();
-  }
 
-  List<Widget> _buildContactMatchModeChips() {
-    return [
-      _matchModeChip(
-        label: 'ANY',
-        isActive: !_contactMatchAll,
-        onTap: () {
-          setState(() {
-            _contactMatchAll = false;
-            _selectedTableRows = {};
-          });
-        },
-      ),
-      const SizedBox(width: AppSpacing.xs),
-      _matchModeChip(
-        label: 'ALL',
-        isActive: _contactMatchAll,
-        onTap: () {
-          setState(() {
-            _contactMatchAll = true;
-            _selectedTableRows = {};
-          });
-        },
-      ),
-    ];
-  }
-
-  Widget _matchModeChip({
-    required String label,
-    required bool isActive,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: AppSpacing.durationFast,
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: AppSpacing.xs,
-        ),
-        decoration: BoxDecoration(
-          color: isActive
-              ? AppColors.primaryBlue.withValues(alpha: 0.18)
-              : Colors.white.withValues(alpha: 0.05),
-          borderRadius: AppSpacing.borderRadiusSm,
-          border: Border.all(
-            color: isActive
-                ? AppColors.primaryBlueLight.withValues(alpha: 0.85)
-                : Colors.white.withValues(alpha: 0.1),
-          ),
-        ),
-        child: Text(
-          label,
-          style: AppTypography.labelSmall.copyWith(
-            color: isActive ? Colors.white : Colors.white60,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1.0,
-          ),
-        ),
-      ),
-    );
-  }
+  // --------------------------------------------------------------- build
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
-    final scraperProvider = Provider.of<ScraperProvider>(context);
-    final allResults = _resolveResults(scraperProvider);
-    final filteredResults = _filterAndSortResults(allResults);
-    final layoutType =
-        AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
+    super.build(context);
+    final body = _buildScroll(context);
+    if (widget.embedded) return body;
 
     return Scaffold(
-      backgroundColor: AppColors.backgroundDark,
-      body: SafeArea(
-        top: widget.showHeader,
-        bottom: false,
-        child: FadeTransition(
-          opacity: _fadeAnimation,
-          child: Stack(
-            children: [
-              _buildBackgroundEffects(),
-              Column(
-                children: [
-                  if (widget.showHeader) _buildHeader(allResults.length),
-                  if (widget.showHeader) const WorkflowStepper(currentStep: 3),
-                  _buildSearchAndFilter(layoutType, allResults),
-                  _buildStats(filteredResults),
-                  Expanded(child: _buildContent(filteredResults, layoutType)),
-                ],
+      backgroundColor: UiTokens.background,
+      appBar: widget.showHeader
+          ? AppBar(
+              backgroundColor: UiTokens.background,
+              foregroundColor: UiTokens.text,
+              elevation: 0,
+              title: Text(
+                widget.title ?? 'Leads',
+                style: const TextStyle(color: UiTokens.text, fontSize: 18, fontWeight: FontWeight.w700),
               ),
-            ],
+              actions: [
+                if (widget.overrideResults == null && (widget.jobId ?? _loadedJobId) != null && _all.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                      onPressed: _downloading ? null : _downloadExcel,
+                      icon: _downloading
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.download_rounded, size: 18),
+                      label: const Text('Download Excel'),
+                    ),
+                  )
+                else if (_all.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                      onPressed: () => _exportCsv(_all, 'all'),
+                      icon: const Icon(Icons.download_rounded, size: 18),
+                      label: const Text('CSV'),
+                    ),
+                  ),
+              ],
+            )
+          : null,
+      body: SafeArea(top: !widget.showHeader, bottom: false, child: body),
+    );
+  }
+
+  Widget _buildScroll(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final phone = width < 600;
+      final gutter = phone ? 16.0 : 24.0;
+      final side = math.max(gutter, (width - 1200) / 2);
+      final canTable = MediaQuery.sizeOf(context).width >= AppBreakpoints.tablet;
+      final showTable = canTable && _table;
+      final visible = _visibleIndices();
+      final columns = width >= 1100 ? 3 : (width >= 700 ? 2 : 1);
+
+      final slivers = <Widget>[
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(side, phone ? 8 : gutter, side, 0),
+          sliver: SliverList(
+            delegate: SliverChildListDelegate([
+              for (final w in widget.leading) ...[w, SizedBox(height: phone ? 10 : 16)],
+              _buildToolbar(canTable: canTable, visibleCount: visible.length, visible: visible, compact: phone),
+              const SizedBox(height: 12),
+            ]),
           ),
         ),
+      ];
+
+      if (_loading) {
+        slivers.add(const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 40),
+            child: Center(
+              child: Column(
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text('Loading leads…', style: TextStyle(color: UiTokens.textSecondary)),
+                ],
+              ),
+            ),
+          ),
+        ));
+      } else if (_error != null) {
+        slivers.add(SliverPadding(
+          padding: EdgeInsets.symmetric(horizontal: side),
+          sliver: SliverToBoxAdapter(child: _buildError()),
+        ));
+      } else if (_all.isEmpty) {
+        slivers.add(SliverPadding(
+          padding: EdgeInsets.symmetric(horizontal: side),
+          sliver: const SliverToBoxAdapter(
+            child: SearchCard(
+              child: Text(
+                'No leads were saved for this search.',
+                style: TextStyle(color: UiTokens.textSecondary, fontSize: 14),
+              ),
+            ),
+          ),
+        ));
+      } else if (visible.isEmpty) {
+        slivers.add(SliverPadding(
+          padding: EdgeInsets.symmetric(horizontal: side),
+          sliver: SliverToBoxAdapter(
+            child: SearchCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('No leads match these filters.',
+                      style: TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    style: searchSecondaryButtonStyle(),
+                    onPressed: _clearFilters,
+                    child: const Text('Clear filters'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ));
+      } else if (showTable) {
+        slivers.add(SliverPadding(
+          padding: EdgeInsets.symmetric(horizontal: side),
+          sliver: SliverToBoxAdapter(child: _buildTable(visible)),
+        ));
+      } else {
+        final rows = (visible.length / columns).ceil();
+        slivers.add(SliverPadding(
+          padding: EdgeInsets.symmetric(horizontal: side),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, r) {
+                final start = r * columns;
+                final items = visible.sublist(start, math.min(start + columns, visible.length));
+                Widget card(int i) => LeadCard(
+                      lead: _all[i],
+                      selected: _selected.contains(i),
+                      onSelected: (v) => setState(() {
+                        if (v) {
+                          _selected.add(i);
+                        } else {
+                          _selected.remove(i);
+                        }
+                      }),
+                      actions: _actions,
+                    );
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: columns == 1
+                      ? card(items.first)
+                      : IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (var k = 0; k < columns; k++) ...[
+                                if (k > 0) const SizedBox(width: 12),
+                                Expanded(child: k < items.length ? card(items[k]) : const SizedBox.shrink()),
+                              ],
+                            ],
+                          ),
+                        ),
+                );
+              },
+              childCount: rows,
+            ),
+          ),
+        ));
+      }
+
+      slivers.add(const SliverToBoxAdapter(child: SizedBox(height: 32)));
+
+      final scroll = CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: slivers,
+      );
+      if (widget.jobId == null && widget.overrideResults != null) return scroll;
+      return RefreshIndicator(onRefresh: _refresh, child: scroll);
+    });
+  }
+
+  Widget _buildError() {
+    final e = _error;
+    final message = e is NotFoundException
+        ? 'This search no longer exists.'
+        : ErrorHandler.isNetworkError(e)
+            ? "We couldn't reach the server. Your leads are safe."
+            : "We couldn't load the leads: ${ErrorHandler.getUserFriendlyMessage(e)}";
+    return SearchCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: const TextStyle(color: UiTokens.text, fontSize: 14)),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            style: searchSecondaryButtonStyle(),
+            onPressed: () => _load(),
+            child: const Text('Try again'),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildBackgroundEffects() {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: CustomPaint(
-            painter: _GridPainter(),
-          ),
+  Widget _chipLabel(String text, bool selected) => Text(
+        text,
+        style: TextStyle(
+          color: selected ? UiTokens.text : UiTokens.textSecondary,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
         ),
-        Container(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              colors: [
-                AppColors.primaryBlue.withValues(alpha: 0.18),
-                Colors.transparent,
+      );
+
+  Widget _buildToolbar({
+    required bool canTable,
+    required int visibleCount,
+    required List<int> visible,
+    required bool compact,
+  }) {
+    final cities = _cityOptions();
+    final safeCity = cities.contains(_city) ? _city : '';
+    final citiesShown = <String>{for (final i in visible) leadCityLabel(_all[i])}..remove('');
+
+    final searchField = TextField(
+      controller: _searchController,
+      textInputAction: TextInputAction.search,
+      onChanged: (v) => setState(() {
+        _query = v;
+        _selected = <int>{};
+      }),
+      onSubmitted: (v) => setState(() => _query = v),
+      style: const TextStyle(color: UiTokens.text, fontSize: 14),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: 'Search leads by name, phone, city',
+        hintStyle: const TextStyle(color: UiTokens.textMuted),
+        prefixIcon: const Icon(Icons.search_rounded, size: 20, color: UiTokens.textMuted),
+        suffixIcon: _query.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                icon: const Icon(Icons.close_rounded, size: 18, color: UiTokens.textMuted),
+                onPressed: () => setState(() {
+                  _searchController.clear();
+                  _query = '';
+                }),
+              ),
+        filled: true,
+        fillColor: UiTokens.background,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
+      ),
+    );
+
+    final cityMenu = PopupMenuButton<String>(
+      tooltip: 'Filter by city',
+      color: UiTokens.card,
+      initialValue: safeCity,
+      onSelected: (v) => setState(() {
+        _city = v;
+        _selected = <int>{};
+      }),
+      itemBuilder: (_) => [
+        CheckedPopupMenuItem<String>(value: '', checked: safeCity.isEmpty, child: const Text('All cities')),
+        for (final c in cities) CheckedPopupMenuItem<String>(value: c, checked: safeCity == c, child: Text(c)),
+      ],
+      child: _MenuButtonFace(
+        icon: Icons.location_city_rounded,
+        label: safeCity.isEmpty ? 'All cities' : safeCity,
+      ),
+    );
+
+    final sortMenu = PopupMenuButton<LeadSort>(
+      tooltip: 'Sort leads',
+      color: UiTokens.card,
+      initialValue: _sort,
+      onSelected: (v) => setState(() => _sort = v),
+      itemBuilder: (_) => [
+        for (final s in LeadSort.values)
+          CheckedPopupMenuItem<LeadSort>(value: s, checked: _sort == s, child: Text(_sortLabel(s))),
+      ],
+      child: _MenuButtonFace(icon: Icons.sort_rounded, label: 'Sort: ${_sortLabel(_sort)}'),
+    );
+
+    final chips = <Widget>[
+      for (final c in LeadContact.values)
+        FilterChip(
+          label: _chipLabel(_contactLabel(c), _contacts.contains(c)),
+          selected: _contacts.contains(c),
+          showCheckmark: true,
+          checkmarkColor: UiTokens.accent,
+          selectedColor: UiTokens.selectedSurface,
+          backgroundColor: UiTokens.card,
+          side: BorderSide(color: _contacts.contains(c) ? UiTokens.accent : UiTokens.border),
+          materialTapTargetSize: MaterialTapTargetSize.padded,
+          onSelected: (v) => setState(() {
+            if (v) {
+              _contacts.add(c);
+            } else {
+              _contacts.remove(c);
+            }
+            _selected = <int>{};
+          }),
+        ),
+      if (_contacts.length >= 2) ...[
+        const Padding(
+          padding: EdgeInsets.only(left: 4),
+          child: Text('Match', style: TextStyle(color: UiTokens.textMuted, fontSize: 13)),
+        ),
+        ChoiceChip(
+          label: _chipLabel('Any', !_matchAll),
+          selected: !_matchAll,
+          showCheckmark: true,
+          checkmarkColor: UiTokens.accent,
+          selectedColor: UiTokens.selectedSurface,
+          backgroundColor: UiTokens.card,
+          materialTapTargetSize: MaterialTapTargetSize.padded,
+          onSelected: (_) => setState(() => _matchAll = false),
+        ),
+        ChoiceChip(
+          label: _chipLabel('All', _matchAll),
+          selected: _matchAll,
+          showCheckmark: true,
+          checkmarkColor: UiTokens.accent,
+          selectedColor: UiTokens.selectedSurface,
+          backgroundColor: UiTokens.card,
+          materialTapTargetSize: MaterialTapTargetSize.padded,
+          onSelected: (_) => setState(() => _matchAll = true),
+        ),
+      ],
+    ];
+
+    final selectedCount = _selected.length;
+    final visibleLeads = [for (final i in visible) _all[i]];
+
+    return SearchCard(
+      padding: EdgeInsets.all(compact ? 12 : 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(builder: (context, c) {
+            if (c.maxWidth < 560) {
+              // Phone: search plus a "Filters" toggle keeps the first lead
+              // on the first screen; filters open below when asked for.
+              final active = (_city.isNotEmpty ? 1 : 0) + _contacts.length + (_sort != LeadSort.original ? 1 : 0);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: searchField),
+                      const SizedBox(width: 8),
+                      Semantics(
+                        expanded: _filtersOpen,
+                        child: OutlinedButton.icon(
+                          style: searchSecondaryButtonStyle(),
+                          onPressed: () => setState(() => _filtersOpen = !_filtersOpen),
+                          icon: Icon(_filtersOpen ? Icons.expand_less_rounded : Icons.tune_rounded, size: 18),
+                          label: Text(active > 0 ? 'Filters ($active)' : 'Filters'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_filtersOpen) ...[
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 8, runSpacing: 8, children: [cityMenu, sortMenu]),
+                  ],
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: searchField),
+                const SizedBox(width: 8),
+                cityMenu,
+                const SizedBox(width: 8),
+                sortMenu,
+                if (canTable) ...[
+                  const SizedBox(width: 8),
+                  SegmentedButton<bool>(
+                    showSelectedIcon: false,
+                    style: SegmentedButton.styleFrom(
+                      foregroundColor: UiTokens.textSecondary,
+                      selectedForegroundColor: UiTokens.text,
+                      selectedBackgroundColor: UiTokens.selectedSurface,
+                      side: const BorderSide(color: UiTokens.border),
+                      minimumSize: const Size(44, 44),
+                    ),
+                    segments: const [
+                      ButtonSegment(value: false, icon: Icon(Icons.view_agenda_outlined, size: 18), label: Text('Cards')),
+                      ButtonSegment(value: true, icon: Icon(Icons.table_rows_outlined, size: 18), label: Text('Table')),
+                    ],
+                    selected: {_table},
+                    onSelectionChanged: (s) => setState(() {
+                      _table = s.first;
+                      _tableSortColumn = null;
+                    }),
+                  ),
+                ],
               ],
-              radius: 1.2,
-              center: const Alignment(0, -0.8),
+            );
+          }),
+          if (!compact || _filtersOpen) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: chips),
+          ],
+          const SizedBox(height: 4),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  _loading
+                      ? 'Loading leads…'
+                      : visibleCount == _all.length
+                          ? 'Showing ${plural(_all.length, 'lead', 'leads')}'
+                              '${citiesShown.isEmpty ? '' : ' · ${plural(citiesShown.length, 'city', 'cities')}'}'
+                          : 'Showing $visibleCount of ${plural(_all.length, 'lead', 'leads')}',
+                  style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+                ),
+              ),
+              if (_filtersActive)
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                  onPressed: _clearFilters,
+                  child: const Text('Clear filters'),
+                ),
+              if (visible.isNotEmpty && selectedCount == 0 && (!compact || _filtersOpen))
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                  onPressed: () => setState(() => _selected = visible.toSet()),
+                  child: Text('Select ${plural(visible.length, 'shown lead', 'shown leads')}'),
+                ),
+            ],
+          ),
+          if (selectedCount > 0) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: UiTokens.selectedSurface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: UiTokens.accent.withValues(alpha: 0.5)),
+              ),
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  Semantics(
+                    liveRegion: true,
+                    child: Text('${formatCount(selectedCount)} selected',
+                        style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700)),
+                  ),
+                  OutlinedButton.icon(
+                    style: searchSecondaryButtonStyle(),
+                    onPressed: () => _exportCsv(_selectedLeads(), 'selected'),
+                    icon: const Icon(Icons.download_rounded, size: 18),
+                    label: const Text('Export CSV'),
+                  ),
+                  OutlinedButton.icon(
+                    style: searchSecondaryButtonStyle(),
+                    onPressed: () => _exportJson(_selectedLeads(), 'selected'),
+                    icon: const Icon(Icons.data_object_rounded, size: 18),
+                    label: const Text('Export JSON'),
+                  ),
+                  if (selectedCount < visibleLeads.length)
+                    TextButton(
+                      style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                      onPressed: () => setState(() => _selected = visible.toSet()),
+                      child: const Text('Select all shown'),
+                    ),
+                  TextButton(
+                    style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 44)),
+                    onPressed: () => setState(() => _selected = <int>{}),
+                    child: const Text('Clear selection'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String? _tableKey(int column) {
+    const keys = ['business_name', 'category', 'city', 'phone', 'email', 'website'];
+    return column >= 0 && column < keys.length ? keys[column] : null;
+  }
+
+  Widget _buildTable(List<int> visible) {
+    final ordered = List<int>.from(visible);
+    final key = _tableSortColumn == null ? null : _tableKey(_tableSortColumn!);
+    if (key != null) {
+      String v(int i) => key == 'business_name'
+          ? leadName(_all[i]).toLowerCase()
+          : key == 'city'
+              ? leadCityLabel(_all[i]).toLowerCase()
+              : '${_all[i][key] ?? ''}'.toLowerCase();
+      ordered.sort((a, b) => _tableSortAscending ? v(a).compareTo(v(b)) : v(b).compareTo(v(a)));
+    }
+    final rows = [
+      for (final i in ordered)
+        {
+          '_idx': i,
+          'business_name': leadName(_all[i]),
+          'category': '${_all[i]['category'] ?? ''}',
+          'city': leadCityLabel(_all[i]),
+          'phone': '${_all[i]['phone'] ?? ''}',
+          'email': '${_all[i]['email'] ?? ''}',
+          'website': '${_all[i]['website'] ?? ''}',
+        },
+    ];
+    Widget text(Map<String, dynamic> row, String k) => ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 240),
+          child: Text(
+            _has(row[k]) ? '${row[k]}' : '—',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: UiTokens.text, fontSize: 13),
+          ),
+        );
+    final selectedDisplay = <int>{
+      for (var r = 0; r < rows.length; r++)
+        if (_selected.contains(rows[r]['_idx'])) r,
+    };
+    return InfinityDataTable(
+      layoutType: LayoutType.desktopMedium,
+      columns: [
+        InfinityDataColumn(label: 'Business', keyName: 'business_name', cellBuilder: (r) => text(r, 'business_name')),
+        InfinityDataColumn(label: 'Category', keyName: 'category', cellBuilder: (r) => text(r, 'category')),
+        InfinityDataColumn(label: 'City', keyName: 'city', cellBuilder: (r) => text(r, 'city')),
+        InfinityDataColumn(label: 'Phone', keyName: 'phone', cellBuilder: (r) => text(r, 'phone')),
+        InfinityDataColumn(label: 'Email', keyName: 'email', cellBuilder: (r) => text(r, 'email')),
+        InfinityDataColumn(label: 'Website', keyName: 'website', cellBuilder: (r) => text(r, 'website')),
+        InfinityDataColumn(
+          label: 'Actions',
+          keyName: 'actions',
+          cellBuilder: (r) => LeadActionButtons(lead: _all[r['_idx'] as int], actions: _actions, compact: true),
+        ),
+      ],
+      rows: rows,
+      sortable: true,
+      sortColumnIndex: _tableSortColumn,
+      sortAscending: _tableSortAscending,
+      onSort: (column, ascending) => setState(() {
+        if (_tableKey(column) == null) return;
+        _tableSortColumn = column;
+        _tableSortAscending = ascending;
+      }),
+      showCheckboxes: true,
+      selectedRows: selectedDisplay,
+      onSelectionChanged: (display) => setState(() {
+        final shown = rows.map((r) => r['_idx'] as int).toSet();
+        _selected = {
+          ..._selected.difference(shown),
+          for (final d in display)
+            if (d >= 0 && d < rows.length) rows[d]['_idx'] as int,
+        };
+      }),
+    );
+  }
+}
+
+class _MenuButtonFace extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _MenuButtonFace({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 44),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: UiTokens.background,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: UiTokens.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: UiTokens.textSecondary),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 200),
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600),
             ),
           ),
+          const SizedBox(width: 2),
+          const Icon(Icons.arrow_drop_down_rounded, color: UiTokens.textSecondary),
+        ],
+      ),
+    );
+  }
+}
+
+/// Callbacks for the per-lead actions.
+class LeadActions {
+  final void Function(String phone) call;
+  final void Function(String email) email;
+  final void Function(String website) website;
+  final void Function(Map<String, dynamic> lead) maps;
+  final void Function(String text, String what) copy;
+
+  const LeadActions({
+    required this.call,
+    required this.email,
+    required this.website,
+    required this.maps,
+    required this.copy,
+  });
+}
+
+/// Call / Email / Website / Map buttons plus a "Copy…" menu. Only actions
+/// that have data are shown.
+class LeadActionButtons extends StatelessWidget {
+  final Map<String, dynamic> lead;
+  final LeadActions actions;
+  final bool compact;
+
+  const LeadActionButtons({super.key, required this.lead, required this.actions, this.compact = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final name = leadName(lead);
+    final phone = '${lead['phone'] ?? ''}'.trim();
+    final email = '${lead['email'] ?? ''}'.trim();
+    final website = '${lead['website'] ?? ''}'.trim();
+    final address = '${lead['address'] ?? ''}'.trim();
+    final hasMap = leadMapsUri(lead) != null;
+    final size = compact ? 40.0 : 44.0;
+    final style = IconButton.styleFrom(
+      foregroundColor: UiTokens.accent,
+      minimumSize: Size(size, size),
+      padding: EdgeInsets.zero,
+    );
+    final copyItems = <PopupMenuEntry<String>>[
+      if (_has(phone)) const PopupMenuItem(value: 'phone', child: Text('Copy phone')),
+      if (_has(email)) const PopupMenuItem(value: 'email', child: Text('Copy email')),
+      if (_has(website)) const PopupMenuItem(value: 'website', child: Text('Copy website')),
+      if (_has(address)) const PopupMenuItem(value: 'address', child: Text('Copy address')),
+      const PopupMenuItem(value: 'name', child: Text('Copy business name')),
+    ];
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_has(phone))
+          IconButton(
+            style: style,
+            tooltip: 'Call $name',
+            onPressed: () => actions.call(phone),
+            icon: const Icon(Icons.call_rounded, size: 20),
+          ),
+        if (_has(email))
+          IconButton(
+            style: style,
+            tooltip: 'Email $name',
+            onPressed: () => actions.email(email),
+            icon: const Icon(Icons.email_outlined, size: 20),
+          ),
+        if (_has(website))
+          IconButton(
+            style: style,
+            tooltip: 'Open website of $name',
+            onPressed: () => actions.website(website),
+            icon: const Icon(Icons.language_rounded, size: 20),
+          ),
+        if (hasMap)
+          IconButton(
+            style: style,
+            tooltip: 'Open $name in Google Maps',
+            onPressed: () => actions.maps(lead),
+            icon: const Icon(Icons.place_outlined, size: 20),
+          ),
+        PopupMenuButton<String>(
+          tooltip: 'Copy details of $name',
+          color: UiTokens.card,
+          icon: const Icon(Icons.content_copy_rounded, size: 18, color: UiTokens.textSecondary),
+          onSelected: (v) {
+            switch (v) {
+              case 'phone':
+                actions.copy(phone, 'phone');
+                break;
+              case 'email':
+                actions.copy(email, 'email');
+                break;
+              case 'website':
+                actions.copy(website, 'website');
+                break;
+              case 'address':
+                actions.copy(address, 'address');
+                break;
+              case 'name':
+                actions.copy(name, 'name');
+                break;
+            }
+          },
+          itemBuilder: (_) => copyItems,
         ),
       ],
     );
   }
-
-  Widget _buildHeader(int count) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.md,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundDark.withValues(alpha: 0.9),
-        border: Border(
-          bottom: BorderSide(
-            color: Colors.white.withValues(alpha: 0.06),
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Infinity Leads',
-                  style: AppTypography.titleLarge.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  widget.title ?? 'Live Results',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.primaryBlueLight,
-                    letterSpacing: 2.0,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _downloadButton(count),
-        ],
-      ),
-    );
-  }
-
-  Widget _downloadButton(int count) {
-    return GestureDetector(
-      onTap:
-          count > 0 && !_isDownloading ? () => _downloadResults(context) : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: AppSpacing.xs,
-        ),
-        decoration: BoxDecoration(
-          color: AppColors.elevatedCardDark,
-          borderRadius: AppSpacing.borderRadiusSm,
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.1),
-          ),
-        ),
-        child: Row(
-          children: [
-            if (_isDownloading)
-              const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    AppColors.successGreen,
-                  ),
-                ),
-              )
-            else
-              const Icon(Icons.download_rounded,
-                  color: AppColors.successGreen, size: 18),
-            const SizedBox(width: 6),
-            Text(
-              'Excel',
-              style: AppTypography.labelSmall.copyWith(
-                color: AppColors.successGreen,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSearchAndFilter(
-    LayoutType layoutType,
-    List<Map<String, dynamic>> allResults,
-  ) {
-    final canTable = ResponsiveUtils.shouldUseTableView(layoutType);
-    final cityOptions = _resolveCityOptions(allResults);
-    final hasCityValue = cityOptions.contains(_cityFilter);
-    final safeCityFilter = hasCityValue ? _cityFilter : 'All Cities';
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.sm,
-      ),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(
-            color: Colors.white.withValues(alpha: 0.06),
-          ),
-        ),
-      ),
-      child: Column(
-        children: [
-          // Search bar
-          Container(
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.elevatedCardDark,
-              borderRadius: AppSpacing.borderRadiusSm,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.1),
-              ),
-            ),
-            child: TextField(
-              controller: _searchController,
-              style: AppTypography.bodyMedium.copyWith(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'Search by name, category, or city...',
-                hintStyle: AppTypography.bodyMedium.copyWith(
-                  color: Colors.white38,
-                ),
-                prefixIcon: const Icon(
-                  Icons.search_rounded,
-                  color: Colors.white54,
-                  size: 20,
-                ),
-                suffixIcon: _searchQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(
-                          Icons.clear_rounded,
-                          color: Colors.white54,
-                          size: 20,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _searchController.clear();
-                            _searchQuery = '';
-                            _selectedTableRows = {};
-                          });
-                        },
-                      )
-                    : null,
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm,
-                  vertical: AppSpacing.sm,
-                ),
-              ),
-              onChanged: (value) {
-                setState(() {
-                  _searchQuery = value;
-                  _selectedTableRows = {};
-                });
-              },
-            ),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          // Contact Type Filters
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                Text(
-                  'Show Results With:',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: Colors.white60,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                ..._buildContactFilterChips(),
-                const SizedBox(width: AppSpacing.sm),
-                ..._buildContactMatchModeChips(),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          // City + quick clear
-          Row(
-            children: [
-              PopupMenuButton<String>(
-                initialValue: hasCityValue ? _cityFilter : null,
-                color: AppColors.surfaceDark,
-                onSelected: (value) {
-                  setState(() {
-                    _cityFilter = value;
-                    _selectedTableRows = {};
-                  });
-                },
-                itemBuilder: (context) => cityOptions
-                    .map((c) => PopupMenuItem<String>(
-                          value: c,
-                          child: Text(
-                            c,
-                            style: AppTypography.bodySmall.copyWith(
-                              color: Colors.white,
-                            ),
-                          ),
-                        ))
-                    .toList(),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.sm,
-                    vertical: AppSpacing.xs,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.elevatedCardDark,
-                    borderRadius: AppSpacing.borderRadiusSm,
-                    border: Border.all(
-                      color: AppColors.primaryBlue.withValues(alpha: 0.25),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.location_city_rounded,
-                        color: AppColors.primaryBlueLight,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 180),
-                        child: Text(
-                          safeCityFilter,
-                          style: AppTypography.labelSmall.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      const Icon(
-                        Icons.expand_more_rounded,
-                        color: Colors.white54,
-                        size: 18,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const Spacer(),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: Checkbox(
-                      value: _requireWebsite,
-                      onChanged: (value) {
-                        setState(() {
-                          _requireWebsite = value ?? false;
-                          _selectedTableRows = {};
-                        });
-                      },
-                      activeColor: AppColors.primaryBlue,
-                      checkColor: Colors.white,
-                      side: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.4),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.xs),
-                  GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _requireWebsite = !_requireWebsite;
-                        _selectedTableRows = {};
-                      });
-                    },
-                    child: Text(
-                      'Has website',
-                      style: AppTypography.labelSmall.copyWith(
-                        color: Colors.white70,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              if (_searchQuery.isNotEmpty ||
-                  _cityFilter != 'All Cities' ||
-                  _requireWebsite ||
-                  _contactFilters.length < 4)
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      _searchController.clear();
-                      _searchQuery = '';
-                      _cityFilter = 'All Cities';
-                      _contactFilters = {'Phone', 'Email', 'Website', 'Maps'};
-                      _contactMatchAll = false;
-                      _requireWebsite = false;
-                      _sortOption = 'Newest';
-                      _selectedTableRows = {};
-                    });
-                  },
-                  child: Text(
-                    'Clear',
-                    style: AppTypography.labelSmall.copyWith(
-                      color: Colors.white70,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          // Sort and View toggles
-          Row(
-            children: [
-              Expanded(child: SizedBox.shrink()),
-              if (canTable) ...[
-                const SizedBox(width: AppSpacing.sm),
-                _viewToggle(),
-              ],
-              const SizedBox(width: AppSpacing.sm),
-              PopupMenuButton<String>(
-                initialValue: _sortOption,
-                color: AppColors.surfaceDark,
-                icon: Container(
-                  padding: const EdgeInsets.all(AppSpacing.xs),
-                  decoration: BoxDecoration(
-                    color: AppColors.elevatedCardDark,
-                    borderRadius: AppSpacing.borderRadiusSm,
-                    border: Border.all(
-                      color: AppColors.primaryBlue.withValues(alpha: 0.25),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.sort_rounded,
-                        color: AppColors.primaryBlueLight,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _sortOption,
-                        style: AppTypography.labelSmall.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                onSelected: (value) {
-                  setState(() {
-                    _sortOption = value;
-                    _selectedTableRows = {};
-                  });
-                },
-                itemBuilder: (context) => [
-                  _buildSortMenuItem('Newest', Icons.access_time_rounded),
-                  _buildSortMenuItem('Name A-Z', Icons.sort_by_alpha_rounded),
-                  _buildSortMenuItem('Category', Icons.category_rounded),
-                  _buildSortMenuItem('City', Icons.location_city_rounded),
-                ],
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  List<String> _resolveCityOptions(List<Map<String, dynamic>> results) {
-    final set = <String>{'All Cities'};
-    for (final r in results) {
-      final city = (r['city'] ?? '').toString().trim();
-      if (city.isEmpty || city == 'N/A') continue;
-      final state = (r['state'] ?? '').toString().trim();
-      final key = state.isEmpty ? city : '$city, $state';
-      set.add(key);
-    }
-    final list = set.toList();
-    if (list.length <= 1) return const ['All Cities'];
-    final rest = list.where((e) => e != 'All Cities').toList()..sort();
-    return ['All Cities', ...rest];
-  }
-
-  Widget _viewToggle() {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppColors.elevatedCardDark,
-        borderRadius: AppSpacing.borderRadiusSm,
-        border: Border.all(
-          color: AppColors.primaryBlue.withValues(alpha: 0.25),
-        ),
-      ),
-      child: Row(
-        children: [
-          _toggleChip('Cards', Icons.view_module_rounded),
-          _toggleChip('Table', Icons.table_chart_rounded),
-        ],
-      ),
-    );
-  }
-
-  Widget _toggleChip(String label, IconData icon) {
-    final isActive = _viewMode == label;
-    return GestureDetector(
-      onTap: () => setState(() {
-        _viewMode = label;
-        _selectedTableRows = {};
-        _tableSortColumnIndex = null;
-        _tableSortAscending = true;
-      }),
-      child: AnimatedContainer(
-        duration: AppSpacing.durationFast,
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xs,
-          vertical: AppSpacing.xxs,
-        ),
-        decoration: BoxDecoration(
-          color: isActive
-              ? AppColors.primaryBlue.withValues(alpha: 0.18)
-              : Colors.transparent,
-          borderRadius: AppSpacing.borderRadiusSm,
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 14,
-              color: isActive ? Colors.white : Colors.white54,
-            ),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: AppTypography.labelSmall.copyWith(
-                color: isActive ? Colors.white : Colors.white54,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  PopupMenuItem<String> _buildSortMenuItem(String value, IconData icon) {
-    return PopupMenuItem<String>(
-      value: value,
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: Colors.white70),
-          const SizedBox(width: AppSpacing.xs),
-          Text(
-            value,
-            style: AppTypography.bodyMedium.copyWith(
-              color: Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStats(List<Map<String, dynamic>> results) {
-    final cities = results
-        .map((r) => (r['city'] ?? '').toString().trim())
-        .where((c) => c.isNotEmpty && c != 'N/A')
-        .toSet();
-    final categories = results
-        .map((r) => (r['category'] ?? '').toString().trim())
-        .where((c) => c.isNotEmpty && c != 'N/A')
-        .toSet();
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.md,
-        AppSpacing.md,
-        AppSpacing.md,
-        AppSpacing.sm,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _statTile('Leads', results.length.toString()),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: _statTile('Cities', cities.length.toString()),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: _statTile('Cats', categories.length.toString()),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statTile(String label, String value) {
-    return Container(
-      padding: AppSpacing.paddingSm,
-      decoration: BoxDecoration(
-        color: AppColors.surfaceDark,
-        borderRadius: AppSpacing.borderRadiusSm,
-        border: Border.all(
-          color: AppColors.primaryBlue.withValues(alpha: 0.25),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryBlue.withValues(alpha: 0.18),
-            blurRadius: 14,
-            spreadRadius: -10,
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Text(
-            label.toUpperCase(),
-            style: AppTypography.labelSmall.copyWith(
-              color: Colors.white60,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 1.1,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: AppTypography.titleMedium.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String? _tableSortKeyForColumn(int columnIndex) {
-    switch (columnIndex) {
-      case 0:
-        return 'business_name';
-      case 1:
-        return 'category';
-      case 2:
-        return 'city';
-      case 3:
-        return 'phone';
-      case 4:
-        return 'email';
-      case 5:
-        return 'website';
-      default:
-        return null;
-    }
-  }
-
-  Widget _buildBulkActionsBar(List<Map<String, dynamic>> tableRows) {
-    final count = _selectedTableRows.length;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: AppSpacing.xs,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.elevatedCardDark,
-        borderRadius: AppSpacing.borderRadiusSm,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.sm,
-              vertical: AppSpacing.xxs,
-            ),
-            decoration: BoxDecoration(
-              color: AppColors.primaryBlue.withValues(alpha: 0.18),
-              borderRadius: AppSpacing.borderRadiusRound,
-              border: Border.all(
-                color: AppColors.primaryBlue.withValues(alpha: 0.22),
-              ),
-            ),
-            child: Text(
-              '$count selected',
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          const Spacer(),
-          OutlinedButton.icon(
-            onPressed: count > 0 ? () => _exportSelectedCsv(tableRows) : null,
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(
-                color: AppColors.successGreen.withValues(alpha: 0.5),
-              ),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.xs,
-              ),
-            ),
-            icon: const Icon(Icons.download_rounded, size: 18),
-            label: Text(
-              'Export CSV',
-              style: AppTypography.labelSmall.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.xs),
-          OutlinedButton.icon(
-            onPressed: count > 0 ? () => _exportSelectedJson(tableRows) : null,
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(
-                color: AppColors.infoBlue.withValues(alpha: 0.5),
-              ),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.xs,
-              ),
-            ),
-            icon: const Icon(Icons.data_object_rounded, size: 18),
-            label: Text(
-              'JSON',
-              style: AppTypography.labelSmall.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.xs),
-          TextButton(
-            onPressed: () => setState(() => _selectedTableRows = {}),
-            child: Text(
-              'Clear',
-              style: AppTypography.labelSmall.copyWith(
-                color: Colors.white70,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _exportSelectedCsv(List<Map<String, dynamic>> tableRows) async {
-    if (_selectedTableRows.isEmpty) return;
-
-    final selected = _selectedTableRows
-        .where((i) => i >= 0 && i < tableRows.length)
-        .map((i) => tableRows[i])
-        .toList();
-
-    final csv = _toCsv(selected);
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .replaceAll('.', '-');
-    await saveCsv(csv, 'infinity_leads_selected_$stamp', context: context);
-  }
-
-  Future<void> _exportSelectedJson(List<Map<String, dynamic>> tableRows) async {
-    if (_selectedTableRows.isEmpty) return;
-
-    final selected = _selectedTableRows
-        .where((i) => i >= 0 && i < tableRows.length)
-        .map((i) => tableRows[i])
-        .toList();
-
-    final payload = jsonEncode(selected);
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .replaceAll('.', '-');
-    await saveJson(payload, 'infinity_leads_selected_$stamp', context: context);
-  }
-
-  String _toCsv(List<Map<String, dynamic>> rows) {
-    const headers = [
-      'business_name',
-      'category',
-      'city',
-      'state',
-      'phone',
-      'email',
-      'website',
-      'address',
-      'google_maps_url',
-    ];
-
-    final buffer = StringBuffer();
-    buffer.writeln(headers.join(','));
-    for (final row in rows) {
-      final values = headers.map((h) => _csvEscape(row[h])).toList();
-      buffer.writeln(values.join(','));
-    }
-    return buffer.toString();
-  }
-
-  String _csvEscape(dynamic value) {
-    final s = (value ?? '').toString();
-    final escaped = s.replaceAll('"', '""');
-    if (escaped.contains(',') ||
-        escaped.contains('\n') ||
-        escaped.contains('\r')) {
-      return '"$escaped"';
-    }
-    return escaped;
-  }
-
-  Widget _buildContent(
-      List<Map<String, dynamic>> results, LayoutType layoutType) {
-    if (_isLoading) {
-      return _buildLoadingState();
-    }
-
-    if (_error != null) {
-      return _buildErrorState();
-    }
-
-    if (results.isEmpty) {
-      return _buildEmptyState();
-    }
-
-    final canTable = ResponsiveUtils.shouldUseTableView(layoutType);
-    if (canTable && _viewMode == 'Table') {
-      final baseRows = results
-          .map((r) => {
-                'business_name': r['business_name'] ?? r['name'] ?? 'Unknown',
-                'category': r['category'] ?? 'N/A',
-                'city': r['city'] ?? 'N/A',
-                'state': r['state'] ?? '',
-                'phone': r['phone'] ?? 'N/A',
-                'email': r['email'] ?? 'N/A',
-                'website': r['website'] ?? 'N/A',
-                'address': r['address'] ?? 'N/A',
-                'google_maps_url': r['google_maps_url'] ?? '',
-              })
-          .toList();
-
-      final rows = List<Map<String, dynamic>>.from(baseRows);
-      if (_tableSortColumnIndex != null) {
-        final key = _tableSortKeyForColumn(_tableSortColumnIndex!);
-        if (key != null) {
-          rows.sort((a, b) {
-            final av = (a[key] ?? '').toString().toLowerCase();
-            final bv = (b[key] ?? '').toString().toLowerCase();
-            return av.compareTo(bv);
-          });
-          if (!_tableSortAscending) {
-            final reversed = rows.reversed.toList();
-            rows
-              ..clear()
-              ..addAll(reversed);
-          }
-        }
-      }
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md,
-          AppSpacing.sm,
-          AppSpacing.md,
-          AppSpacing.xl,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_selectedTableRows.isNotEmpty) _buildBulkActionsBar(rows),
-            InfinityDataTable(
-              layoutType: layoutType,
-              columns: [
-                const InfinityDataColumn(
-                    label: 'Business Name', keyName: 'business_name'),
-                const InfinityDataColumn(
-                    label: 'Category', keyName: 'category'),
-                const InfinityDataColumn(label: 'City', keyName: 'city'),
-                const InfinityDataColumn(label: 'Phone', keyName: 'phone'),
-                const InfinityDataColumn(label: 'Email', keyName: 'email'),
-                const InfinityDataColumn(label: 'Website', keyName: 'website'),
-                InfinityDataColumn(
-                  label: 'Actions',
-                  keyName: 'actions',
-                  cellBuilder: (row) => Row(
-                    children: [
-                      _tableActionButton(
-                        icon: Icons.call,
-                        tooltip: 'Call',
-                        onTap: () => _launchPhone(row['phone'] ?? ''),
-                      ),
-                      _tableActionButton(
-                        icon: Icons.email_rounded,
-                        tooltip: 'Email',
-                        onTap: () => _launchEmail(row['email'] ?? ''),
-                      ),
-                      _tableActionButton(
-                        icon: Icons.language,
-                        tooltip: 'Website',
-                        onTap: () => _launchUrl(row['website'] ?? ''),
-                      ),
-                      _tableActionButton(
-                        icon: Icons.location_on,
-                        tooltip: 'Map',
-                        onTap: () => _launchMaps(row['address'] ?? ''),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              rows: rows,
-              sortable: true,
-              showCheckboxes: true,
-              selectedRows: _selectedTableRows,
-              onSelectionChanged: (selection) {
-                setState(() => _selectedTableRows = selection);
-              },
-              sortColumnIndex: _tableSortColumnIndex,
-              sortAscending: _tableSortAscending,
-              onSort: (columnIndex, ascending) {
-                setState(() {
-                  _tableSortColumnIndex = columnIndex;
-                  _tableSortAscending = ascending;
-                  _selectedTableRows = {};
-                });
-              },
-            ),
-          ],
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _refreshResults,
-      color: AppColors.primaryBlue,
-      backgroundColor: AppColors.surfaceDark,
-      child: layoutType == LayoutType.mobile
-          ? ListView.builder(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md,
-                AppSpacing.sm,
-                AppSpacing.md,
-                AppSpacing.xl,
-              ),
-              itemCount: results.length,
-              itemBuilder: (context, index) {
-                final business = results[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                  child: _LeadCard(
-                    business: business,
-                    onEmailTap: () => _launchEmail(business['email'] ?? ''),
-                    onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
-                    onAddressTap: () => _launchMaps(business['address'] ?? ''),
-                  ),
-                );
-              },
-            )
-          : GridView.builder(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md,
-                AppSpacing.sm,
-                AppSpacing.md,
-                AppSpacing.xl,
-              ),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: layoutType == LayoutType.desktopLarge
-                    ? 4
-                    : layoutType == LayoutType.desktopMedium
-                        ? 3
-                        : 2,
-                crossAxisSpacing: AppSpacing.md,
-                mainAxisSpacing: AppSpacing.md,
-                childAspectRatio: 1.9,
-              ),
-              itemCount: results.length,
-              itemBuilder: (context, index) {
-                final business = results[index];
-                return _LeadCard(
-                  business: business,
-                  onEmailTap: () => _launchEmail(business['email'] ?? ''),
-                  onWebsiteTap: () => _launchUrl(business['website'] ?? ''),
-                  onAddressTap: () => _launchMaps(business['address'] ?? ''),
-                );
-              },
-            ),
-    );
-  }
-
-  Widget _buildLoadingState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(
-            width: 48,
-            height: 48,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Text(
-            'Loading results...',
-            style: AppTypography.bodyMedium.copyWith(
-              color: Colors.white70,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tableActionButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onTap,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(right: AppSpacing.xs),
-      child: Tooltip(
-        message: tooltip,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: AppSpacing.borderRadiusSm,
-          child: Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [AppColors.primaryBlue, AppColors.primaryBlueDark],
-              ),
-              borderRadius: AppSpacing.borderRadiusSm,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.25),
-                  blurRadius: 8,
-                  spreadRadius: -6,
-                ),
-              ],
-            ),
-            child: Icon(icon, color: Colors.white, size: 14),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Container(
-          padding: AppSpacing.paddingMd,
-          decoration: BoxDecoration(
-            color: AppColors.surfaceDark,
-            borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.error_outline, color: AppColors.dangerRed, size: 40),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                'Failed to Load',
-                style: AppTypography.titleMedium.copyWith(
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: AppTypography.bodySmall.copyWith(
-                  color: Colors.white60,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              ElevatedButton.icon(
-                onPressed: _loadIfNeeded,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Try Again'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Container(
-          padding: AppSpacing.paddingLg,
-          decoration: BoxDecoration(
-            color: AppColors.surfaceDark,
-            borderRadius: AppSpacing.borderRadiusLg,
-            border: Border.all(
-              color: AppColors.primaryBlue.withValues(alpha: 0.22),
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.search_off_rounded,
-                  color: AppColors.primaryBlueLight,
-                  size: 48,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'No Results Yet',
-                style: AppTypography.titleLarge.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                _emptyMessage ??
-                    'Start your first lead search to discover\nbusiness opportunities in your area',
-                textAlign: TextAlign.center,
-                style: AppTypography.bodyMedium.copyWith(
-                  color: Colors.white60,
-                  height: 1.5,
-                ),
-              ),
-              if (_searchQuery.isNotEmpty || _contactFilters.length < 4) ...[
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  'No results match your current filters.\nTry adjusting your search criteria.',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.bodySmall.copyWith(
-                    color: Colors.white38,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _searchController.clear();
-                      _searchQuery = '';
-                      _contactFilters = {'Phone', 'Email', 'Website', 'Maps'};
-                    });
-                  },
-                  icon: const Icon(Icons.clear_all_rounded, size: 18),
-                  label: const Text('Clear Filters'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primaryBlueLight,
-                    side: BorderSide(
-                        color: AppColors.primaryBlue.withValues(alpha: 0.35)),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _downloadResults(BuildContext ctx) async {
-    final scaffoldMessenger = ScaffoldMessenger.of(ctx);
-    final scraperProvider = Provider.of<ScraperProvider>(ctx, listen: false);
-
-    setState(() => _isDownloading = true);
-
-    try {
-      final downloadJobId = widget.jobId ?? _loadedJobId;
-      final downloadData = downloadJobId != null
-          ? await _apiService.downloadResults(downloadJobId)
-          : await scraperProvider.downloadResults();
-
-      final filename = downloadData['filename'] as String;
-      final content = downloadData['content'] as String;
-
-      if (!mounted) return;
-      await saveExcel(content, filename, context: context);
-    } catch (e) {
-      if (!mounted) return;
-      scaffoldMessenger.showSnackBar(
-        SnackBar(
-          content: Text('Failed to download: $e'),
-          backgroundColor: AppColors.dangerRed,
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isDownloading = false);
-      }
-    }
-  }
 }
 
-class _LeadCard extends StatefulWidget {
-  final Map<String, dynamic> business;
-  final VoidCallback? onEmailTap;
-  final VoidCallback? onWebsiteTap;
-  final VoidCallback? onAddressTap;
+/// One lead (cards view, every width).
+class LeadCard extends StatelessWidget {
+  final Map<String, dynamic> lead;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+  final LeadActions actions;
 
-  const _LeadCard({
-    required this.business,
-    this.onEmailTap,
-    this.onWebsiteTap,
-    this.onAddressTap,
+  const LeadCard({
+    super.key,
+    required this.lead,
+    required this.selected,
+    required this.onSelected,
+    required this.actions,
   });
 
   @override
-  State<_LeadCard> createState() => _LeadCardState();
-}
-
-class _LeadCardState extends State<_LeadCard> {
-  @override
   Widget build(BuildContext context) {
-    final business = widget.business;
+    final name = leadName(lead);
+    final category = '${lead['category'] ?? ''}'.trim();
+    final city = leadCityLabel(lead);
+    final address = '${lead['address'] ?? ''}'.trim();
+    final phone = '${lead['phone'] ?? ''}'.trim();
+    final email = '${lead['email'] ?? ''}'.trim();
+    final website = '${lead['website'] ?? ''}'.trim();
 
-    final name = (business['business_name'] ?? business['name'] ?? 'Unknown')
-        .toString()
-        .trim();
-    final category = (business['category'] ?? '').toString().trim();
-    final address = (business['address'] ?? '').toString().trim();
-    final phone = (business['phone'] ?? '').toString().trim();
-    final email = (business['email'] ?? '').toString().trim();
-    final website = (business['website'] ?? '').toString().trim();
-
-    final hasPhone = phone.isNotEmpty && phone != 'N/A';
-    final hasEmail = email.isNotEmpty && email != 'N/A';
-    final hasWebsite = website.isNotEmpty && website != 'N/A';
-    final hasAddress = address.isNotEmpty && address != 'N/A';
-    final hasCategory = category.isNotEmpty && category != 'N/A';
+    Widget line(IconData icon, String text, {Color color = UiTokens.textSecondary}) => Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Icon(icon, size: 15, color: UiTokens.textMuted),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontSize: 13.5)),
+              ),
+            ],
+          ),
+        );
 
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppColors.surfaceDark,
-            AppColors.surfaceDark.withValues(alpha: 0.78),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryBlue.withValues(alpha: 0.10),
-            blurRadius: 16,
-            spreadRadius: -8,
-          ),
-        ],
+        color: selected ? UiTokens.selectedSurface : UiTokens.card,
+        borderRadius: BorderRadius.circular(UiTokens.radius),
+        border: Border.all(color: selected ? UiTokens.accent : UiTokens.border),
       ),
+      padding: const EdgeInsets.fromLTRB(4, 4, 8, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    name.isEmpty ? 'Unknown' : name,
-                    style: AppTypography.titleMedium.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (hasEmail)
-                          _iconButton(
-                            icon: Icons.email_rounded,
-                            color: AppColors.primaryBlueLight,
-                            tooltip: 'Send Email',
-                            onTap: widget.onEmailTap,
-                          ),
-                        if (hasWebsite)
-                          _iconButton(
-                            icon: Icons.language_rounded,
-                            color: AppColors.primaryBlueLight,
-                            tooltip: 'Open Website',
-                            onTap: widget.onWebsiteTap,
-                          ),
-                        if (hasAddress)
-                          _iconButton(
-                            icon: Icons.location_on_rounded,
-                            color: AppColors.successGreen,
-                            tooltip: 'View on Maps',
-                            onTap: widget.onAddressTap,
-                          ),
-                      ],
-                    ),
-                    if (hasCategory) ...[
-                      const SizedBox(height: 6),
-                      _categoryBadge(category),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (hasAddress)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Text(
-                address,
-                style: AppTypography.bodySmall.copyWith(
-                  color: Colors.white60,
-                  fontSize: 12,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Checkbox(
+                value: selected,
+                onChanged: (v) => onSelected(v ?? false),
+                semanticLabel: 'Select $name',
+                materialTapTargetSize: MaterialTapTargetSize.padded,
               ),
-            ),
-          if (hasPhone)
-            Container(
-              margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.primaryBlue.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.15),
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.phone_rounded,
-                    size: 16,
-                    color: AppColors.successGreen,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      phone,
-                      style: AppTypography.bodySmall.copyWith(
-                        color: Colors.white,
-                        fontFamily: 'Roboto Mono',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w700),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                      if (_has(category) || city.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            [if (_has(category)) category, if (city.isNotEmpty) city].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+                          ),
+                        ),
+                      if (_has(phone)) line(Icons.call_outlined, phone, color: UiTokens.text),
+                      if (_has(email)) line(Icons.email_outlined, email),
+                      if (_has(website)) line(Icons.language_rounded, website),
+                      if (_has(address)) line(Icons.place_outlined, address),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: const BoxDecoration(
-                    color: AppColors.successGreen,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'Verified Lead',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: Colors.white60,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: LeadActionButtons(lead: lead, actions: actions),
           ),
         ],
       ),
     );
   }
-
-  Widget _iconButton({
-    required IconData icon,
-    required Color color,
-    required String tooltip,
-    required VoidCallback? onTap,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Icon(icon, size: 20, color: color),
-        ),
-      ),
-    );
-  }
-
-  Widget _categoryBadge(String category) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: AppColors.successGreen.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: AppColors.successGreen.withValues(alpha: 0.3),
-        ),
-      ),
-      child: Text(
-        category,
-        style: AppTypography.labelSmall.copyWith(
-          color: AppColors.successGreen,
-          fontWeight: FontWeight.w600,
-          fontSize: 11,
-        ),
-      ),
-    );
-  }
-}
-
-// Colors now consolidated in AppColors
-
-class _GridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.05)
-      ..strokeWidth = 1;
-
-    const spacing = 40.0;
-    for (double x = 0; x <= size.width; x += spacing) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y <= size.height; y += spacing) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

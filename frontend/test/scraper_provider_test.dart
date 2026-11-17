@@ -194,13 +194,26 @@ void main() {
     p.dispose();
   });
 
-  test('a second start while a job runs is refused locally', () async {
+  test('a double press while a start is in flight sends one request', () async {
     final api = FakeApi();
     api.createScript.add(_job('running'));
     final p = _provider(api);
-    await p.startScraping(category: 'ecommerce', citiesData: ['Doha, Qatar']);
+    final first = p.startScraping(category: 'ecommerce', citiesData: ['Doha, Qatar']);
     expect(await p.startScraping(category: 'ecommerce', citiesData: ['Doha, Qatar']), isFalse);
+    expect(await first, isTrue);
     expect(api.createKeys.length, 1);
+    p.dispose();
+  });
+
+  test('a new search can start while another runs (server enforces the limit)', () async {
+    final api = FakeApi();
+    api.createScript.add(_job('running'));
+    api.createScript.add(_job('running'));
+    final p = _provider(api);
+    expect(await p.startScraping(category: 'ecommerce', citiesData: ['Doha, Qatar']), isTrue);
+    expect(await p.startScraping(category: 'plumbers', citiesData: ['Lusail, Qatar']), isTrue);
+    expect(api.createKeys.length, 2);
+    expect(api.createKeys.toSet().length, 2, reason: 'a different search gets a new idempotency key');
     p.dispose();
   });
 

@@ -8,7 +8,6 @@ export 'animated_list_item.dart';
 export 'custom_app_bar.dart';
 export 'sidebar_navigation.dart';
 export 'top_bar.dart';
-export 'responsive_shell.dart';
 export 'infinity_data_table.dart';
 export 'responsive_grid.dart';
 export 'credit_package_card.dart';
