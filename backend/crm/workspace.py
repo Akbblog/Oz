@@ -89,6 +89,7 @@ def get_or_create(conn, user: Dict[str, Any]) -> Dict[str, Any]:
         (ws["id"],),
     )
     ws["pipeline_id"] = pipe["id"] if pipe else None
+    ws["viewer_id"] = user["id"]  # for per-viewer flags such as a note's can_edit
     return ws
 
 

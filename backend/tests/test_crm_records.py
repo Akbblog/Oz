@@ -93,6 +93,13 @@ def test_drag_to_won_column_marks_won(crm):
     won = a.ok(a.post(f"/records/{rid}/stage", {"stage_id": st["won"]["id"]}))
     assert won["outcome"] == "won" and won["events"][0]["type"] == "won"
     assert a.ok(a.post(f"/records/{rid}/reopen"))["stage"]["key"] == "new"
+    # frontend flow: a won card dragged to an open column = reopen, then stage (with the returned version)
+    a.ok(a.post(f"/records/{rid}/won"))
+    reopened = a.ok(a.post(f"/records/{rid}/reopen", {"version": a.record(rid)["version"]}))
+    for k in ("id", "version", "stage", "outcome", "company", "tags", "next_activity", "events_next_cursor"):
+        assert k in reopened
+    moved = a.ok(a.post(f"/records/{rid}/stage", {"stage_id": st["proposal"]["id"], "version": reopened["version"]}))
+    assert moved["outcome"] == "open" and moved["stage"]["key"] == "proposal"
 
 
 def test_patch_allowlist_and_validation(crm):
@@ -171,6 +178,8 @@ def test_list_filters_search_and_keyset_pagination(crm):
     assert a.ok(a.get("/records", tag_id=tag["id"]))["items"][0]["tags"][0]["name"] == "Hot_lead"
     assert a.ok(a.get("/records", stage_id=st["contacted"]["id"]))["total"] == 1
     assert a.ok(a.get("/records", stage_id=st["won"]["id"]))["total"] == 1  # won column defaults to won
+    assert a.ok(a.get("/records", stage_id=st["won"]["id"], outcome="won", archived="false"))["total"] == 1
+    assert a.ok(a.get("/records", stage_id=st["contacted"]["id"], outcome="open", archived="false"))["total"] == 1
     assert a.ok(a.get("/records", outcome="won"))["total"] == 1
     assert a.ok(a.get("/records", outcome="all"))["total"] == 25
     assert a.ok(a.get("/records", type="opportunity"))["total"] == 0
@@ -209,7 +218,8 @@ def test_notes_people_and_tags(crm):
     a = crm.user("alice")
     (rid,), _ = _imported(crm, a)
     note = a.ok(a.post(f"/records/{rid}/notes", {"body": "First call went well"}))
-    assert note["edited_at"] is None
+    assert note["edited_at"] is None and note["can_edit"] is True
+    assert note["author"] == {"id": a.id, "name": "alice"} and note["author_name"] == "alice"
     edited = a.ok(a.patch(f"/notes/{note['id']}", {"body": "First call went very well"}))
     assert edited["edited_at"] and edited["body"] == "First call went very well"
     assert a.post(f"/records/{rid}/notes", {"body": "   "}).status_code == 422
@@ -221,6 +231,7 @@ def test_notes_people_and_tags(crm):
     assert a.post(f"/records/{rid}/people", {"name": "X", "is_admin": True}).status_code == 422
     a.ok(a.patch(f"/people/{p2['id']}", {"is_primary": True, "role": "Manager"}))
     rec = a.record(rid)
+    assert rec["notes"][0]["can_edit"] is True and rec["notes"][0]["author"]["name"] == "alice"
     people = {p["name"]: p for p in rec["people"]}
     assert people["Omar"]["is_primary"] is True and people["Sara Ali"]["is_primary"] is False
     contacts = a.ok(a.get("/people", q="sara"))

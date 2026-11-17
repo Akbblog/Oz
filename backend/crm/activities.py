@@ -10,7 +10,7 @@ from .common import (
     fetch_one, for_update, invalid, is_unique_violation, like_param, local_day_bounds, new_id, not_found, page_limit,
     parse_aware, placeholders, scalar, tz_offset, utcnow,
 )
-from .records import ACTIVITY_COLS, activity_api, add_event, load_record, note_api, person_api, touch
+from .records import ACTIVITY_COLS, NOTE_SELECT, activity_api, add_event, load_record, note_api, person_api, touch
 
 ACTIVITY_TYPES = ("call", "email", "meeting", "message", "task")
 
@@ -50,7 +50,7 @@ def add_note(conn, ws, user, record_id: str, body: Dict[str, Any]) -> Dict[str, 
         return nid
 
     nid = _write(conn, fn)
-    return note_api(fetch_one(conn.cursor(), "SELECT id, record_id, author_user_id, body, created_at, edited_at FROM crm_notes WHERE id = ?", (nid,)))
+    return note_api(fetch_one(conn.cursor(), f"{NOTE_SELECT} WHERE n.id = ?", (nid,)), user["id"])
 
 
 def edit_note(conn, ws, user, note_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -71,7 +71,7 @@ def edit_note(conn, ws, user, note_id: str, body: Dict[str, Any]) -> Dict[str, A
         touch(cur, ws["id"], n["record_id"], now)
 
     _write(conn, fn)
-    return note_api(fetch_one(conn.cursor(), "SELECT id, record_id, author_user_id, body, created_at, edited_at FROM crm_notes WHERE id = ?", (note_id,)))
+    return note_api(fetch_one(conn.cursor(), f"{NOTE_SELECT} WHERE n.id = ?", (note_id,)), user["id"])
 
 
 # --------------------------------------------------------------------------- #
@@ -457,6 +457,7 @@ def agenda(conn, ws, bucket: Optional[str], offset_minutes: Any, limit: Optional
     for a in rows:
         item = activity_api(a, now)
         item["record_title"] = a["record_title"]
+        item["record"] = {"id": a["record_id"], "title": a["record_title"]}
         items.append(item)
     nc = encode_cursor([cursor_ts(rows[-1]["k1"]), rows[-1]["id"]]) if more and rows else None
     return {"bucket": bucket, "items": items, "next_cursor": nc, "total": total}

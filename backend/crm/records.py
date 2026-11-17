@@ -392,9 +392,16 @@ def person_api(p: Dict[str, Any]) -> Dict[str, Any]:
             "created_at": api_ts(p["created_at"]), "updated_at": api_ts(p["updated_at"])}
 
 
-def note_api(n: Dict[str, Any]) -> Dict[str, Any]:
-    return {"id": n["id"], "record_id": n["record_id"], "author_user_id": n["author_user_id"], "body": n["body"],
-            "created_at": api_ts(n["created_at"]), "edited_at": api_ts(n["edited_at"])}
+NOTE_SELECT = ("SELECT n.id, n.record_id, n.author_user_id, n.body, n.created_at, n.edited_at, u.username AS author_name "
+               "FROM crm_notes n LEFT JOIN users u ON u.id = n.author_user_id")
+
+
+def note_api(n: Dict[str, Any], viewer_id: Optional[int] = None) -> Dict[str, Any]:
+    author = {"id": n["author_user_id"], "name": n.get("author_name")} if n["author_user_id"] is not None else None
+    return {"id": n["id"], "record_id": n["record_id"], "author_user_id": n["author_user_id"], "author": author,
+            "author_name": n.get("author_name"),
+            "can_edit": viewer_id is not None and n["author_user_id"] == viewer_id,
+            "body": n["body"], "created_at": api_ts(n["created_at"]), "edited_at": api_ts(n["edited_at"])}
 
 
 def detail(conn, ws: Dict[str, Any], record_id: str) -> Dict[str, Any]:
@@ -441,9 +448,9 @@ def detail(conn, ws: Dict[str, Any], record_id: str) -> Dict[str, Any]:
         cur, f"SELECT {ACTIVITY_COLS} FROM crm_activities WHERE workspace_id = ? AND record_id = ? AND status = 'done' "
              f"ORDER BY completed_at DESC, id DESC LIMIT 50", (ws["id"], r["id"]))
     item["activities"] = [activity_api(a, now) for a in acts]
-    item["notes"] = [note_api(n) for n in fetch_all(
-        cur, "SELECT id, record_id, author_user_id, body, created_at, edited_at FROM crm_notes "
-             "WHERE workspace_id = ? AND record_id = ? ORDER BY created_at DESC, id DESC LIMIT 50", (ws["id"], r["id"]))]
+    item["notes"] = [note_api(n, ws.get("viewer_id")) for n in fetch_all(
+        cur, f"{NOTE_SELECT} WHERE n.workspace_id = ? AND n.record_id = ? ORDER BY n.created_at DESC, n.id DESC LIMIT 50",
+        (ws["id"], r["id"]))]
     ev = list_events(conn, ws, r["id"], None, 50)
     item["events"] = ev["items"]
     item["events_next_cursor"] = ev["next_cursor"]

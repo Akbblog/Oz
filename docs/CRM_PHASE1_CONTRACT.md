@@ -221,3 +221,14 @@ Where this section differs from sections 0–3, this section is what the backend
 - Export adds `encoding: "base64"` and `count`, is capped at 10 000 rows, CSV cells starting with `= + - @ \t \r`
   get a leading apostrophe, XLSX cells use the job-download text helper (never formulas). Timestamps in the file
   are UTC.
+
+**Frontend alignment (confirmed 2026-11-18)**
+- Resolve takes its own `idempotency_key` per submission (reuse it only to retry that same resolve); it need not
+  equal the import key. `tz_offset_minutes` is minutes east of UTC (local = UTC + offset; New York = `-300`).
+- Transitions return the detail shape, which includes every list-item field (`id`, `version`, `stage`, …). Pipeline
+  moves: drop on Won ⇒ `/won`; won card to an open column ⇒ `/reopen` then `/stage` with the returned `version`.
+  "Load more": `GET /records?stage_id=..&outcome=open|won&archived=false&cursor=..` (explicit `outcome=won` with the
+  Won stage works).
+- Notes carry `author: {id, name}` (`name` = username), `author_name`, and `can_edit` (true only for the author /
+  current viewer). Agenda items carry `record: {id, title}` (and `record_title`). Workspace and detail `tags` are
+  plain lists; `GET /tags` wraps them in `{items}`.

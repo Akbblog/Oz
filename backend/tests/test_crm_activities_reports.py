@@ -58,6 +58,7 @@ def test_agenda_buckets_and_counts_follow_the_client_offset(crm):
 
     today = a.ok(a.get("/agenda", bucket="today", tz_offset_minutes=morning))
     assert [i["id"] for i in today["items"]] == [soon["id"]] and today["items"][0]["record_title"] == "Biz 1"
+    assert today["items"][0]["record"] == {"id": rid, "title": "Biz 1"}
     assert [i["id"] for i in a.ok(a.get("/agenda", bucket="overdue"))["items"]] == [overdue["id"]]
     up = a.ok(a.get("/agenda", bucket="upcoming", tz_offset_minutes=evening, limit=1))
     assert [i["id"] for i in up["items"]] == [soon["id"]] and up["total"] == 2 and up["next_cursor"]
@@ -202,3 +203,17 @@ def test_export_csv_and_xlsx_are_formula_safe_and_scoped(crm):
     evil_cell = [c for c in titles if str(c.value).startswith("=")][0]
     assert evil_cell.data_type == "s"  # stored as text, never a formula
     assert a.get("/export", format="pdf").status_code == 422
+
+
+def test_report_dates_are_local_and_inclusive_with_negative_offset(crm):
+    """New York (UTC-5 = -300): a win at 2026-03-02 03:00Z is local 2026-03-01 22:00."""
+    a = crm.user("alice")
+    rid = a.new_record("Late deal")["id"]
+    a.ok(a.post(f"/records/{rid}/won"))
+    cur = crm.conn.cursor()
+    cur.execute("UPDATE crm_records SET closed_at = ? WHERE id = ?", ("2026-03-02 03:00:00.000000", rid))
+    crm.conn.commit()
+    ny = {"tz_offset_minutes": -300}
+    assert a.ok(a.get("/reports", **{"from": "2026-03-01", "to": "2026-03-01", **ny}))["won"] == 1
+    assert a.ok(a.get("/reports", **{"from": "2026-03-02", "to": "2026-03-02", **ny}))["won"] == 0
+    assert a.ok(a.get("/reports", **{"from": "2026-03-02", "to": "2026-03-02"}))["won"] == 1  # UTC
