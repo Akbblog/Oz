@@ -205,7 +205,10 @@ def test_admin_still_manages_lower_ranks(db_connection, staff):
         assert _row(db_connection, tid)["susp"] == 1
         assert client.post(f"/api/admin/users/{tid}/unsuspend", headers=h).status_code == 200
         assert client.post(f"/api/admin/users/{tid}/suspend", json={"reason": "abuse"}, headers=h).status_code == 200
-        assert client.delete(f"/api/admin/users/{tid}", headers=h).status_code == 200
+        # Permanent deletion is owner-only.
+        assert client.delete(f"/api/admin/users/{tid}", headers=h).status_code == 403
+        assert _row(db_connection, tid) is not None
+        assert client.delete(f"/api/admin/users/{tid}", headers=_h(client, "own1")).status_code == 200
         assert _row(db_connection, tid) is None
     pending = _user(db_connection, "newbie", "user", approved=0)
     assert client.post(f"/api/admin/users/{pending}/deny", headers=h).status_code == 200
@@ -225,7 +228,7 @@ def test_self_actions_still_refused(db_connection, staff):
     client, ids = staff
     h = _h(client, "adm1")
     assert client.post(f"/api/admin/users/{ids['admin']}/suspend", json={}, headers=h).status_code == 400
-    assert client.delete(f"/api/admin/users/{ids['admin']}", headers=h).status_code == 400
+    assert client.delete(f"/api/admin/users/{ids['owner']}", headers=_h(client, "own1")).status_code == 400
 
 
 def test_support_cannot_mutate_anyone(db_connection, staff):
@@ -234,3 +237,69 @@ def test_support_cannot_mutate_anyone(db_connection, staff):
     assert client.post(f"/api/admin/users/{ids['user']}/suspend", json={}, headers=h).status_code == 403
     assert client.put(f"/api/admin/users/{ids['user']}", json={"phone": "1"}, headers=h).status_code == 403
     assert client.delete(f"/api/admin/users/{ids['user']}", headers=h).status_code == 403
+
+
+# ------------------------------------------- owner-only actions and grants --
+
+def _balance(conn, uid):
+    cur = conn.cursor()
+    cur.execute("SELECT credit_balance FROM users WHERE id = ?", (uid,))
+    return int(cur.fetchone()[0] or 0)
+
+
+def test_live_payments_toggle_is_owner_only(db_connection, staff):
+    client, ids = staff
+    body = {"value": "true"}
+    assert client.put("/api/admin/settings/enable_live_payments", json=body, headers=_h(client, "adm1")).status_code == 403
+    assert client.put("/api/admin/settings/enable_live_payments", json=body, headers=_h(client, "own1")).status_code == 200
+    # other settings stay admin-level
+    assert client.put("/api/admin/settings/starting_credits", json={"value": "50"},
+                      headers=_h(client, "adm1")).status_code == 200
+
+
+@pytest.mark.parametrize("actor,target,expected", [
+    ("adm1", "user", 200), ("adm1", "support", 200),
+    ("adm1", "admin2", 403), ("adm1", "owner", 403), ("adm1", "admin", 403),   # admin -> admin/owner/self
+    ("own1", "admin", 200), ("own1", "owner", 200),                              # owner -> admin, self
+    ("own1", "owner2", 403),                                                     # owner -> other owner
+    ("sup1", "user", 403),
+])
+def test_grant_rank_rules(db_connection, staff, actor, target, expected):
+    client, ids = staff
+    before = _balance(db_connection, ids[target])
+    r = client.post(f"/api/admin/users/{ids[target]}/credits", json={"amount": 25, "reason": "goodwill"},
+                    headers=_h(client, actor))
+    assert r.status_code == expected, r.text
+    assert _balance(db_connection, ids[target]) == before + (25 if expected == 200 else 0)
+
+
+@pytest.mark.parametrize("body", [
+    {"amount": 0, "reason": "x"}, {"amount": -10, "reason": "x"}, {"amount": 25},
+    {"amount": 25, "reason": "   "}, {"amount": 2_000_000, "reason": "x"},
+])
+def test_grant_must_be_positive_with_reason(db_connection, staff, body):
+    client, ids = staff
+    r = client.post(f"/api/admin/users/{ids['user']}/credits", json=body, headers=_h(client, "own1"))
+    assert r.status_code == 422, r.text
+    assert _balance(db_connection, ids["user"]) == 0
+    cur = db_connection.cursor()
+    cur.execute("SELECT COUNT(*) FROM credit_ledger WHERE user_id = ?", (ids["user"],))
+    assert cur.fetchone()[0] == 0
+
+
+def test_credit_request_approval_follows_grant_rules(db_connection, staff):
+    client, ids = staff
+    cur = db_connection.cursor()
+    req = {}
+    for name in ("admin2", "user", "owner"):
+        cur.execute("INSERT INTO credit_requests (user_id, amount_requested, reason, status, created_at) "
+                    "VALUES (?, 40, 'need', 'pending', ?)", (ids[name], datetime.now().isoformat()))
+        req[name] = cur.lastrowid
+    db_connection.commit()
+    h = _h(client, "adm1")
+    assert client.post(f"/api/admin/credits/requests/{req['admin2']}/approve", headers=h).status_code == 403
+    assert _balance(db_connection, ids["admin2"]) == 0
+    r = client.post("/api/admin/credits/requests/bulk-approve",
+                    json={"request_ids": [req["user"], req["owner"]]}, headers=h)
+    assert r.status_code == 200 and r.json()["request_ids"] == [req["user"]] and r.json()["skipped"] == 1
+    assert _balance(db_connection, ids["user"]) == 40 and _balance(db_connection, ids["owner"]) == 0

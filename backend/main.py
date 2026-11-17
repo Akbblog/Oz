@@ -984,6 +984,19 @@ def _user_role_level(user: dict) -> int:
     return ROLE_HIERARCHY.get(user.get("role", "user"), 0)
 
 
+def _may_grant_credits_to(cursor, actor: dict, target_id: int) -> bool:
+    """Credit grants follow the rank rule: admins credit support/user accounts;
+    owners also credit admins and themselves, never another owner."""
+    cursor.execute("SELECT role, is_admin FROM users WHERE id = ?", (target_id,))
+    row = cursor.fetchone()
+    if not row:
+        return False
+    actor_role = _stored_role(actor.get("role"), actor.get("is_admin"))
+    if actor.get("id") == target_id:
+        return actor_role == "owner"
+    return ROLE_HIERARCHY.get(actor_role, 0) > ROLE_HIERARCHY.get(_stored_role(row[0], row[1]), 0)
+
+
 def _stored_role(role: object, is_admin: object) -> str:
     """Effective role of a users row (legacy rows may only carry is_admin)."""
     normalized = (str(role).strip().lower() if role else "")
@@ -2236,8 +2249,8 @@ async def unsuspend_user(user_id: int, request: Request, admin: dict = Depends(g
 
 
 @app.delete("/api/admin/users/{user_id}")
-async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_admin_or_above)):
-    """Permanently delete a user after suspension/denial (admin only)."""
+async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_owner_user)):
+    """Permanently delete a user after suspension/denial (owner only)."""
     if admin["id"] == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
 
@@ -2427,6 +2440,9 @@ class AdminSettingUpdate(BaseModel):
     value: str
 
 
+OWNER_ONLY_SETTINGS = {"enable_live_payments"}
+
+
 @app.put("/api/admin/settings/{key}")
 async def update_setting(
     key: str,
@@ -2435,10 +2451,12 @@ async def update_setting(
     value: Optional[str] = None,
     admin: dict = Depends(get_admin_or_above),
 ):
-    """Update an admin setting (admin only)"""
+    """Update an admin setting (admin only; live payments: owner only)"""
     new_value = payload.value if payload is not None else value
     if new_value is None:
         raise HTTPException(status_code=400, detail="Missing setting value")
+    if key in OWNER_ONLY_SETTINGS and _user_role_level(admin) < ROLE_HIERARCHY["owner"]:
+        raise HTTPException(status_code=403, detail="Only an owner can change this setting")
     old_value = get_admin_setting(key)
     set_admin_setting(key, str(new_value), admin["id"])
 
@@ -2472,6 +2490,10 @@ class CreditEstimateRequest(BaseModel):
 class CreditRequestModel(BaseModel):
     amount_requested: int
     reason: Optional[str] = None
+
+
+# Upper bound for one manual grant; larger amounts take several deliberate grants.
+ADMIN_GRANT_MAX = 1_000_000
 
 
 class AdminCreditGrant(BaseModel):
@@ -2659,6 +2681,9 @@ async def approve_credit_request(request_id: int, req: Request, admin: dict = De
         raise HTTPException(status_code=404, detail="Credit request not found or already processed")
 
     user_id, amount = cr
+    if not _may_grant_credits_to(cursor, admin, int(user_id)):
+        conn.close()
+        raise HTTPException(status_code=403, detail="Your role can't approve credits for this account")
 
     # Update request status
     cursor.execute("""
@@ -2716,6 +2741,9 @@ async def bulk_approve_credit_requests(payload: BulkCreditRequestIdsRequest, req
                 continue
 
             user_id, amount = req
+            if not _may_grant_credits_to(cursor, admin, int(user_id)):
+                skipped_ids.append(request_id)
+                continue
             cursor.execute(
                 """
                 UPDATE credit_requests
@@ -2838,18 +2866,37 @@ async def bulk_deny_credit_requests(payload: BulkCreditRequestIdsRequest, reques
 
 @app.post("/api/admin/users/{user_id}/credits")
 async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, request: Request, admin: dict = Depends(get_admin_or_above)):
-    """Manually grant credits to a user (admin only)"""
+    """Manually grant credits (admin and owner).
+
+    The amount must be a positive whole number and a reason is required (it is
+    written to the ledger and the audit log). Admins may only grant to support
+    and user accounts; owners may also grant to admins and to themselves, but
+    never to another owner.
+    """
+    amount = int(grant.amount)
+    if amount <= 0 or amount > ADMIN_GRANT_MAX:
+        raise HTTPException(status_code=422, detail=f"Amount must be between 1 and {ADMIN_GRANT_MAX:,}")
+    reason = (grant.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="A reason is required for a credit grant")
+
     conn = get_db()
     cursor = conn.cursor()
-
-    # Verify user exists
-    cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
-    if not cursor.fetchone():
+    try:
+        cursor.execute("SELECT id, role, is_admin FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+    finally:
         conn.close()
+    if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    conn.close()
+    target_role = _stored_role(row[1], row[2])
+    if admin["id"] == user_id:
+        if _stored_role(admin.get("role"), admin.get("is_admin")) != "owner":
+            raise HTTPException(status_code=403, detail="You can't grant credits to your own account")
+    else:
+        _require_outranks(admin, user_id, target_role, "grant credits to")
 
-    new_balance = add_credits(user_id, grant.amount, grant.reason or "Admin manual grant", admin["id"])
+    new_balance = add_credits(user_id, amount, reason, admin["id"])
 
     record_audit_event(
         "admin.credits.grant",
@@ -2860,10 +2907,10 @@ async def admin_grant_credits(user_id: int, grant: AdminCreditGrant, request: Re
         target_id=str(user_id),
         ip_address=getattr(request.state, "client_ip", None),
         user_agent=getattr(request.state, "user_agent", None),
-        metadata={"amount": grant.amount, "reason": grant.reason},
+        metadata={"amount": amount, "reason": reason},
     )
 
-    return {"message": f"Granted {grant.amount} credits", "new_balance": new_balance}
+    return {"message": f"Granted {amount} credits", "new_balance": new_balance}
 
 
 @app.get("/api/admin/users/{user_id}/credits")
