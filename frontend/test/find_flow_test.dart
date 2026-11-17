@@ -1,3 +1,5 @@
+import 'dart:ui' show CheckedState, Tristate;
+
 import 'package:business_scraper_app/providers/active_searches_provider.dart';
 import 'package:business_scraper_app/providers/auth_provider.dart';
 import 'package:business_scraper_app/providers/credit_provider.dart';
@@ -6,7 +8,10 @@ import 'package:business_scraper_app/providers/search_setup_provider.dart';
 import 'package:business_scraper_app/screens/find/details_step.dart';
 import 'package:business_scraper_app/screens/find/location_step.dart';
 import 'package:business_scraper_app/services/api_service.dart';
+import 'package:business_scraper_app/widgets/country_flag_badge.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -67,7 +72,7 @@ class _Api extends ApiService {
   Future<List<String>> getCities(String state) async => cities[state] ?? const [];
 
   @override
-  Future<Map<String, dynamic>> getJobs({int? limit, int? offset, String? status}) async =>
+  Future<Map<String, dynamic>> getJobs({int? limit, int? offset, String? status, String? q, DateTime? from, DateTime? to, String? sort}) async =>
       {'jobs': jobs, 'total': jobs.length, 'counts': <String, int>{}, 'paginated': true};
 
   @override
@@ -166,6 +171,16 @@ Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 8; i++) {
     await tester.pump(const Duration(milliseconds: 100));
   }
+}
+
+SemanticsNode? _semanticsNode(SemanticsNode node, bool Function(SemanticsNode) test) {
+  if (test(node)) return node;
+  SemanticsNode? hit;
+  node.visitChildren((child) {
+    hit ??= _semanticsNode(child, test);
+    return hit == null;
+  });
+  return hit;
 }
 
 Finder _fieldWithHint(String hint) =>
@@ -373,6 +388,160 @@ void main() {
       expect(find.text('Canada'), findsNothing);
     });
 
+    testWidgets('country rows show the flag beside the full name and region count', (tester) async {
+      _size(tester, const Size(1440, 900));
+      final h = _Harness();
+      await tester.pumpWidget(h.app('/find'));
+      await _settle(tester);
+
+      expect(find.text('United States'), findsOneWidget);
+      expect(find.text('Canada'), findsOneWidget);
+      expect(find.byType(CountryFlagBadge), findsNWidgets(2));
+      expect(find.text('CA'), findsNothing, reason: 'no two-letter code in place of the flag');
+      final row = find.ancestor(of: find.text('Canada'), matching: find.byType(Row)).first;
+      expect(find.descendant(of: row, matching: find.byType(CountryFlagBadge)), findsOneWidget);
+      expect(find.bySemanticsLabel('Canada, 2 provinces'), findsOneWidget);
+    });
+
+    for (final width in [360.0, 390.0, 430.0]) {
+      testWidgets('phone ${width.toInt()} px: city header stacks instead of truncating', (tester) async {
+        _size(tester, Size(width, 800));
+        final h = _Harness();
+        h.setup
+          ..setCountry('Canada')
+          ..setRegion('Quebec');
+        await tester.pumpWidget(h.app('/find?country=Canada&region=Quebec'));
+        await _settle(tester);
+
+        expect(tester.takeException(), isNull, reason: 'no overflow');
+        final country = tester.widget<Text>(find.text('Canada'));
+        expect(country.maxLines, isNull, reason: 'country name wraps, never ellipsised');
+        expect(find.text('Quebec'), findsOneWidget);
+        expect(find.byType(CountryFlagBadge), findsOneWidget);
+        // Country line sits above the region title.
+        expect(tester.getTopLeft(find.text('Canada')).dy, lessThan(tester.getTopLeft(find.text('Quebec')).dy));
+        // Back button is a 48 px target.
+        final back = find.ancestor(of: find.text('Provinces'), matching: find.byWidgetPredicate((w) => w is TextButton));
+        expect(tester.getSize(back).height, greaterThanOrEqualTo(48));
+        await tester.enterText(_fieldWithHint('Search cities in Quebec'), 'saint');
+        await tester.pump();
+        expect(tester.getSize(find.byTooltip('Clear search')).height, greaterThanOrEqualTo(48));
+        expect(tester.getSize(find.ancestor(of: find.text('Select 2 shown'), matching: find.byType(OutlinedButton))).height,
+            greaterThanOrEqualTo(48));
+        await _settle(tester);
+      });
+    }
+
+    testWidgets('city rows: checkbox semantics, focusable, 48 px; Space and Enter toggle from the keyboard',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      _size(tester, const Size(1440, 900));
+      final h = _Harness();
+      h.setup
+        ..setCountry('Canada')
+        ..setRegion('Quebec');
+      await tester.pumpWidget(h.app('/find?country=Canada'));
+      await _settle(tester);
+
+      final montrealText = find.descendant(of: find.byType(GridView), matching: find.text('Montreal'));
+      final montreal = find.descendant(of: find.byType(GridView), matching: find.bySemanticsLabel('Montreal'));
+      expect(montreal, findsOneWidget);
+      final data = tester.getSemantics(montreal).getSemanticsData();
+      expect(data.flagsCollection.isChecked, CheckedState.isFalse);
+      expect(data.flagsCollection.isFocused, isNot(Tristate.none), reason: 'focusable');
+      expect(data.hasAction(SemanticsAction.tap), isTrue);
+      expect(tester.getSize(find.ancestor(of: montrealText, matching: find.byType(InkWell)).first).height,
+          greaterThanOrEqualTo(48));
+
+      // Tab from the city search stays in the city panel ("Select 5 shown"),
+      // not the region list to its left.
+      await tester.tap(_fieldWithHint('Search cities in Quebec'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      final focused = FocusManager.instance.primaryFocus!.context!;
+      expect(find.ancestor(of: find.byWidget(focused.widget), matching: find.byType(OutlinedButton)), findsOneWidget);
+
+      // Keyboard: focus Montreal's row, Space toggles, Enter toggles back.
+      Focus.of(tester.element(montrealText)).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      expect(h.setup.cities, ['Montreal, Quebec']);
+      expect(tester.getSemantics(montreal).getSemanticsData().flagsCollection.isChecked, CheckedState.isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(h.setup.cities, isEmpty);
+      await _settle(tester);
+      handle.dispose();
+    });
+
+    testWidgets(
+        'accessibility mode: ticking a city via the screen reader moves focus off the search, '
+        'so focusing the search again opens a fresh editing session and typing filters', (tester) async {
+      final handle = tester.ensureSemantics();
+      _size(tester, const Size(1440, 900));
+      final h = _Harness();
+      h.setup.setCountry('Canada');
+      await tester.pumpWidget(h.app('/find?country=Canada'));
+      await _settle(tester);
+
+      // Tapping a region focuses its city search (keyboard flow).
+      await tester.tap(find.text('Quebec'));
+      await _settle(tester);
+      final search = _fieldWithHint('Search cities in Quebec');
+      final searchFocus = tester.widget<TextField>(search).focusNode!;
+      expect(searchFocus.hasFocus, isTrue);
+
+      // Screen reader "tap" on the Montreal checkbox row: what Flutter web
+      // sends when the semantics DOM element is clicked. The browser moves
+      // DOM focus to that element, which ends the field's editing session.
+      final owner = tester.binding.renderViews.first.owner!.semanticsOwner!;
+      owner.performAction(tester.getSemantics(find.bySemanticsLabel('Montreal')).id, SemanticsAction.tap);
+      await tester.pump();
+      expect(h.setup.cities, ['Montreal, Quebec']);
+      expect(searchFocus.hasFocus, isFalse,
+          reason: 'focus follows the activated row; before the fix it stayed on the search field, so the '
+              'web engine never re-activated the field and typed text was lost');
+      expect(Focus.of(tester.element(find.descendant(of: find.byType(GridView), matching: find.text('Montreal')))).hasFocus,
+          isTrue);
+
+      // Screen reader focuses the search again -> real focus change -> typing works.
+      final field = _semanticsNode(owner.rootSemanticsNode!, (n) {
+        final d = n.getSemanticsData();
+        return d.flagsCollection.isTextField && '${d.label} ${d.hint}'.contains('Search cities in Quebec');
+      });
+      expect(field, isNotNull);
+      expect(field!.getSemanticsData().hasAction(SemanticsAction.focus), isTrue);
+      owner.performAction(field.id, SemanticsAction.focus);
+      await tester.pump();
+      expect(searchFocus.hasFocus, isTrue);
+      expect(tester.testTextInput.hasAnyClients, isTrue);
+      tester.testTextInput.enterText('saint');
+      await tester.pump();
+      expect(find.text('2 of 5 cities match “saint”. Your other selections are kept.'), findsOneWidget);
+      expect(find.text('Select 2 shown'), findsOneWidget);
+      await _settle(tester);
+      handle.dispose();
+    });
+
+    testWidgets('selection count is a polite live region', (tester) async {
+      final handle = tester.ensureSemantics();
+      _size(tester, const Size(1440, 900));
+      final h = _Harness();
+      h.setup
+        ..setCountry('Canada')
+        ..setRegion('Quebec');
+      await tester.pumpWidget(h.app('/find?country=Canada'));
+      await _settle(tester);
+      await tester.tap(find.text('Laval'));
+      await tester.pump();
+      final data = tester.getSemantics(find.text('1 city selected')).getSemanticsData();
+      expect(data.flagsCollection.isLiveRegion, isTrue);
+      await _settle(tester);
+      handle.dispose();
+    });
+
     testWidgets('phone: region level drills into the city level via the URL', (tester) async {
       _size(tester, const Size(390, 844));
       final h = _Harness();
@@ -384,7 +553,11 @@ void main() {
       await _settle(tester);
       expect(h.pushed.last, '/find?country=Canada&region=Quebec');
       expect(find.text('Provinces'), findsOneWidget);
-      expect(find.text('Canada · step 1 of 2'), findsOneWidget);
+      // Stacked header: back + step, then flag + country, then the region.
+      expect(find.text('Step 1 of 2'), findsOneWidget);
+      expect(find.text('Canada'), findsOneWidget);
+      expect(find.byType(CountryFlagBadge), findsOneWidget);
+      expect(find.text('Quebec'), findsOneWidget);
       await tester.tap(find.text('Laval'));
       await tester.pump();
       expect(h.setup.cities, ['Laval, Quebec']);

@@ -438,11 +438,11 @@ class _FindDetailsStepState extends State<FindDetailsStep> {
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: UiTokens.border),
+                borderSide: const BorderSide(color: findFieldBorder),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: UiTokens.accent, width: 1.5),
+                borderSide: const BorderSide(color: findFocusRing, width: 2),
               ),
               errorBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
@@ -508,6 +508,7 @@ class _FindDetailsStepState extends State<FindDetailsStep> {
           ],
           const SizedBox(height: 20),
           _label(setup.cityCount == 0 ? 'Cities' : 'Cities (${formatCount(setup.cityCount)})'),
+          if (_placeLine(setup) case final place?) ...[place, const SizedBox(height: 8)],
           _cityChips(setup, unlisted),
           const SizedBox(height: 4),
           Wrap(
@@ -536,6 +537,22 @@ class _FindDetailsStepState extends State<FindDetailsStep> {
           if (_showExtra) _extraField(),
         ],
       ),
+    );
+  }
+
+  /// "[flag] Canada · Quebec" above the city chips (null without a country).
+  Widget? _placeLine(SearchSetupProvider setup) {
+    final country = setup.country ?? _catalog.countryOfRegion(setup.region);
+    if (country == null || country.isEmpty || setup.cityCount == 0) return null;
+    final region = setup.region;
+    const style = TextStyle(color: UiTokens.textSecondary, fontSize: 13, fontWeight: FontWeight.w600);
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 6,
+      children: [
+        FindCountryLabel(countryKey: country, flagSize: 14, style: style),
+        if (region != null && region.isNotEmpty) Text('· $region', style: style),
+      ],
     );
   }
 
@@ -606,11 +623,11 @@ class _FindDetailsStepState extends State<FindDetailsStep> {
                 isDense: true,
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: UiTokens.border),
+                  borderSide: const BorderSide(color: findFieldBorder),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: UiTokens.accent, width: 1.5),
+                  borderSide: const BorderSide(color: findFocusRing, width: 2),
                 ),
                 errorBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
@@ -816,7 +833,7 @@ class _FindDetailsStepState extends State<FindDetailsStep> {
                 TextButton(
                   style: TextButton.styleFrom(
                     foregroundColor: UiTokens.accent,
-                    minimumSize: const Size(44, 40),
+                    minimumSize: const Size(48, 48),
                     textStyle: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   onPressed: block.onAction,
@@ -874,7 +891,7 @@ class _FindDetailsStepState extends State<FindDetailsStep> {
                       style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
                 TextButton(
-                  style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(44, 40)),
+                  style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
                   onPressed: _scrollToCost,
                   child: const Text('Cost details'),
                 ),

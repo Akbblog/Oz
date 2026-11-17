@@ -142,7 +142,8 @@ class _LinkButton extends StatelessWidget {
     return TextButton(
       style: TextButton.styleFrom(
         foregroundColor: UiTokens.accent,
-        minimumSize: const Size(44, 36),
+        // 48 px tall on phones (touch), 40 px on larger screens.
+        minimumSize: Size(48, MediaQuery.sizeOf(context).width < AppBreakpoints.mobile ? 48 : 40),
         padding: const EdgeInsets.symmetric(horizontal: 6),
         textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, decoration: TextDecoration.underline),
       ),
@@ -224,6 +225,7 @@ class _ReviewList extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip: 'Close',
+                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                   icon: const Icon(Icons.close_rounded, color: UiTokens.textSecondary),
                   onPressed: () => Navigator.of(context).pop(),
                 ),

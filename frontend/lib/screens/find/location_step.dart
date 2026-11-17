@@ -8,6 +8,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/search_setup_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/app_shell_common.dart';
+import '../../widgets/country_flag_badge.dart';
 import 'find_common.dart';
 import 'selection_bar.dart';
 
@@ -577,9 +578,8 @@ class _FindLocationStepState extends State<FindLocationStep> {
       label: r.available ? 'Recent: ${r.label}' : 'Recent: ${r.label}, no longer available',
       excludeSemantics: true,
       child: ActionChip(
-        avatar: r.country == null
-            ? null
-            : Text(countryCode(r.country!), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 11, fontWeight: FontWeight.w700)),
+        avatar: r.country == null ? null : CountryFlagBadge(countryName: r.country, size: 14),
+        materialTapTargetSize: MaterialTapTargetSize.padded,
         label: Text(label),
         labelStyle: TextStyle(color: r.available ? UiTokens.text : UiTokens.textMuted, fontSize: 13),
         backgroundColor: UiTokens.background,
@@ -596,45 +596,32 @@ class _FindLocationStepState extends State<FindLocationStep> {
     final n = _catalog.regionsOf(key).length;
     final countText = termCount(n, _catalog.regionTerm(key));
     final current = key == _selectionCountry && setup.cities.isNotEmpty;
-    return Semantics(
-      button: true,
+    return FindRow(
+      semanticLabel: '$name, $countText${current ? ', has your selection' : ''}',
       selected: current,
-      label: '$name, $countText${current ? ', has your selection' : ''}',
-      excludeSemantics: true,
-      onTap: () => _pickCountry(key),
-      child: Material(
-        color: UiTokens.card,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: current ? UiTokens.accent : UiTokens.border, width: current ? 1.5 : 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: () => _pickCountry(key),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 28,
-                  child: Text(countryCode(key),
-                      style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
-                ),
-                Expanded(
-                  child: Text(name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600)),
-                ),
-                const SizedBox(width: 8),
-                if (current) ...[
-                  const Icon(Icons.check_circle_rounded, size: 16, color: UiTokens.accent),
-                  const SizedBox(width: 6),
-                ],
-                Text(countText, style: findMutedStyle),
-              ],
+      onActivate: () => _pickCountry(key),
+      color: UiTokens.card,
+      borderRadius: BorderRadius.circular(10),
+      side: BorderSide(color: current ? UiTokens.accent : UiTokens.border, width: current ? 1.5 : 1),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            CountryFlagBadge(countryName: key, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600)),
             ),
-          ),
+            const SizedBox(width: 8),
+            if (current) ...[
+              const Icon(Icons.check_circle_rounded, size: 16, color: UiTokens.accent),
+              const SizedBox(width: 6),
+            ],
+            Text(countText, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+          ],
         ),
       ),
     );
@@ -664,15 +651,15 @@ class _FindLocationStepState extends State<FindLocationStep> {
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(color: UiTokens.border),
                 ),
-                child: Text(
-                  '${countryCode(country)}  ${countryDisplayName(country)}',
-                  style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600),
+                child: Semantics(
+                  header: true,
+                  child: FindCountryLabel(countryKey: country, flagSize: 18),
                 ),
               ),
               TextButton(
                 style: TextButton.styleFrom(
                   foregroundColor: UiTokens.accent,
-                  minimumSize: const Size(64, 44),
+                  minimumSize: const Size(64, 48),
                   textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                 ),
                 onPressed: () => goUpTo(context, '/find'),
@@ -694,7 +681,9 @@ class _FindLocationStepState extends State<FindLocationStep> {
                   child: Container(
                     decoration: findCardDecoration(),
                     padding: const EdgeInsets.all(10),
-                    child: _regionList(setup, country, selected: region, push: false),
+                    // Groups keep Tab inside one panel (regions, then cities)
+                    // instead of zig-zagging across columns by reading order.
+                    child: FocusTraversalGroup(child: _regionList(setup, country, selected: region, push: false)),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -710,7 +699,7 @@ class _FindLocationStepState extends State<FindLocationStep> {
                               textAlign: TextAlign.center,
                             ),
                           )
-                        : _cityPane(setup, region),
+                        : FocusTraversalGroup(child: _cityPane(setup, region)),
                   ),
                 ),
               ],
@@ -770,48 +759,41 @@ class _FindLocationStepState extends State<FindLocationStep> {
       semantics.write(', ${citiesLabel(n)}');
     }
     void onTap() => _pickRegion(country, region, push: push);
-    return Semantics(
-      button: true,
+    // Muted text is 3.98:1 on the selected surface; use the secondary colour there.
+    final countStyle = TextStyle(color: selected ? UiTokens.textSecondary : UiTokens.textMuted, fontSize: 12);
+    return FindRow(
+      semanticLabel: semantics.toString(),
       selected: selected,
-      label: semantics.toString(),
-      excludeSemantics: true,
-      onTap: onTap,
-      child: Material(
-        color: selected ? UiTokens.selectedSurface : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    region,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: UiTokens.text,
-                      fontSize: 14,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    ),
-                  ),
+      onActivate: onTap,
+      color: selected ? UiTokens.selectedSurface : Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                region,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: UiTokens.text,
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 ),
-                if (k > 0) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-                    decoration: BoxDecoration(color: UiTokens.primary, borderRadius: BorderRadius.circular(999)),
-                    child: Text(formatCount(k),
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
-                  ),
-                  if (n != null) Text(' / $countText', style: findMutedStyle),
-                ] else
-                  Text(countText, style: findMutedStyle),
-                if (push) const Icon(Icons.chevron_right_rounded, color: UiTokens.textMuted, size: 20),
-              ],
+              ),
             ),
-          ),
+            if (k > 0) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                decoration: BoxDecoration(color: UiTokens.primary, borderRadius: BorderRadius.circular(999)),
+                child: Text(formatCount(k),
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+              if (n != null) Text(' / $countText', style: countStyle),
+            ] else
+              Text(countText, style: countStyle),
+            if (push) const Icon(Icons.chevron_right_rounded, color: UiTokens.textSecondary, size: 20),
+          ],
         ),
       ),
     );
@@ -861,8 +843,8 @@ class _FindLocationStepState extends State<FindLocationStep> {
         ? OutlinedButton(
             style: OutlinedButton.styleFrom(
               foregroundColor: UiTokens.text,
-              side: const BorderSide(color: UiTokens.border),
-              minimumSize: const Size(0, 44),
+              side: const BorderSide(color: findFieldBorder),
+              minimumSize: const Size(48, 48),
               textStyle: const TextStyle(fontWeight: FontWeight.w700),
             ),
             onPressed: () => setup.addCities(shown),
@@ -873,7 +855,7 @@ class _FindLocationStepState extends State<FindLocationStep> {
         ? TextButton(
             style: TextButton.styleFrom(
               foregroundColor: UiTokens.accent,
-              minimumSize: const Size(0, 44),
+              minimumSize: const Size(48, 48),
               textStyle: const TextStyle(fontWeight: FontWeight.w700),
             ),
             onPressed: () => setup.removeCities(shown),
@@ -953,40 +935,50 @@ class _FindLocationStepState extends State<FindLocationStep> {
 
   // --------------------------------------------------------- phone levels
 
+  /// Phone header, stacked so nothing meaningful is truncated at 360 px:
+  ///
+  ///     ‹ Provinces                 Step 1 of 2
+  ///     [flag] Canada
+  ///     Quebec                      (city level only)
   Widget _phoneHeader({required String back, required VoidCallback onBack, String? title, required String country}) {
-    return Row(
+    final countryLine = FindCountryLabel(
+      countryKey: country,
+      flagSize: 16,
+      style: title == null
+          ? const TextStyle(color: UiTokens.text, fontSize: 18, fontWeight: FontWeight.w700)
+          : const TextStyle(color: UiTokens.textSecondary, fontSize: 14, fontWeight: FontWeight.w600),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextButton.icon(
-          style: TextButton.styleFrom(
-            foregroundColor: UiTokens.accent,
-            minimumSize: const Size(44, 44),
-            padding: const EdgeInsets.only(left: 0, right: 8),
-            textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-          ),
-          onPressed: onBack,
-          icon: const Icon(Icons.chevron_left_rounded, size: 22),
-          label: Text(back),
-        ),
-        if (title != null)
-          Flexible(
-            child: Semantics(
-              header: true,
-              child: Text(title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w700)),
+        Row(
+          children: [
+            TextButton.icon(
+              style: TextButton.styleFrom(
+                foregroundColor: UiTokens.accent,
+                minimumSize: const Size(48, 48),
+                padding: const EdgeInsets.only(left: 0, right: 12),
+                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+              ),
+              onPressed: onBack,
+              icon: const Icon(Icons.chevron_left_rounded, size: 22),
+              label: Text(back, semanticsLabel: 'Back to ${back.toLowerCase()}'),
             ),
-          ),
-        const Spacer(),
-        Flexible(
-          child: Text(
-            '${countryDisplayName(country)} · step 1 of 2',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.right,
-            style: findMutedStyle,
-          ),
+            const Spacer(),
+            const Text('Step 1 of 2', style: TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+          ],
         ),
+        const SizedBox(height: 2),
+        if (title == null)
+          Semantics(header: true, child: countryLine)
+        else ...[
+          countryLine,
+          const SizedBox(height: 2),
+          Semantics(
+            header: true,
+            child: Text(title, style: const TextStyle(color: UiTokens.text, fontSize: 18, fontWeight: FontWeight.w700)),
+          ),
+        ],
       ],
     );
   }
@@ -1028,8 +1020,9 @@ class _FindLocationStepState extends State<FindLocationStep> {
   }
 }
 
-/// Dense checkbox row (48 px): real checkbox semantics, label "Montreal,
-/// selected", one focus stop, Space/Enter toggles.
+/// Dense checkbox row (48 px): real checkbox semantics ("Montreal,
+/// checkbox, checked"), one focus stop, Space/Enter toggles. Activating it
+/// moves focus to the row (see [FindRow]).
 class _CityRow extends StatelessWidget {
   final String city;
   final bool selected;
@@ -1040,42 +1033,41 @@ class _CityRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = displayCityName(city);
-    return Semantics(
+    return FindRow(
+      semanticLabel: name,
       checked: selected,
-      label: '$name, ${selected ? 'selected' : 'not selected'}',
-      excludeSemantics: true,
-      onTap: onToggle,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(6),
-        onTap: onToggle,
-        child: Container(
-          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF2E2E32)))),
-          padding: const EdgeInsets.only(right: 6),
-          child: Row(
-            children: [
-              ExcludeFocus(
+      onActivate: onToggle,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF2E2E32)))),
+        padding: const EdgeInsets.only(right: 6),
+        child: Row(
+          children: [
+            // Visual only: the row handles taps, keys and semantics.
+            IgnorePointer(
+              child: ExcludeFocus(
                 child: Checkbox(
                   value: selected,
-                  onChanged: (_) => onToggle(),
+                  onChanged: (_) {},
                   activeColor: UiTokens.accent,
                   checkColor: Colors.black,
                   side: const BorderSide(color: UiTokens.textSecondary, width: 1.5),
                 ),
               ),
-              Expanded(
-                child: Text(
-                  name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: UiTokens.text,
-                    fontSize: 14,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  ),
+            ),
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: UiTokens.text,
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

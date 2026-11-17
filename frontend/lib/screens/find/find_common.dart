@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../providers/search_setup_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/app_shell_common.dart';
+import '../../widgets/country_flag_badge.dart';
 
 // ------------------------------------------------------------------ labels
 
@@ -17,37 +18,10 @@ const Map<String, String> _countryNames = {
   'KSA': 'Saudi Arabia',
 };
 
-const Map<String, String> _countryCodes = {
-  'USA': 'US',
-  'UK': 'GB',
-  'UAE': 'AE',
-  'KSA': 'SA',
-  'Australia': 'AU',
-  'Canada': 'CA',
-  'India': 'IN',
-  'Qatar': 'QA',
-  'Indonesia': 'ID',
-  'Malaysia': 'MY',
-  'Singapore': 'SG',
-  'China': 'CN',
-  'Finland': 'FI',
-  'Germany': 'DE',
-  'France': 'FR',
-};
-
 /// "USA" -> "United States"; other keys are shown as they are.
 String countryDisplayName(String? key) {
   if (key == null) return '';
   return _countryNames[key] ?? key;
-}
-
-/// Two-letter code shown in place of a flag ("CA").
-String countryCode(String key) {
-  final known = _countryCodes[key];
-  if (known != null) return known;
-  final letters = key.replaceAll(RegExp(r'[^A-Za-z]'), '');
-  if (letters.isEmpty) return '?';
-  return letters.substring(0, letters.length >= 2 ? 2 : 1).toUpperCase();
 }
 
 /// "province" -> "provinces".
@@ -535,6 +509,32 @@ class FindSteps extends StatelessWidget {
   }
 }
 
+/// Outline of text fields in Find leads: 3.6:1 against the card and 4.1:1
+/// against the field fill (WCAG 1.4.11), unlike [UiTokens.border] (≈1.4:1).
+const Color findFieldBorder = Color(0xFF737A85);
+
+/// Keyboard focus ring for rows and chips (7.7:1 on the card).
+const Color findFocusRing = UiTokens.accent;
+
+/// Text field borders shared by the Find leads steps.
+InputDecoration findFieldDecoration({String? hintText, Widget? prefixIcon, Widget? suffixIcon}) => InputDecoration(
+      hintText: hintText,
+      hintStyle: const TextStyle(color: UiTokens.textMuted, fontSize: 14),
+      filled: true,
+      fillColor: UiTokens.background,
+      prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: findFieldBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: findFocusRing, width: 2),
+      ),
+    );
+
 /// Search box. Enter never submits the step (it keeps focus).
 class FindSearchField extends StatelessWidget {
   final TextEditingController controller;
@@ -563,35 +563,150 @@ class FindSearchField extends StatelessWidget {
         onEditingComplete: () {},
         style: findBodyStyle,
         cursorColor: UiTokens.accent,
-        decoration: InputDecoration(
+        decoration: findFieldDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(color: UiTokens.textMuted, fontSize: 14),
-          isDense: true,
-          filled: true,
-          fillColor: UiTokens.background,
-          prefixIcon: const Icon(Icons.search_rounded, size: 20, color: UiTokens.textMuted),
+          prefixIcon: const Icon(Icons.search_rounded, size: 20, color: UiTokens.textSecondary),
           suffixIcon: value.text.isEmpty
               ? null
               : IconButton(
                   tooltip: 'Clear search',
-                  icon: const Icon(Icons.close_rounded, size: 18, color: UiTokens.textSecondary),
+                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                  icon: const Icon(Icons.close_rounded, size: 20, color: UiTokens.textSecondary),
                   onPressed: () {
                     controller.clear();
                     onChanged('');
                     focusNode?.requestFocus();
                   },
                 ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: UiTokens.border),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: UiTokens.accent, width: 1.5),
-          ),
         ),
       ),
+    );
+  }
+}
+
+/// A selectable row (country, region or city) that keeps keyboard,
+/// pointer and screen-reader focus in step:
+///
+/// * one focus stop with a visible 2 px ring in keyboard mode; Enter and
+///   Space activate it (via [InkWell]);
+/// * activating it — click, tap, key or the screen reader's tap action —
+///   moves focus to the row. Without that, a screen-reader tap left Flutter's
+///   focus on the previously focused text field while the browser had
+///   already moved DOM focus to the row, so the field's editing session was
+///   closed by the engine but never reopened: typing into it was lost.
+/// * its semantics node is focusable, so the browser's focus and Flutter's
+///   agree when the row is reached with a screen reader.
+class FindRow extends StatefulWidget {
+  final String semanticLabel;
+  final VoidCallback onActivate;
+  final Widget child;
+
+  /// Non-null for checkbox rows (city rows).
+  final bool? checked;
+
+  /// Current item (region shown, country of the selection).
+  final bool selected;
+
+  final Color color;
+  final BorderSide side;
+  final BorderRadius borderRadius;
+
+  const FindRow({
+    super.key,
+    required this.semanticLabel,
+    required this.onActivate,
+    required this.child,
+    this.checked,
+    this.selected = false,
+    this.color = Colors.transparent,
+    this.side = BorderSide.none,
+    this.borderRadius = const BorderRadius.all(Radius.circular(8)),
+  });
+
+  @override
+  State<FindRow> createState() => _FindRowState();
+}
+
+class _FindRowState extends State<FindRow> {
+  final FocusNode _focus = FocusNode(debugLabel: 'find row');
+  bool _focused = false;
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _activate() {
+    if (!_focus.hasFocus) _focus.requestFocus();
+    widget.onActivate();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ring = _focused && FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
+    return Semantics(
+      container: true,
+      button: widget.checked == null,
+      checked: widget.checked,
+      selected: widget.checked == null ? widget.selected : null,
+      focusable: true,
+      focused: _focused,
+      label: widget.semanticLabel,
+      excludeSemantics: true,
+      onTap: _activate,
+      onFocus: () => _focus.requestFocus(),
+      child: Material(
+        color: widget.color,
+        shape: RoundedRectangleBorder(
+          borderRadius: widget.borderRadius,
+          side: ring ? const BorderSide(color: findFocusRing, width: 2) : widget.side,
+        ),
+        child: InkWell(
+          focusNode: _focus,
+          borderRadius: widget.borderRadius,
+          focusColor: Colors.transparent,
+          onFocusChange: (v) => setState(() => _focused = v),
+          onTap: _activate,
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Flag + full country name ("[CA] Canada"); the flag is decorative and the
+/// name wraps instead of truncating.
+class FindCountryLabel extends StatelessWidget {
+  final String countryKey;
+  final TextStyle style;
+  final double flagSize;
+  final int? maxLines;
+
+  const FindCountryLabel({
+    super.key,
+    required this.countryKey,
+    this.style = const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600),
+    this.flagSize = 16,
+    this.maxLines,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CountryFlagBadge(countryName: countryKey, size: flagSize),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            countryDisplayName(countryKey),
+            style: style,
+            maxLines: maxLines,
+            overflow: maxLines == null ? null : TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }
