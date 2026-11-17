@@ -1,1058 +1,897 @@
-﻿import 'dart:ui';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/auth_provider.dart';
+
+import '../core/utils/refresh_bus.dart';
+import '../core/utils/server_time.dart';
+import '../providers/active_searches_provider.dart';
 import '../providers/credit_provider.dart';
 import '../providers/scraper_provider.dart';
+import '../providers/search_setup_provider.dart';
 import '../services/analytics_service.dart';
-import '../core/theme/app_theme.dart';
-import '../core/theme/app_breakpoints.dart';
-import '../core/utils/responsive_utils.dart';
-import 'state_selection_screen.dart';
-import 'scraping_screen.dart';
-import 'results_screen.dart';
-import 'job_history_screen.dart';
-import 'dashboard_screen.dart';
-import 'admin_dashboard_screen.dart';
-import 'profile_screen.dart';
-import '../widgets/sidebar_navigation.dart';
-import '../widgets/top_bar.dart';
-import '../widgets/responsive_shell.dart';
-import '../widgets/credit_pill.dart';
-import '../core/utils/refresh_bus.dart';
-import '../widgets/brand_mark.dart';
+import '../services/api_service.dart';
+import '../widgets/app_shell.dart';
 
+/// Home (plan §6.1, mockup 01_home): primary action, the running search (if
+/// any), the balance and the last five searches with their next step.
+///
+/// Page body only; shown inside [AppShell] by the router.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  /// Injectable for tests.
+  final ApiService? api;
+
+  const HomeScreen({super.key, this.api});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  int _currentIndex = 1; // Guest starts on Cities
-  late PageController _pageController;
-  late final AuthProvider _authProvider;
-  bool _isAuthenticated = false;
-  // Desktop/tablet tabs that have been opened at least once. They stay
-  // mounted (IndexedStack) so form text, scroll position and in-flight state
-  // survive tab switches instead of being rebuilt from scratch.
-  final Set<int> _visitedPages = <int>{};
-  bool? _lastLayoutWasMobile;
-  String _scrapeInitialCategory = '';
-  String _scrapeInitialCities = '';
-  String _scrapeInitialMaxResults = '50';
+class _HomeScreenState extends State<HomeScreen> {
+  static const int _recentLimit = 5;
+  static const int _monthlyMaxTotal = 100;
 
-  static const List<_NavItem> _guestNavItems = [
-    _NavItem(icon: Icons.location_city_rounded, label: 'Cities', pageIndex: 1),
-    _NavItem(icon: Icons.search_rounded, label: 'Search', pageIndex: 2),
-  ];
-  static const List<_NavItem> _authenticatedNavItems = [
-    _NavItem(
-      icon: Icons.home_rounded,
-      selectedIcon: Icons.home_rounded,
-      label: 'Home',
-      pageIndex: 0,
-    ),
-    _NavItem(
-      icon: Icons.location_city_rounded,
-      selectedIcon: Icons.location_city_rounded,
-      label: 'Cities',
-      pageIndex: 1,
-      activePageIndexes: [1, 2, 3],
-      emphasized: true,
-    ),
-    _NavItem(
-      icon: Icons.history_rounded,
-      selectedIcon: Icons.history_rounded,
-      label: 'History',
-      pageIndex: 4,
-    ),
-  ];
-  List<_NavItem> _navItems = _guestNavItems;
+  late final ApiService _api = widget.api ?? ApiService();
+
+  bool _loading = true;
+  Object? _error;
+  List<Map<String, dynamic>> _jobs = const [];
+  int _total = 0;
+  _MonthSummary? _month;
+  int _loadGeneration = 0;
+  int _lastActiveCount = -1;
 
   @override
   void initState() {
     super.initState();
     AnalyticsService.instance.page('/home');
-    _pageController = PageController(initialPage: _currentIndex);
-    _authProvider = Provider.of<AuthProvider>(context, listen: false);
-    _authProvider.addListener(_handleAuthStateChanged);
-    _syncAuthState(_authProvider.isAuthenticated, force: true);
-  }
-
-  void _handleAuthStateChanged() {
-    if (!mounted) return;
-    _syncAuthState(_authProvider.isAuthenticated);
-  }
-
-  void _syncAuthState(bool isAuthenticated, {bool force = false}) {
-    if (!force && _isAuthenticated == isAuthenticated) return;
-
-    final targetPage = isAuthenticated ? 0 : 1;
-    setState(() {
-      _isAuthenticated = isAuthenticated;
-      _navItems = isAuthenticated ? _authenticatedNavItems : _guestNavItems;
-      _currentIndex = targetPage;
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_pageController.hasClients) return;
-      _pageController.jumpToPage(targetPage);
-    });
-
-    // Provider updates notify listeners, so run them after this frame
-    // (_syncAuthState is also called from initState).
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final scraper = Provider.of<ScraperProvider>(context, listen: false);
-      if (isAuthenticated) {
-        _loadCreditBalance();
-        // Reattach to a job that is still running on the server (refresh,
-        // new tab, or a previous session that lost its connection).
-        scraper.resumeActiveJob().then((attached) {
-          // After a refresh the app opens on Home; take the user straight back
-          // to the live job instead of leaving it unreachable until they
-          // re-select cities.
-          if (!mounted || !attached) return;
-          if ((scraper.currentJob?.isActive ?? false) && _currentIndex == 0) {
-            _onNavTap(2);
-          }
-        });
-      } else {
-        CreditProvider.instance.clear();
-        scraper.detach();
-      }
-    });
-  }
-
-  Future<void> _loadCreditBalance() async {
-    if (!_isAuthenticated) return;
-    await CreditProvider.instance.refresh();
+    RefreshBus.jobsChanged.addListener(_onJobsChanged);
+    unawaited(CreditProvider.instance.loadConfig());
+    _load();
   }
 
   @override
   void dispose() {
-    _authProvider.removeListener(_handleAuthStateChanged);
-    _pageController.dispose();
+    RefreshBus.jobsChanged.removeListener(_onJobsChanged);
     super.dispose();
   }
 
-  void _onNavTap(int index) {
-    setState(() => _currentIndex = index);
-    RefreshBus.activateTab(index);
-    if (_pageController.hasClients) {
-      _pageController.animateToPage(
-        index,
-        duration: AppSpacing.durationMedium,
-        curve: Curves.easeInOutCubic,
-      );
+  void _onJobsChanged() {
+    if (mounted) _load(silent: true);
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    final generation = ++_loadGeneration;
+    if (!silent || _error != null) {
+      setState(() {
+        _loading = _jobs.isEmpty;
+        _error = null;
+      });
+    }
+    try {
+      final page = await _api.getJobs(limit: _recentLimit);
+      if (!mounted || generation != _loadGeneration) return;
+      final jobs = List<Map<String, dynamic>>.from(page['jobs'] as List);
+      final total = (page['total'] as num?)?.toInt() ?? jobs.length;
+      setState(() {
+        _jobs = jobs;
+        _total = total;
+        _loading = false;
+        _error = null;
+      });
+      unawaited(_loadMonth(generation, jobs, total));
+    } catch (e) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _error = e;
+      });
     }
   }
 
-  void _startSearchFromCities(String citiesText, String maxResults) {
-    setState(() {
-      _scrapeInitialCategory = '';
-      _scrapeInitialCities = citiesText;
-      _scrapeInitialMaxResults = maxResults;
-    });
-    _onNavTap(2);
-  }
-
-  _NavItem _currentNavItem() {
-    if (_navItems.isEmpty) {
-      return _guestNavItems.first;
-    }
-
-    for (final item in _navItems) {
-      if (item.pageIndex == _currentIndex) {
-        return item;
-      }
-    }
-
-    for (final item in _navItems) {
-      if (item.activePageIndexes.contains(_currentIndex)) {
-        return item;
-      }
-    }
-
-    return _navItems.first;
-  }
-
-  void _openLogin() {
-    Navigator.of(context).pushNamed('/login');
-  }
-
-  Future<void> _openWallet() async {
-    if (!_isAuthenticated) {
-      _openLogin();
+  /// "This month" is shown only when it can be exact: the user has at most
+  /// 100 searches and all of this month's searches were fetched.
+  Future<void> _loadMonth(int generation, List<Map<String, dynamic>> recent, int total) async {
+    if (total > _monthlyMaxTotal) {
+      if (mounted) setState(() => _month = null);
       return;
     }
-    await Navigator.of(context).pushNamed('/wallet');
-    if (mounted) {
-      _loadCreditBalance();
+    final monthStart = DateTime(DateTime.now().year, DateTime.now().month);
+    var jobs = recent;
+    final coversAll = recent.length >= total;
+    final oldest = recent.isEmpty ? null : parseServerTimeLocal(recent.last['created_at']);
+    final coversMonth = oldest != null && oldest.isBefore(monthStart);
+    if (!coversAll && !coversMonth) {
+      try {
+        final page = await _api.getJobs(limit: _monthlyMaxTotal);
+        jobs = List<Map<String, dynamic>>.from(page['jobs'] as List);
+        final t = (page['total'] as num?)?.toInt() ?? jobs.length;
+        if (t > _monthlyMaxTotal || jobs.length < t) {
+          if (mounted && generation == _loadGeneration) setState(() => _month = null);
+          return;
+        }
+      } catch (_) {
+        if (mounted && generation == _loadGeneration) setState(() => _month = null);
+        return;
+      }
     }
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() => _month = _MonthSummary.from(jobs, monthStart));
   }
 
-  void _openProfile() {
-    if (!_isAuthenticated) {
-      _openLogin();
-      return;
-    }
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (context) => const ProfileScreen()));
+  Future<void> _refreshAll() async {
+    await Future.wait([
+      _load(silent: true),
+      CreditProvider.instance.refresh(),
+      context.read<ActiveSearchesProvider>().refresh(),
+    ]);
+  }
+
+  void _openSearch(Map<String, dynamic> job) {
+    Navigator.of(context).pushNamed('/searches/${job['job_id']}');
+  }
+
+  void _runAgain(Map<String, dynamic> job) {
+    context.read<SearchSetupProvider>().loadFromJob(job);
+    Navigator.of(context).pushNamed('/find/details');
   }
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
-    final credits = Provider.of<CreditProvider>(context);
-    final layoutType = AppBreakpoints.getLayoutType(
-      MediaQuery.of(context).size.width,
-    );
-    final isMobile = layoutType == LayoutType.mobile;
-    if (isMobile && _lastLayoutWasMobile == false) {
-      // The PageView is rebuilt when crossing into the mobile layout and would
-      // reopen at the controller's *initial* page (Cities), hiding the tab the
-      // user was on (e.g. a running job on Search). Restore the current tab.
-      final target = _currentIndex;
+    final active = context.watch<ActiveSearchesProvider>();
+    // A search finished or started: refresh the recent list.
+    if (_lastActiveCount != -1 && _lastActiveCount != active.count) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _pageController.hasClients) {
-          _pageController.jumpToPage(target);
-        }
+        if (mounted) _load(silent: true);
       });
     }
-    _lastLayoutWasMobile = isMobile;
+    _lastActiveCount = active.count;
 
-    return Scaffold(
-      backgroundColor: AppColors.backgroundDark,
-      body: ResponsiveShell(
-        bottomNavigation: layoutType == LayoutType.mobile
-            ? _buildBottomNav()
-            : null,
-        topBarBuilder: (context, layoutType, isCollapsed, onToggleSidebar) {
-          final title = _currentNavItem().label;
-          return TopBar(
-            title: title,
-            showMenuToggle: layoutType == LayoutType.tablet,
-            onMenuToggle: onToggleSidebar,
-            creditBalance: credits.balance,
-            loadingCredits: _isAuthenticated && credits.loading,
-            onRefreshCredits: _loadCreditBalance,
-            userInitial: (authProvider.currentUser?['username'] ?? 'U')[0]
-                .toUpperCase(),
-            isAuthenticated: _isAuthenticated,
-            isAdmin: authProvider.isAdmin,
-            onAdminTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const AdminDashboardScreen(),
-                ),
-              );
-            },
-            onProfileTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const ProfileScreen()),
-              );
-            },
-            onLogoutTap: () async {
-              _showLogoutDialog(authProvider);
-            },
-            onAuthTap: _openLogin,
-          );
-        },
-        sidebarBuilder: (context, layoutType, isCollapsed) {
-          return SidebarNavigation(
-            currentIndex: _currentIndex,
-            onTabSelected: _onNavTap,
-            navItems: _navItems
-                .map(
-                  (item) => SidebarNavItem(
-                    icon: item.icon,
-                    selectedIcon: item.selectedIcon,
-                    label: item.label,
-                    pageIndex: item.pageIndex,
-                    activePageIndexes: item.activePageIndexes,
-                    emphasized: item.emphasized,
-                  ),
-                )
-                .toList(),
-            collapsed: isCollapsed,
-            hidden: AppBreakpoints.isSidebarHidden(layoutType),
-            isAuthenticated: _isAuthenticated,
-            isAdmin: authProvider.isAdmin,
-            onAdminTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const AdminDashboardScreen(),
-                ),
-              );
-            },
-            onProfileTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const ProfileScreen()),
-              );
-            },
-            onAuthTap: _openLogin,
-            onWalletTap: _openWallet,
-            username: authProvider.currentUser?['username'] ?? 'User',
-            email: authProvider.currentUser?['email'] ?? 'Pro Account',
-          );
-        },
-        child: Stack(
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final phone = width < 600;
+      final pad = phone ? 16.0 : 24.0;
+      final firstVisit = !_loading && _error == null && _total == 0 && !active.hasActive;
+      final runningJobs = _runningJobs(active);
+
+      final children = <Widget>[
+        if (firstVisit)
+          const _EmptyState()
+        else
+          _Hero(
+            lastJob: _jobs.isEmpty ? null : _jobs.first,
+            onRunAgain: _runAgain,
+            phone: phone,
+          ),
+        const SizedBox(height: 16),
+        _RunningAndCredits(
+          running: runningJobs,
+          serverNow: active.serverNow,
+          phone: phone,
+          onOpen: _openSearch,
+        ),
+        if (!firstVisit) ...[
+          const SizedBox(height: 16),
+          _RecentSearches(
+            loading: _loading,
+            error: _error,
+            jobs: _jobs,
+            table: width >= 760,
+            onRetry: _load,
+            onRefresh: () => _load(silent: true),
+            onOpen: _openSearch,
+          ),
+          if (_month != null && _error == null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _month!.label,
+              style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+            ),
+          ],
+        ],
+      ];
+
+      return RefreshIndicator(
+        onRefresh: _refreshAll,
+        child: ListView(
+          padding: EdgeInsets.all(pad),
           children: [
-            _buildBackground(),
-            layoutType == LayoutType.mobile
-                ? Column(
-                    children: [
-                      _buildHeader(authProvider),
-                      Expanded(
-                        child: PageView(
-                          controller: _pageController,
-                          physics: _isAuthenticated
-                              ? const PageScrollPhysics()
-                              : const NeverScrollableScrollPhysics(),
-                          onPageChanged: (index) {
-                            setState(() => _currentIndex = index);
-                            RefreshBus.activateTab(index);
-                          },
-                          children: [
-                            DashboardScreen(
-                              showHeader: false,
-                              onNavigateToTab: _onNavTap,
-                            ),
-                            StateSelectionScreen(
-                              showHeader: false,
-                              onContinueToSearch: _startSearchFromCities,
-                            ),
-                            ScrapingScreen(
-                              showHeader: false,
-                              initialCategory: _scrapeInitialCategory,
-                              initialCities: _scrapeInitialCities,
-                              initialMaxResults: _scrapeInitialMaxResults,
-                              onBackToCities: () => _onNavTap(1),
-                            ),
-                            const ResultsScreen(showHeader: false),
-                            const JobHistoryScreen(showHeader: false),
-                          ],
-                        ),
-                      ),
-                    ],
-                  )
-                : Padding(
-                    padding: EdgeInsets.all(
-                      ResponsiveUtils.getScreenPadding(layoutType),
-                    ),
-                    child: _buildDesktopContent(),
-                  ),
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1200),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: children,
+                ),
+              ),
+            ),
           ],
         ),
-      ),
-    );
+      );
+    });
   }
 
-  Widget _buildBackground() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppColors.backgroundDark, AppColors.backgroundDark],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -120,
-            right: -120,
-            child: Container(
-              width: 260,
-              height: 260,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primaryBlue.withValues(alpha: 0.08),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -140,
-            left: -120,
-            child: Container(
-              width: 320,
-              height: 320,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primaryBlueLight.withValues(alpha: 0.06),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+  /// Active searches, with the followed job's fresher counters.
+  List<Map<String, dynamic>> _runningJobs(ActiveSearchesProvider active) {
+    final followed = context.watch<ScraperProvider>().currentJob;
+    return active.jobs.map((j) {
+      if (followed != null && followed.jobId == '${j['job_id']}' && followed.isActive) {
+        return {
+          ...j,
+          'status': followed.isQueued ? 'pending' : 'running',
+          'completed_cities': followed.completedCities,
+          'total_cities': followed.totalCities,
+          'result_count': followed.resultCount,
+        };
+      }
+      return j;
+    }).toList();
   }
+}
 
-  Widget _buildHeader(AuthProvider authProvider) {
+// ------------------------------------------------------------------ cards
+
+class _Card extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  const _Card({required this.child, this.padding = const EdgeInsets.all(20)});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.sm,
-      ),
+      padding: padding,
       decoration: BoxDecoration(
-        color: AppColors.backgroundDark.withValues(alpha: 0.9),
-        border: Border(
-          bottom: BorderSide(
-            color: AppColors.primaryBlue.withValues(alpha: 0.2),
-          ),
-        ),
+        color: UiTokens.card,
+        borderRadius: BorderRadius.circular(UiTokens.radius),
+        border: Border.all(color: UiTokens.border),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceDark,
-              borderRadius: AppSpacing.borderRadiusMd,
-              border: Border.all(
-                color: AppColors.primaryBlue.withValues(alpha: 0.3),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.25),
-                  blurRadius: 18,
-                  spreadRadius: -6,
-                ),
-              ],
-            ),
-            child: const Center(child: BrandMark(size: 32, hoverGlow: true)),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Infinity',
-                  style: AppTypography.titleMedium.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
-                Text(
-                  'Leads v2.0',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.primaryBlue.withValues(alpha: 0.7),
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (_isAuthenticated) ...[
-            CreditPill(
-              balance: context.watch<CreditProvider>().balance,
-              loading: context.watch<CreditProvider>().loading,
-              onTap: _openWallet,
-              onRefresh: _loadCreditBalance,
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            if (authProvider.isAdmin)
-              _iconButton(
-                icon: Icons.shield_rounded,
-                tooltip: 'Admin Dashboard',
-                onTap: () {
-                  Navigator.of(context).push(
-                    PageRouteBuilder(
-                      pageBuilder: (context, animation, secondaryAnimation) =>
-                          AdminDashboardScreen(),
-                      transitionsBuilder:
-                          (context, animation, secondaryAnimation, child) {
-                            return FadeTransition(
-                              opacity: animation,
-                              child: child,
-                            );
-                          },
-                      transitionDuration: AppSpacing.durationMedium,
-                    ),
-                  );
-                },
-              ),
-            const SizedBox(width: AppSpacing.xs),
-            _buildProfileMenu(authProvider),
-          ] else ...[
-            OutlinedButton.icon(
-              onPressed: _openLogin,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: BorderSide(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.45),
-                ),
-              ),
-              icon: const Icon(Icons.login_rounded, size: 18),
-              label: Text(
-                'Sign in',
-                style: AppTypography.labelSmall.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
+      child: child,
     );
   }
+}
 
-  Widget _iconButton({
-    required IconData icon,
-    required VoidCallback onTap,
-    String? tooltip,
-  }) {
-    return Tooltip(
-      message: tooltip ?? '',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: AppSpacing.borderRadiusMd,
-          child: Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceDark,
-              borderRadius: AppSpacing.borderRadiusMd,
-              border: Border.all(
-                color: AppColors.primaryBlue.withValues(alpha: 0.2),
-              ),
-            ),
-            child: Icon(icon, color: Colors.white, size: 18),
-          ),
-        ),
-      ),
+ButtonStyle _primaryStyle() => FilledButton.styleFrom(
+      backgroundColor: UiTokens.primary,
+      foregroundColor: Colors.white,
+      minimumSize: const Size(0, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 22),
+      textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
     );
+
+ButtonStyle _secondaryStyle() => OutlinedButton.styleFrom(
+      foregroundColor: UiTokens.text,
+      side: const BorderSide(color: UiTokens.border),
+      minimumSize: const Size(0, 44),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+    );
+
+class _Hero extends StatelessWidget {
+  final Map<String, dynamic>? lastJob;
+  final void Function(Map<String, dynamic>) onRunAgain;
+  final bool phone;
+
+  const _Hero({required this.lastJob, required this.onRunAgain, required this.phone});
+
+  static String runAgainLabel(Map<String, dynamic> job) {
+    final category = jobCategory(job);
+    final cities = jobCities(job);
+    final place = jobRegion(job) ??
+        (cities.isNotEmpty ? SearchSetupProvider.cityNameOf(cities.first) : null);
+    return place == null ? 'Run "$category" again' : 'Run "$category · $place" again';
   }
 
-  Widget _buildProfileMenu(AuthProvider authProvider) {
-    return PopupMenuButton<String>(
-      offset: const Offset(0, 50),
-      shape: RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusLg),
-      color: AppColors.surfaceDark,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceDark,
-          borderRadius: AppSpacing.borderRadiusMd,
-          border: Border.all(
-            color: AppColors.primaryBlue.withValues(alpha: 0.3),
-          ),
-        ),
-        child: Center(
-          child: Text(
-            (authProvider.currentUser?['username'] ?? 'U')[0].toUpperCase(),
-            style: AppTypography.titleSmall.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
+  @override
+  Widget build(BuildContext context) {
+    final buttons = <Widget>[
+      FilledButton.icon(
+        style: _primaryStyle(),
+        onPressed: () => Navigator.of(context).pushNamed('/find'),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Find leads'),
       ),
-      onSelected: (value) async {
-        if (value == 'logout') {
-          _showLogoutDialog(authProvider);
-        } else if (value == 'profile') {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (context) => const ProfileScreen()),
-          );
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: 'profile',
-          child: Row(
-            children: [
-              const Icon(
-                Icons.person_outline_rounded,
-                size: 18,
-                color: Colors.white,
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(
-                'Profile',
-                style: AppTypography.bodyMedium.copyWith(color: Colors.white),
-              ),
-            ],
+      if (lastJob != null)
+        OutlinedButton(
+          style: _secondaryStyle(),
+          onPressed: () => onRunAgain(lastJob!),
+          child: Text(runAgainLabel(lastJob!), overflow: TextOverflow.ellipsis),
+        ),
+    ];
+    final text = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          header: true,
+          child: const Text(
+            'Find business leads',
+            style: TextStyle(color: UiTokens.text, fontSize: 24, fontWeight: FontWeight.w700),
           ),
         ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'logout',
-          child: Row(
-            children: [
-              const Icon(
-                Icons.logout_rounded,
-                size: 18,
-                color: AppColors.dangerRed,
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(
-                'Logout',
-                style: AppTypography.bodyMedium.copyWith(
-                  color: AppColors.dangerRed,
-                ),
-              ),
-            ],
-          ),
+        const SizedBox(height: 6),
+        const Text(
+          'Choose a country, cities and a business type. You see the maximum '
+          'cost before anything is charged.',
+          style: TextStyle(color: UiTokens.textSecondary, fontSize: 15, height: 1.4),
         ),
       ],
     );
+    return _Card(
+      child: phone
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                text,
+                const SizedBox(height: 16),
+                Wrap(spacing: 12, runSpacing: 12, children: buttons),
+              ],
+            )
+          : Wrap(
+              spacing: 24,
+              runSpacing: 16,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              alignment: WrapAlignment.spaceBetween,
+              children: [
+                ConstrainedBox(constraints: const BoxConstraints(maxWidth: 640), child: text),
+                Wrap(spacing: 12, runSpacing: 12, children: buttons),
+              ],
+            ),
+    );
   }
+}
 
-  void _showLogoutDialog(AuthProvider authProvider) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.backgroundDark,
-        shape: RoundedRectangleBorder(borderRadius: AppSpacing.borderRadiusXl),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.sm),
-              decoration: BoxDecoration(
-                color: AppColors.dangerRed.withValues(alpha: 0.1),
-                borderRadius: AppSpacing.borderRadiusMd,
-              ),
-              child: const Icon(
-                Icons.logout_rounded,
-                color: AppColors.dangerRed,
-              ),
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return _Card(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Semantics(
+            header: true,
+            child: const Text(
+              'Find your first leads',
+              style: TextStyle(color: UiTokens.text, fontSize: 24, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(width: AppSpacing.md),
-            const Text('Logout', style: TextStyle(color: Colors.white)),
-          ],
-        ),
-        content: const Text(
-          'Are you sure you want to logout?',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.dangerRed,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              Navigator.pop(context);
-              await authProvider.logout();
-            },
-            child: const Text('Logout'),
+          const SizedBox(height: 8),
+          const Text(
+            "Pick a country and cities, choose a business type, and we'll collect "
+            'names, phones and websites from Google Maps.',
+            style: TextStyle(color: UiTokens.textSecondary, fontSize: 15, height: 1.4),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: _primaryStyle(),
+            onPressed: () => Navigator.of(context).pushNamed('/find'),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Find leads'),
           ),
         ],
       ),
     );
   }
-
-  Widget _buildBottomNav() {
-    if (!_isAuthenticated) {
-      return _buildGuestBottomNav();
-    }
-
-    final homeActive = _currentIndex == 0;
-    final historyActive = _currentIndex == 4;
-    final citiesFlowActive =
-        _currentIndex == 1 || _currentIndex == 2 || _currentIndex == 3;
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md,
-          AppSpacing.xs,
-          AppSpacing.md,
-          AppSpacing.md,
-        ),
-        child: SizedBox(
-          height: 96,
-          child: Stack(
-            clipBehavior: Clip.none,
-            alignment: Alignment.bottomCenter,
-            children: [
-              Positioned(
-                left: 24,
-                right: 24,
-                bottom: 6,
-                child: IgnorePointer(
-                  child: Container(
-                    height: 46,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(30),
-                      gradient: RadialGradient(
-                        center: Alignment.topCenter,
-                        radius: 1.3,
-                        colors: [
-                          AppColors.primaryBlue.withValues(alpha: 0.22),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(
-                height: 78,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            AppColors.elevatedCardDark.withValues(alpha: 0.9),
-                            AppColors.backgroundDark.withValues(alpha: 0.9),
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.09),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.44),
-                            blurRadius: 28,
-                            spreadRadius: -14,
-                            offset: const Offset(0, 14),
-                          ),
-                          BoxShadow(
-                            color: AppColors.primaryBlue.withValues(alpha: 0.2),
-                            blurRadius: 24,
-                            spreadRadius: -16,
-                            offset: const Offset(0, -4),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _buildDockNavItem(
-                              icon: Icons.home_rounded,
-                              selectedIcon: Icons.home_rounded,
-                              label: 'Home',
-                              isSelected: homeActive,
-                              onTap: () => _onNavTap(0),
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildDockNavItem(
-                              icon: Icons.history_rounded,
-                              selectedIcon: Icons.history_rounded,
-                              label: 'History',
-                              isSelected: historyActive,
-                              onTap: () => _onNavTap(4),
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildDockNavItem(
-                              icon: Icons.add_rounded,
-                              selectedIcon: Icons.add_rounded,
-                              label: 'New',
-                              isSelected: citiesFlowActive,
-                              onTap: () => _onNavTap(1),
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildDockNavItem(
-                              icon: Icons.account_balance_wallet_rounded,
-                              selectedIcon: Icons.account_balance_wallet_rounded,
-                              label: 'Wallet',
-                              isSelected: false,
-                              onTap: _openWallet,
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildDockNavItem(
-                              icon: Icons.person_outline_rounded,
-                              selectedIcon: Icons.person_rounded,
-                              label: 'Profile',
-                              isSelected: false,
-                              onTap: _openProfile,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 1,
-                left: 18,
-                right: 18,
-                child: IgnorePointer(
-                  child: Container(
-                    height: 1,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.transparent,
-                          AppColors.primaryBlueLight.withValues(alpha: 0.22),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGuestBottomNav() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.md,
-        AppSpacing.xs,
-        AppSpacing.md,
-        AppSpacing.md,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundDark.withValues(alpha: 0.9),
-        border: Border(
-          top: BorderSide(color: AppColors.primaryBlue.withValues(alpha: 0.2)),
-        ),
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.xs),
-        decoration: BoxDecoration(
-          color: AppColors.backgroundDark,
-          borderRadius: AppSpacing.borderRadiusLg,
-          border: Border.all(
-            color: AppColors.primaryBlue.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: List.generate(_navItems.length, (index) {
-            final item = _navItems[index];
-            final isSelected = _currentIndex == item.pageIndex;
-
-            return Expanded(
-              child: GestureDetector(
-                onTap: () => _onNavTap(item.pageIndex),
-                child: AnimatedContainer(
-                  duration: AppSpacing.durationFast,
-                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? AppColors.primaryBlue.withValues(alpha: 0.2)
-                        : Colors.transparent,
-                    borderRadius: AppSpacing.borderRadiusMd,
-                    border: isSelected
-                        ? Border.all(
-                            color: AppColors.primaryBlue.withValues(
-                              alpha: 0.35,
-                            ),
-                          )
-                        : null,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildAdaptiveIcon(
-                        icon: isSelected
-                            ? (item.selectedIcon ?? item.icon)
-                            : item.icon,
-                        color: isSelected
-                            ? AppColors.primaryBlueLight
-                            : Colors.white54,
-                        size: 24,
-                      ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        item.label,
-                        style: AppTypography.labelSmall.copyWith(
-                          color: isSelected
-                              ? AppColors.primaryBlueLight
-                              : Colors.white54,
-                          fontWeight: isSelected
-                              ? FontWeight.w700
-                              : FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDockNavItem({
-    required IconData icon,
-    IconData? selectedIcon,
-    required String label,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    final resolvedIcon = isSelected ? (selectedIcon ?? icon) : icon;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: AnimatedContainer(
-          duration: AppSpacing.durationMedium,
-          curve: Curves.easeOutCubic,
-          margin: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          decoration: BoxDecoration(
-            gradient: isSelected
-                ? LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      AppColors.primaryBlue.withValues(alpha: 0.24),
-                      AppColors.primaryBlue.withValues(alpha: 0.1),
-                    ],
-                  )
-                : null,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isSelected
-                  ? AppColors.primaryBlueLight.withValues(alpha: 0.36)
-                  : Colors.white.withValues(alpha: 0.02),
-            ),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              SizedBox(
-                width: 30,
-                height: 30,
-                child: Center(
-                  child: _buildAdaptiveIcon(
-                    icon: resolvedIcon,
-                    color: isSelected
-                        ? Colors.white
-                        : Colors.white.withValues(alpha: 0.6),
-                    size: 22,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                style: AppTypography.labelSmall.copyWith(
-                  color: isSelected
-                      ? AppColors.primaryBlueLight
-                      : Colors.white60,
-                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  fontSize: 11.5,
-                  letterSpacing: 0.12,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              AnimatedContainer(
-                duration: AppSpacing.durationMedium,
-                curve: Curves.easeOutCubic,
-                margin: const EdgeInsets.only(top: 2),
-                width: isSelected ? 16 : 0,
-                height: 2,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  color: AppColors.primaryBlueLight.withValues(alpha: 0.95),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAdaptiveIcon({
-    required IconData icon,
-    required Color color,
-    required double size,
-  }) {
-    return Icon(icon, color: color, size: size);
-  }
-
-  Widget _buildDesktopPage(int index) {
-    switch (index) {
-      case 0:
-        return DashboardScreen(showHeader: false, onNavigateToTab: _onNavTap);
-      case 1:
-        return StateSelectionScreen(
-          showHeader: false,
-          onContinueToSearch: _startSearchFromCities,
-        );
-      case 2:
-        return ScrapingScreen(
-          showHeader: false,
-          initialCategory: _scrapeInitialCategory,
-          initialCities: _scrapeInitialCities,
-          initialMaxResults: _scrapeInitialMaxResults,
-          onBackToCities: () => _onNavTap(1),
-        );
-      case 3:
-        return const ResultsScreen(showHeader: false);
-      case 4:
-        return const JobHistoryScreen(showHeader: false);
-      default:
-        return const SizedBox.shrink();
-    }
-  }
-
-  Widget _buildDesktopContent() {
-    final index = (_currentIndex >= 0 && _currentIndex <= 4) ? _currentIndex : 2;
-    _visitedPages.add(index);
-    return IndexedStack(
-      index: index,
-      sizing: StackFit.expand,
-      children: List<Widget>.generate(5, (i) {
-        if (!_visitedPages.contains(i)) return const SizedBox.shrink();
-        // TickerMode pauses animations of hidden pages.
-        return TickerMode(
-          enabled: i == index,
-          child: KeyedSubtree(key: ValueKey('desktop-page-$i'), child: _buildDesktopPage(i)),
-        );
-      }),
-    );
-  }
-
 }
 
-class _NavItem {
-  final IconData icon;
-  final IconData? selectedIcon;
-  final String label;
-  final int pageIndex;
-  final List<int> activePageIndexes;
-  final bool emphasized;
+class _RunningAndCredits extends StatelessWidget {
+  final List<Map<String, dynamic>> running;
+  final DateTime serverNow;
+  final bool phone;
+  final void Function(Map<String, dynamic>) onOpen;
 
-  const _NavItem({
-    required this.icon,
-    this.selectedIcon,
-    required this.label,
-    required this.pageIndex,
-    this.activePageIndexes = const [],
-    this.emphasized = false,
+  const _RunningAndCredits({
+    required this.running,
+    required this.serverNow,
+    required this.phone,
+    required this.onOpen,
   });
+
+  @override
+  Widget build(BuildContext context) {
+    final runningCards = [
+      for (final job in running) _RunningCard(job: job, serverNow: serverNow, onOpen: onOpen),
+    ];
+    const credits = _CreditsCard();
+    if (phone || runningCards.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final c in runningCards) ...[c, const SizedBox(height: 16)],
+          if (runningCards.isEmpty && !phone)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: credits,
+              ),
+            )
+          else
+            credits,
+        ],
+      );
+    }
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < runningCards.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 16),
+                  Expanded(child: runningCards[i]),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          const Expanded(child: credits),
+        ],
+      ),
+    );
+  }
+}
+
+class _RunningCard extends StatelessWidget {
+  final Map<String, dynamic> job;
+  final DateTime serverNow;
+  final void Function(Map<String, dynamic>) onOpen;
+
+  const _RunningCard({required this.job, required this.serverNow, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final queued = '${job['status']}' == 'pending';
+    final done = jobInt(job, 'completed_cities');
+    final total = jobInt(job, 'total_cities');
+    final leads = jobInt(job, 'result_count');
+    final created = parseServerTime(job['created_at']);
+    final started = created == null ? null : formatAgo(serverNow.difference(created));
+    final progressLine = queued
+        ? 'Waiting for a free search slot.'
+        : [
+            '$done of $total cities done',
+            '${formatCount(leads)} ${leads == 1 ? 'lead' : 'leads'} so far',
+            if (started != null) 'started $started',
+          ].join(' · ');
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Running now',
+                  style: TextStyle(
+                    color: UiTokens.textSecondary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SearchStatusBadge(job: job),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text.rich(
+            TextSpan(children: [
+              TextSpan(
+                text: jobCategory(job),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              TextSpan(text: ' · ${jobCitiesInPlace(job)}'),
+            ]),
+            style: const TextStyle(color: UiTokens.text, fontSize: 15),
+          ),
+          const SizedBox(height: 4),
+          Text(progressLine, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          const SizedBox(height: 12),
+          Semantics(
+            label: '$done of $total cities done',
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: total > 0 ? (done / total).clamp(0.0, 1.0) : 0,
+                minHeight: 8,
+                backgroundColor: UiTokens.border,
+                valueColor: const AlwaysStoppedAnimation(UiTokens.searchingFg),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton(
+            style: _secondaryStyle(),
+            onPressed: () => onOpen(job),
+            child: const Text('View progress'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CreditsCard extends StatelessWidget {
+  const _CreditsCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final credits = context.watch<CreditProvider>();
+    final min = credits.minJobCost;
+    final low = credits.hasValue && min != null && credits.balance < min;
+
+    Widget balance;
+    if (credits.hasValue) {
+      balance = Text(
+        formatCount(credits.balance),
+        style: const TextStyle(color: UiTokens.text, fontSize: 28, fontWeight: FontWeight.w700),
+      );
+    } else if (credits.error != null && !credits.refreshing) {
+      balance = Row(
+        children: [
+          const Flexible(
+            child: Text(
+              "We couldn't load your balance.",
+              style: TextStyle(color: UiTokens.textSecondary, fontSize: 14),
+            ),
+          ),
+          TextButton(
+            onPressed: () => CreditProvider.instance.refresh(),
+            child: const Text('Try again'),
+          ),
+        ],
+      );
+    } else {
+      balance = const SizedBox(
+        height: 34,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Credits',
+            style: TextStyle(color: UiTokens.textSecondary, fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          balance,
+          if (low) ...[
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 1),
+                  child: Icon(Icons.warning_amber_rounded, size: 18, color: UiTokens.partialFg),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Not enough for a search — the smallest search costs '
+                    '${formatCount(min)} credits.',
+                    style: const TextStyle(color: UiTokens.partialFg, fontSize: 13, height: 1.35),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              style: _primaryStyle(),
+              onPressed: () => AppNav.go(context, '/credits'),
+              child: const Text('Get credits'),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: UiTokens.accent,
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 44),
+                textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+              ),
+              onPressed: () => AppNav.go(context, '/credits'),
+              child: const Text('Get credits ›'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// --------------------------------------------------------- recent searches
+
+class _RecentSearches extends StatelessWidget {
+  final bool loading;
+  final Object? error;
+  final List<Map<String, dynamic>> jobs;
+  final bool table;
+  final VoidCallback onRetry;
+  final VoidCallback onRefresh;
+  final void Function(Map<String, dynamic>) onOpen;
+
+  const _RecentSearches({
+    required this.loading,
+    required this.error,
+    required this.jobs,
+    required this.table,
+    required this.onRetry,
+    required this.onRefresh,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget body;
+    if (loading) {
+      body = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    } else if (error != null) {
+      body = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "We couldn't load your searches. Your data is safe.",
+              style: TextStyle(color: UiTokens.text, fontSize: 14),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton(style: _secondaryStyle(), onPressed: onRetry, child: const Text('Try again')),
+          ],
+        ),
+      );
+    } else if (jobs.isEmpty) {
+      body = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Text('No searches yet.', style: TextStyle(color: UiTokens.textSecondary)),
+      );
+    } else if (table) {
+      body = _RecentTable(jobs: jobs, onOpen: onOpen);
+    } else {
+      body = Column(
+        children: [
+          for (var i = 0; i < jobs.length; i++) ...[
+            if (i > 0) const Divider(height: 1, color: UiTokens.border),
+            _RecentRow(job: jobs[i], onOpen: onOpen),
+          ],
+        ],
+      );
+    }
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Semantics(
+                  header: true,
+                  child: const Text(
+                    'Recent searches',
+                    style: TextStyle(color: UiTokens.text, fontSize: 17, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Refresh',
+                onPressed: loading ? null : onRefresh,
+                icon: const Icon(Icons.refresh_rounded, color: UiTokens.textSecondary),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: UiTokens.accent,
+                  minimumSize: const Size(0, 44),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                onPressed: () => AppNav.go(context, '/searches'),
+                child: const Text('All searches ›'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          body,
+        ],
+      ),
+    );
+  }
+}
+
+class _CreditsCell extends StatelessWidget {
+  final Map<String, dynamic> job;
+  final TextAlign align;
+
+  const _CreditsCell({required this.job, this.align = TextAlign.right});
+
+  @override
+  Widget build(BuildContext context) {
+    final note = jobCreditsReturnedNote(job);
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: jobCreditsUsedLabel(job)),
+        if (note != null)
+          TextSpan(text: ' $note', style: const TextStyle(color: UiTokens.textMuted, fontSize: 12)),
+      ]),
+      textAlign: align,
+      style: const TextStyle(color: UiTokens.text, fontSize: 14),
+    );
+  }
+}
+
+class _RecentTable extends StatelessWidget {
+  final List<Map<String, dynamic>> jobs;
+  final void Function(Map<String, dynamic>) onOpen;
+
+  const _RecentTable({required this.jobs, required this.onOpen});
+
+  static const _head = TextStyle(color: UiTokens.textSecondary, fontSize: 12, fontWeight: FontWeight.w600);
+
+  Widget _cell(Widget child, {Alignment align = Alignment.centerLeft}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        child: Align(alignment: align, child: child),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    const border = BoxDecoration(border: Border(bottom: BorderSide(color: UiTokens.border)));
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(3),
+        1: FlexColumnWidth(2),
+        2: FlexColumnWidth(1.1),
+        3: FlexColumnWidth(1.8),
+        4: FlexColumnWidth(1.5),
+        5: IntrinsicColumnWidth(),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        TableRow(
+          decoration: border,
+          children: [
+            _cell(const Text('Search', style: _head)),
+            _cell(const Text('Status', style: _head)),
+            _cell(const Text('Leads', style: _head), align: Alignment.centerRight),
+            _cell(const Text('Credits used', style: _head), align: Alignment.centerRight),
+            _cell(const Text('Date', style: _head)),
+            _cell(const SizedBox.shrink()),
+          ],
+        ),
+        for (final job in jobs)
+          TableRow(
+            decoration: border,
+            children: [
+              _cell(Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(jobCategory(job),
+                      style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text(jobCitiesSummary(job),
+                      style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+                ],
+              )),
+              _cell(SearchStatusBadge(job: job)),
+              _cell(
+                Text(jobLeadsLabel(job), textAlign: TextAlign.right, style: const TextStyle(color: UiTokens.text)),
+                align: Alignment.centerRight,
+              ),
+              _cell(_CreditsCell(job: job), align: Alignment.centerRight),
+              _cell(Text(formatServerDateTime(job['created_at']),
+                  style: const TextStyle(color: UiTokens.text, fontSize: 14))),
+              _cell(OutlinedButton(
+                style: _secondaryStyle(),
+                onPressed: () => onOpen(job),
+                child: Text(jobActionLabel(job)),
+              )),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+/// Phone/narrow layout: one stacked row per search.
+class _RecentRow extends StatelessWidget {
+  final Map<String, dynamic> job;
+  final void Function(Map<String, dynamic>) onOpen;
+
+  const _RecentRow({required this.job, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final leads = jobInt(job, 'result_count');
+    final leadsText = jobIsActive(job)
+        ? '${formatCount(leads)} ${leads == 1 ? 'lead' : 'leads'} so far'
+        : plural(leads, 'lead', 'leads');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  jobCategory(job),
+                  style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 15),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(child: SearchStatusBadge(job: job)),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(jobCitiesSummary(job), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          const SizedBox(height: 4),
+          Text(
+            '$leadsText · ${formatServerDateTime(job['created_at'])}',
+            style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              const Text('Credits used: ', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+              Expanded(child: _CreditsCell(job: job, align: TextAlign.left)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            style: _secondaryStyle(),
+            onPressed: () => onOpen(job),
+            child: Text(jobActionLabel(job)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------ month line
+
+class _MonthSummary {
+  final int searches;
+  final int leads;
+  final int credits;
+
+  const _MonthSummary(this.searches, this.leads, this.credits);
+
+  factory _MonthSummary.from(List<Map<String, dynamic>> jobs, DateTime monthStart) {
+    var searches = 0;
+    var leads = 0;
+    var credits = 0;
+    for (final j in jobs) {
+      final created = parseServerTimeLocal(j['created_at']);
+      if (created == null || created.isBefore(monthStart)) continue;
+      searches++;
+      leads += jobInt(j, 'result_count');
+      final used = jobInt(j, 'credit_charged') - jobInt(j, 'credit_refunded');
+      credits += used < 0 ? 0 : used;
+    }
+    return _MonthSummary(searches, leads, credits);
+  }
+
+  String get label => 'This month: ${plural(searches, 'search', 'searches')} · '
+      '${plural(leads, 'lead', 'leads')} · ${plural(credits, 'credit', 'credits')} used';
 }

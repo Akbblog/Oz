@@ -8,7 +8,14 @@ import '../services/analytics_service.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  /// Where to go after signing in (e.g. "/searches/abc"). Defaults to Home.
+  final String? returnRoute;
+
+  /// Shown in place of a protected page (the URL stays on that page): after
+  /// signing in nothing is pushed; the page itself replaces the form.
+  final bool inline;
+
+  const LoginScreen({super.key, this.returnRoute, this.inline = false});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -125,7 +132,9 @@ class _LoginScreenState extends State<LoginScreen>
     if (success && mounted) {
       _saveLoginPrefs();
       AnalyticsService.instance.track('login');
-      Navigator.of(context).pushReplacementNamed('/home');
+      if (!widget.inline) {
+        Navigator.of(context).pushReplacementNamed(widget.returnRoute ?? '/home');
+      }
     } else if (mounted) {
       final message = authProvider.errorMessage ??
           'Login failed. Please check your credentials.';

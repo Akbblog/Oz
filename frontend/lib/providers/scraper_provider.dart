@@ -201,6 +201,10 @@ class ScraperProvider with ChangeNotifier {
   int _pollGeneration = 0;
   bool _disposed = false;
 
+  // Job a page asked to follow while the session was expired; resumed by
+  // [resumeAfterSignIn].
+  String? _pendingWatchId;
+
   // Reused for retries of the same submission so the server never charges twice.
   String? _pendingKey;
   String? _pendingSignature;
@@ -371,6 +375,72 @@ class ScraperProvider with ChangeNotifier {
     return false;
   }
 
+  /// Follow [jobId] (the search page at `/searches/<id>`): load it and keep
+  /// polling until it is final and its results are loaded. No-op when it is
+  /// already the current job and being followed. If the session has expired
+  /// the job is remembered and followed again after sign-in
+  /// ([resumeAfterSignIn]). Other errors (e.g. [NotFoundException]) are
+  /// rethrown for the page to show.
+  Future<void> watchJob(String jobId) async {
+    final current = _currentJob;
+    if (current != null && current.jobId == jobId) {
+      if (_syncState == JobSyncState.authExpired) {
+        _resumePolling();
+      }
+      return;
+    }
+    try {
+      final data = await _apiService.getJobStatus(
+        jobId,
+        includeResults: false,
+        requestTimeout: const Duration(seconds: 20),
+      );
+      if (_disposed) return;
+      // Another watch/attach finished first for the same job.
+      if (_currentJob?.jobId == jobId) return;
+      _pendingWatchId = null;
+      _attach(ScrapingJob.fromJson(Map<String, dynamic>.from(data)));
+    } catch (e) {
+      if (ErrorHandler.isAuthError(e)) {
+        _pendingWatchId = jobId;
+        _syncState = JobSyncState.authExpired;
+        _syncMessage = "You've been signed out. Your search is still running. "
+            'Sign in to keep following it.';
+        _notify();
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  /// After a (re-)sign-in: resume polling a job whose session had expired,
+  /// follow the job a page asked for meanwhile, or reattach to a running job.
+  Future<void> resumeAfterSignIn() async {
+    final pending = _pendingWatchId;
+    if (_currentJob != null && _syncState == JobSyncState.authExpired) {
+      _resumePolling();
+      return;
+    }
+    if (pending != null) {
+      _pendingWatchId = null;
+      try {
+        await watchJob(pending);
+      } catch (_) {
+        // The search page reports errors when it calls watchJob itself.
+      }
+      return;
+    }
+    await resumeActiveJob();
+  }
+
+  void _resumePolling() {
+    _consecutiveFailures = 0;
+    _syncState = JobSyncState.live;
+    _syncMessage = null;
+    _notify();
+    _startPolling();
+  }
+
   Duration _backoff() {
     final ms = _pollInterval.inMilliseconds * (1 << min(_consecutiveFailures, 4));
     return Duration(milliseconds: min(_maxBackoff.inMilliseconds, max(1, ms)));
@@ -430,7 +500,8 @@ class ScraperProvider with ChangeNotifier {
         }
         if (ErrorHandler.isAuthError(e)) {
           _syncState = JobSyncState.authExpired;
-          _syncMessage = 'Your session expired. Sign in again to keep following this job - it is still running on the server.';
+          _syncMessage = "You've been signed out. Your search is still running. "
+              'Sign in to keep following it.';
           _notify();
           return;
         }
@@ -486,9 +557,18 @@ class ScraperProvider with ChangeNotifier {
     _notify();
   }
 
+  /// Sign-out: stop following jobs and forget the remembered job id, without
+  /// touching any job on the server.
+  Future<void> signOut() async {
+    _pendingWatchId = null;
+    detach();
+    await _persistActiveJob(null);
+  }
+
   /// Sign-out: stop following jobs without touching them on the server.
   void detach() {
     _pollGeneration++;
+    _pendingWatchId = null;
     if (_currentJob == null && _startError == null && _pendingKey == null) return;
     _status = ScrapingStatus.idle;
     _currentJob = null;

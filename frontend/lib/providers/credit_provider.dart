@@ -23,6 +23,9 @@ class CreditProvider with ChangeNotifier {
   DateTime? _updatedAt;
   Future<void>? _inFlight;
 
+  Map<String, dynamic>? _config;
+  Future<void>? _configInFlight;
+
   int get balance => _balance ?? 0;
   bool get hasValue => _balance != null;
   bool get loading => _loading && _balance == null;
@@ -63,8 +66,72 @@ class CreditProvider with ChangeNotifier {
     }
   }
 
+  // ------------------------------------------------------------ config
+
+  /// GET /api/credits/config, cached for the session ([loadConfig]).
+  Map<String, dynamic>? get config => _config;
+
+  /// Cost of the smallest possible search, when the server reports it.
+  int? get minJobCost {
+    final v = _config?['min_job_cost'];
+    if (v is num) return v.toInt();
+    return int.tryParse('${v ?? ''}');
+  }
+
+  /// `delivered`, `unattempted`, `none`, or null when unknown.
+  String? get refundPolicy {
+    final v = _config?['refund_policy'];
+    if (v is! String) return null;
+    final p = v.trim().toLowerCase();
+    return p.isEmpty ? null : p;
+  }
+
+  /// The configured refund policy as a sentence, or null when the policy is
+  /// missing/unknown (never guessed).
+  String? get refundPolicySentence => refundPolicySentenceFor(refundPolicy);
+
+  static String? refundPolicySentenceFor(String? policy) {
+    switch (policy) {
+      case 'delivered':
+        return 'You pay for what we deliver. Unused credits are returned when '
+            'the search ends. If it finds no leads, everything is returned.';
+      case 'unattempted':
+        return "If the search stops early, credits for cities that weren't "
+            'searched are returned. If it fails without finding leads, '
+            'everything is returned.';
+      case 'none':
+        return 'Credits are not returned after the search starts.';
+      default:
+        return null;
+    }
+  }
+
+  /// Server-confirmed configuration from another source (and tests).
+  void setConfig(Map<String, dynamic> config) {
+    _config = Map<String, dynamic>.from(config);
+    notifyListeners();
+  }
+
+  /// Loads the credit configuration once per session (concurrent callers
+  /// share the request). Failures keep the previous value.
+  Future<void> loadConfig({bool force = false}) {
+    if (_config != null && !force) return Future<void>.value();
+    return _configInFlight ??= _doLoadConfig().whenComplete(() => _configInFlight = null);
+  }
+
+  Future<void> _doLoadConfig() async {
+    try {
+      _config = await _api.getCreditConfig();
+      notifyListeners();
+    } catch (_) {
+      // Keep the previous value; screens omit config-based lines without it.
+    }
+  }
+
   void clear() {
-    if (_balance == null && _error == null) return;
+    final hadConfig = _config != null;
+    _config = null;
+    if (_balance == null && _error == null && !hadConfig) return;
     _balance = null;
     _error = null;
     _canCreateJob = true;

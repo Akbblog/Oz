@@ -246,4 +246,71 @@ void main() {
     expect(parseServerTime(''), isNull);
     expect(parseServerTime('2026-11-16T15:00:00+05:00'), utc);
   });
+
+  test('watchJob follows a job by id and is a no-op for the current job', () async {
+    final api = FakeApi();
+    api.statusScript.addAll([
+      _job('running', results: 3),
+      _job('running', results: 5),
+    ]);
+    final p = _provider(api);
+    await p.watchJob('job-1');
+    expect(p.currentJob!.jobId, 'job-1');
+    expect(p.currentJob!.resultCount, 3);
+    final calls = api.statusCalls;
+    await p.watchJob('job-1');
+    expect(api.statusCalls, calls, reason: 'already followed: nothing is refetched');
+    p.dispose();
+  });
+
+  test('expired session is recoverable: polling resumes after sign-in', () async {
+    final api = FakeApi();
+    api.createScript.add(_job('running'));
+    api.statusScript.add(AuthenticationException('Your session has expired.'));
+    final p = _provider(api);
+    await p.startScraping(category: 'ecommerce', citiesData: ['Doha, Qatar']);
+    await _settle();
+    expect(p.syncState, JobSyncState.authExpired);
+    expect(p.currentJob!.status, ScrapingStatus.running, reason: 'the job keeps running');
+    final callsWhileExpired = api.statusCalls;
+    await _settle();
+    expect(api.statusCalls, callsWhileExpired, reason: 'no polling while signed out');
+
+    api.statusScript.add(_job('running', results: 9));
+    await p.resumeAfterSignIn();
+    await _settle();
+    expect(p.syncState, JobSyncState.live);
+    expect(p.currentJob!.resultCount, 9);
+    p.dispose();
+  });
+
+  test('watchJob during an expired session is resumed after sign-in', () async {
+    final api = FakeApi();
+    api.statusScript.addAll([
+      AuthenticationException('Your session has expired.'),
+      _job('running', results: 4),
+    ]);
+    final p = _provider(api);
+    await p.watchJob('job-1');
+    expect(p.currentJob, isNull);
+    expect(p.syncState, JobSyncState.authExpired);
+    await p.resumeAfterSignIn();
+    expect(p.currentJob!.jobId, 'job-1');
+    expect(p.syncState, JobSyncState.live);
+    p.dispose();
+  });
+
+  test('signOut stops following and forgets the remembered job', () async {
+    final api = FakeApi();
+    api.createScript.add(_job('running'));
+    final p = _provider(api);
+    await p.startScraping(category: 'ecommerce', citiesData: ['Doha, Qatar']);
+    await _settle(20);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(ScraperProvider.activeJobPrefKey), 'job-1');
+    await p.signOut();
+    expect(p.currentJob, isNull);
+    expect(prefs.getString(ScraperProvider.activeJobPrefKey), isNull);
+    p.dispose();
+  });
 }

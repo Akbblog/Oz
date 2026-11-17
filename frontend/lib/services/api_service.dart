@@ -69,6 +69,37 @@ class ApiService {
     return headers;
   }
 
+  /// GET [path] and decode the JSON body. Errors become [ApiException]s with
+  /// the backend's own `detail` text (never raw JSON); timeouts and connection
+  /// failures become [NetworkException]s.
+  Future<dynamic> _getJson(
+    String path, {
+    Map<String, String>? query,
+    String? context,
+    Duration? requestTimeout,
+  }) async {
+    try {
+      final headers = await _getHeaders();
+      var uri = Uri.parse('$baseUrl$path');
+      if (query != null && query.isNotEmpty) {
+        uri = uri.replace(queryParameters: query);
+      }
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(requestTimeout ?? timeout);
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+      ErrorHandler.handleHttpError(response, context: context);
+      throw ApiException('${context ?? 'Request'} failed');
+    } on TimeoutException {
+      throw NetworkException('Request timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ErrorHandler.handleNetworkError(e);
+    }
+  }
+
   // Authentication endpoints
   Future<Map<String, dynamic>> register({
     required String username,
@@ -352,20 +383,63 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getUserJobs() async {
-    final headers = await _getHeaders();
-    final response = await http
-        .get(
-          Uri.parse('$baseUrl/api/jobs'),
-          headers: headers,
-        )
-        .timeout(timeout);
+    final data = await _getJson('/api/jobs', context: 'Loading searches');
+    final raw = data is Map ? data['jobs'] : data;
+    if (raw is! List) return <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['jobs']);
-    } else {
-      throw Exception('Failed to get jobs');
+  /// One page of the user's searches, newest first.
+  ///
+  /// Returns a map with `jobs` (list of job maps), `total` (int), `counts`
+  /// (status -> int) and `paginated` (bool). `total`/`counts` come from the server when it
+  /// supports pagination. An older server that ignores `limit` returns every
+  /// job; then `total` is the length of that full list (still exact), the
+  /// window is applied locally and `counts` is empty.
+  Future<Map<String, dynamic>> getJobs({
+    int? limit,
+    int? offset,
+    String? status,
+  }) async {
+    final query = <String, String>{
+      if (limit != null) 'limit': '$limit',
+      if (offset != null) 'offset': '$offset',
+      if (status != null && status.isNotEmpty) 'status': status,
+    };
+    final data =
+        await _getJson('/api/jobs', query: query, context: 'Loading searches');
+    final rawJobs = data is Map ? data['jobs'] : data;
+    var jobs = rawJobs is List
+        ? rawJobs
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+        : <Map<String, dynamic>>[];
+    final rawTotal = data is Map ? data['total'] : null;
+    final paginated = rawTotal is num;
+    final total = paginated ? rawTotal.toInt() : jobs.length;
+    if (!paginated) {
+      final start = (offset ?? 0).clamp(0, jobs.length);
+      final end =
+          limit == null ? jobs.length : (start + limit).clamp(0, jobs.length);
+      jobs = jobs.sublist(start, end);
     }
+    final counts = <String, int>{};
+    final rawCounts = data is Map ? data['counts'] : null;
+    if (rawCounts is Map) {
+      rawCounts.forEach((key, value) {
+        if (value is num) counts['$key'] = value.toInt();
+      });
+    }
+    return {
+      'jobs': jobs,
+      'total': total,
+      'counts': counts,
+      'paginated': paginated,
+    };
   }
 
   Future<void> deleteJob(String jobId) async {
@@ -406,7 +480,8 @@ class ApiService {
 
   // States and Cities endpoints
   Future<Map<String, List<String>>> getStates() async {
-    final response = await http.get(Uri.parse('$baseUrl/api/states'));
+    final response =
+        await http.get(Uri.parse('$baseUrl/api/states')).timeout(timeout);
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic>) {
@@ -426,9 +501,11 @@ class ApiService {
   }
 
   Future<List<String>> getCities(String state) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/states/${Uri.encodeComponent(state)}/cities'),
-    );
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/states/${Uri.encodeComponent(state)}/cities'),
+        )
+        .timeout(timeout);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       return List<String>.from(data['cities'] ?? []);
@@ -438,7 +515,8 @@ class ApiService {
   }
 
   Future<List<String>> getCountries() async {
-    final response = await http.get(Uri.parse('$baseUrl/api/countries'));
+    final response =
+        await http.get(Uri.parse('$baseUrl/api/countries')).timeout(timeout);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       return List<String>.from(data['countries'] ?? []);
@@ -590,18 +668,12 @@ class ApiService {
 
   // ==================== CREDIT ENDPOINTS ====================
 
+  /// Credit configuration (costs, limits and, when the server provides
+  /// them, `min_job_cost` and `refund_policy`). Treat every field as optional.
   Future<Map<String, dynamic>> getCreditConfig() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/credits/config'),
-      headers: headers,
-    );
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to get credit config');
-    }
+    final data = await _getJson('/api/credits/config',
+        context: 'Loading credit settings');
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   Future<Map<String, dynamic>> getCreditBalance() async {
@@ -643,22 +715,21 @@ class ApiService {
     }
   }
 
+  /// Credit ledger (GET /api/credits/history), newest first. Each entry has
+  /// `amount` (+/-), `balance_after`, `transaction_type`, `reason`, `job_id`
+  /// and `created_at`.
   Future<List<Map<String, dynamic>>> getCreditHistory() async {
-    final headers = await _getHeaders();
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/credits/history'),
-      headers: headers,
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return List<Map<String, dynamic>>.from(data['transactions']);
-    } else if (response.statusCode == 404) {
-      return [];
-    } else {
-      print(
-          'getCreditHistory error: ${response.statusCode} - ${response.body}');
-      throw Exception('Failed to get credit history: ${response.statusCode}');
+    try {
+      final data = await _getJson('/api/credits/history',
+          context: 'Loading credit history');
+      final list = data is Map ? data['transactions'] : data;
+      if (list is! List) return <Map<String, dynamic>>[];
+      return list
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } on NotFoundException {
+      return <Map<String, dynamic>>[];
     }
   }
 

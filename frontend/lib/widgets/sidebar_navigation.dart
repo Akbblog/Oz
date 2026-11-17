@@ -1,442 +1,81 @@
 import 'package:flutter/material.dart';
-import '../core/theme/app_breakpoints.dart';
-import '../core/theme/app_colors.dart';
-import '../core/theme/app_spacing.dart';
-import '../core/theme/app_typography.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/auth_provider.dart';
+import 'app_shell.dart';
 import 'brand_mark.dart';
 
-class SidebarNavigation extends StatelessWidget {
-  final int currentIndex;
-  final ValueChanged<int> onTabSelected;
-  final List<SidebarNavItem> navItems;
-  final bool collapsed;
-  final bool hidden;
-  final bool isAuthenticated;
-  final bool isAdmin;
-  final VoidCallback onAdminTap;
-  final VoidCallback onWalletTap;
-  final VoidCallback onProfileTap;
-  final VoidCallback onAuthTap;
-  final String? username;
-  final String? email;
+/// "1 live" count for My searches.
+int _liveCount(BuildContext context) => LiveSearch.of(context).length;
 
-  const SidebarNavigation({
-    super.key,
-    required this.currentIndex,
-    required this.onTabSelected,
-    required this.navItems,
-    required this.collapsed,
-    required this.hidden,
-    required this.isAuthenticated,
-    required this.isAdmin,
-    required this.onAdminTap,
-    required this.onWalletTap,
-    required this.onProfileTap,
-    required this.onAuthTap,
-    this.username,
-    this.email,
-  });
+/// Desktop sidebar (≥1024 px, 232 px): wordmark, Home, Find leads
+/// (emphasised), My searches (+ "N live"), Credits, Admin (admins) and
+/// Account at the bottom. Guests: Find leads + Sign in.
+class AppSidebar extends StatelessWidget {
+  final ShellSection section;
+
+  static const double width = 232;
+
+  const AppSidebar({super.key, required this.section});
 
   @override
   Widget build(BuildContext context) {
-    if (hidden) {
-      return const SizedBox.shrink();
-    }
+    final auth = context.watch<AuthProvider>();
+    final signedIn = auth.isAuthenticated;
+    final live = signedIn ? _liveCount(context) : 0;
 
-    final width = collapsed
-        ? AppBreakpoints.sidebarCollapsed
-        : AppBreakpoints.sidebarExpanded;
+    Widget item(ShellDestination d) => _SidebarItem(
+          destination: d,
+          selected: d.section == section,
+          emphasised: d.section == ShellSection.find,
+          trailing: d.section == ShellSection.searches && live > 0 ? '$live live' : null,
+          onTap: () => AppNav.go(context, d.route),
+        );
 
     return Container(
       width: width,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [AppColors.backgroundDark, AppColors.backgroundDark],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-        border: Border(
-          right: BorderSide(
-            color: AppColors.primaryBlue.withValues(alpha: 0.2),
-          ),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primaryBlue.withValues(alpha: 0.15),
-            blurRadius: 16,
-            spreadRadius: -12,
-          ),
-        ],
+      decoration: const BoxDecoration(
+        color: UiTokens.background,
+        border: Border(right: BorderSide(color: UiTokens.border)),
       ),
-      child: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            _buildLogoSection(collapsed),
-            const SizedBox(height: AppSpacing.lg),
-            for (final item in navItems)
-              _buildNavItem(
-                icon: item.icon,
-                selectedIcon: item.selectedIcon,
-                label: item.label,
-                pageIndex: item.pageIndex,
-                activePageIndexes: item.activePageIndexes,
-                emphasized: item.emphasized,
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _Wordmark(),
+          const SizedBox(height: 20),
+          if (signedIn) ...[
+            for (final d in ShellDestinations.main) ...[
+              item(d),
+              const SizedBox(height: 4),
+            ],
+            if (auth.isAdmin)
+              _SidebarItem(
+                destination: const ShellDestination(
+                  section: ShellSection.home,
+                  label: 'Admin',
+                  icon: Icons.shield_outlined,
+                  selectedIcon: Icons.shield_rounded,
+                  route: '/admin',
+                ),
+                selected: false,
+                onTap: () => Navigator.of(context).pushNamed('/admin'),
               ),
             const Spacer(),
-            if (isAuthenticated && isAdmin)
-              _buildActionItem(
-                icon: Icons.shield_rounded,
-                label: 'Admin',
-                onTap: onAdminTap,
-              ),
-            if (isAuthenticated)
-              _buildActionItem(
-                icon: Icons.account_balance_wallet_rounded,
-                label: 'Wallet',
-                onTap: onWalletTap,
-              ),
-            if (isAuthenticated)
-              _buildActionItem(
-                icon: Icons.person_rounded,
-                label: 'Profile',
-                onTap: onProfileTap,
-              ),
-            if (!isAuthenticated)
-              _buildActionItem(
-                icon: Icons.login_rounded,
+            item(ShellDestinations.account),
+          ] else ...[
+            item(ShellDestinations.find),
+            const Spacer(),
+            _SidebarItem(
+              destination: const ShellDestination(
+                section: ShellSection.account,
                 label: 'Sign in',
-                onTap: onAuthTap,
+                icon: Icons.login_rounded,
+                selectedIcon: Icons.login_rounded,
+                route: '/login',
               ),
-            _buildUserSection(collapsed),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLogoSection(bool collapsed) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.sm,
-        AppSpacing.lg,
-        AppSpacing.sm,
-        0,
-      ),
-      child: Row(
-        mainAxisAlignment:
-            collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              gradient: AppColors.primaryGradient,
-              borderRadius: AppSpacing.borderRadiusMd,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                  blurRadius: 16,
-                  spreadRadius: -8,
-                ),
-              ],
-            ),
-            child: const Center(
-              child: BrandMark(tiled: false, size: 22, hoverGlow: true),
-            ),
-          ),
-          if (!collapsed) ...[
-            const SizedBox(width: AppSpacing.sm),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Infinity',
-                  style: AppTypography.titleSmall.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  'Leads Pro',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: AppColors.primaryBlue.withValues(alpha: 0.7),
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNavItem({
-    required IconData icon,
-    required IconData? selectedIcon,
-    required String label,
-    required int pageIndex,
-    required List<int> activePageIndexes,
-    required bool emphasized,
-  }) {
-    final isActive =
-        currentIndex == pageIndex || activePageIndexes.contains(currentIndex);
-    final resolvedIcon = isActive ? (selectedIcon ?? icon) : icon;
-    return Tooltip(
-      message: collapsed ? label : '',
-      child: InkWell(
-        onTap: () => onTabSelected(pageIndex),
-        child: Container(
-          margin: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.xs,
-          ),
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.sm,
-          ),
-          decoration: BoxDecoration(
-            gradient: isActive
-                ? AppColors.primaryGradient
-                : (emphasized
-                    ? LinearGradient(
-                        colors: [
-                          AppColors.surfaceDark.withValues(alpha: 0.9),
-                          AppColors.backgroundDark.withValues(alpha: 0.9),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      )
-                    : null),
-            borderRadius: AppSpacing.borderRadiusMd,
-            border: isActive
-                ? Border(
-                    left: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.9),
-                      width: 3,
-                    ),
-                  )
-                : (emphasized
-                    ? Border.all(
-                        color: AppColors.primaryBlue.withValues(alpha: 0.25),
-                      )
-                    : null),
-          ),
-          child: Row(
-            mainAxisAlignment:
-                collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-            children: [
-              _buildAdaptiveIcon(
-                icon: resolvedIcon,
-                color: isActive ? Colors.white : Colors.white70,
-                size: 20,
-              ),
-              if (!collapsed) ...[
-                const SizedBox(width: AppSpacing.sm),
-                Text(
-                  label,
-                  style: AppTypography.labelLarge.copyWith(
-                    color: isActive ? Colors.white : Colors.white70,
-                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActionItem({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return Tooltip(
-      message: collapsed ? label : '',
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          margin: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.xs,
-          ),
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.sm,
-          ),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceDark.withValues(alpha: 0.6),
-            borderRadius: AppSpacing.borderRadiusMd,
-            border: Border.all(
-              color: AppColors.primaryBlue.withValues(alpha: 0.25),
-            ),
-          ),
-          child: Row(
-            mainAxisAlignment:
-                collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-            children: [
-              _buildAdaptiveIcon(icon: icon, color: Colors.white70, size: 18),
-              if (!collapsed) ...[
-                const SizedBox(width: AppSpacing.sm),
-                Text(
-                  label,
-                  style: AppTypography.labelLarge.copyWith(
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAdaptiveIcon({
-    required IconData icon,
-    required Color color,
-    required double size,
-  }) {
-    return Icon(icon, color: color, size: size);
-  }
-
-  Widget _buildUserSection(bool collapsed) {
-    if (!isAuthenticated) {
-      // The collapsed rail is 72px wide: full margins + padding + border left
-      // less than the 40px avatar and overflowed on tablets.
-      return Container(
-        margin: EdgeInsets.fromLTRB(
-          collapsed ? AppSpacing.xxs : AppSpacing.sm,
-          AppSpacing.md,
-          collapsed ? AppSpacing.xxs : AppSpacing.sm,
-          AppSpacing.lg,
-        ),
-        padding: EdgeInsets.all(collapsed ? AppSpacing.xxs : AppSpacing.sm),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceDark.withValues(alpha: 0.7),
-          borderRadius: AppSpacing.borderRadiusLg,
-          border: Border.all(
-            color: AppColors.primaryBlue.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment:
-              collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: AppColors.backgroundDark,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                ),
-              ),
-              child: const Center(
-                child: Icon(
-                  Icons.visibility_rounded,
-                  color: Colors.white70,
-                  size: 18,
-                ),
-              ),
-            ),
-            if (!collapsed) ...[
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Guest Mode',
-                      style: AppTypography.labelLarge.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      'Explore before sign in',
-                      style: AppTypography.labelSmall.copyWith(
-                        color: Colors.white54,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-      );
-    }
-
-    final initial =
-        (username?.isNotEmpty ?? false) ? username![0].toUpperCase() : 'U';
-    return Container(
-      margin: const EdgeInsets.fromLTRB(
-        AppSpacing.sm,
-        AppSpacing.md,
-        AppSpacing.sm,
-        AppSpacing.lg,
-      ),
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceDark.withValues(alpha: 0.7),
-        borderRadius: AppSpacing.borderRadiusLg,
-        border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        mainAxisAlignment:
-            collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.backgroundDark,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.primaryBlue.withValues(alpha: 0.3),
-              ),
-            ),
-            child: Center(
-              child: Text(
-                initial,
-                style: AppTypography.titleSmall.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-          if (!collapsed) ...[
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    username ?? 'User',
-                    style: AppTypography.labelLarge.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    email ?? 'Pro Account',
-                    style: AppTypography.labelSmall.copyWith(
-                      color: Colors.white54,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
+              selected: false,
+              onTap: () => AppNav.signIn(context),
             ),
           ],
         ],
@@ -445,20 +84,408 @@ class SidebarNavigation extends StatelessWidget {
   }
 }
 
-class SidebarNavItem {
-  final IconData icon;
-  final IconData? selectedIcon;
-  final String label;
-  final int pageIndex;
-  final List<int> activePageIndexes;
-  final bool emphasized;
+class _Wordmark extends StatelessWidget {
+  const _Wordmark();
 
-  const SidebarNavItem({
-    required this.icon,
-    this.selectedIcon,
-    required this.label,
-    required this.pageIndex,
-    this.activePageIndexes = const [],
-    this.emphasized = false,
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: 'Infinity Leads',
+      excludeSemantics: true,
+      child: Row(
+        children: [
+          const BrandMark(size: 22, tiled: true, tileSize: 34),
+          const SizedBox(width: 10),
+          const Flexible(
+            child: Text(
+              'Infinity Leads',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: UiTokens.text,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarItem extends StatelessWidget {
+  final ShellDestination destination;
+  final bool selected;
+  final bool emphasised;
+  final String? trailing;
+  final VoidCallback onTap;
+
+  const _SidebarItem({
+    required this.destination,
+    required this.selected,
+    required this.onTap,
+    this.emphasised = false,
+    this.trailing,
   });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    if (emphasised) {
+      bg = selected ? UiTokens.primaryHover : UiTokens.primary;
+    } else {
+      bg = selected ? UiTokens.selectedSurface : Colors.transparent;
+    }
+    final fg = emphasised || selected ? Colors.white : UiTokens.textSecondary;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: trailing == null ? destination.label : '${destination.label}, $trailing',
+      excludeSemantics: true,
+      child: Material(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              // Selection is shown by shape too (left bar), not colour alone.
+              border: selected
+                  ? const Border(left: BorderSide(color: UiTokens.accent, width: 3))
+                  : null,
+            ),
+            child: Row(
+              children: [
+                Icon(selected ? destination.selectedIcon : destination.icon, size: 20, color: fg),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    destination.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 14,
+                      fontWeight: selected || emphasised ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (trailing != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: UiTokens.searchingBg,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: UiTokens.searchingFg),
+                    ),
+                    child: Text(
+                      trailing!,
+                      style: const TextStyle(
+                        color: UiTokens.text,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tablet rail (768–1023 px, 88 px): icon + label for every item.
+class AppNavRail extends StatelessWidget {
+  final ShellSection section;
+
+  static const double width = 88;
+
+  const AppNavRail({super.key, required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final signedIn = auth.isAuthenticated;
+    final live = signedIn ? _liveCount(context) : 0;
+
+    Widget item(ShellDestination d) => _RailItem(
+          icon: d.section == section ? d.selectedIcon : d.icon,
+          label: d.label,
+          selected: d.section == section,
+          emphasised: d.section == ShellSection.find,
+          badge: d.section == ShellSection.searches && live > 0 ? '$live live' : null,
+          onTap: () => AppNav.go(context, d.route),
+        );
+
+    return Container(
+      width: width,
+      decoration: const BoxDecoration(
+        color: UiTokens.background,
+        border: Border(right: BorderSide(color: UiTokens.border)),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 6),
+      child: Column(
+        children: [
+          Semantics(
+            label: 'Infinity Leads',
+            child: const BrandMark(size: 22, tiled: true, tileSize: 40),
+          ),
+          const SizedBox(height: 16),
+          if (signedIn) ...[
+            for (final d in ShellDestinations.main) ...[
+              item(d),
+              const SizedBox(height: 4),
+            ],
+            if (auth.isAdmin)
+              _RailItem(
+                icon: Icons.shield_outlined,
+                label: 'Admin',
+                selected: false,
+                onTap: () => Navigator.of(context).pushNamed('/admin'),
+              ),
+            const Spacer(),
+            item(ShellDestinations.account),
+          ] else ...[
+            item(ShellDestinations.find),
+            const Spacer(),
+            _RailItem(
+              icon: Icons.login_rounded,
+              label: 'Sign in',
+              selected: false,
+              onTap: () => AppNav.signIn(context),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RailItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final bool emphasised;
+  final String? badge;
+  final VoidCallback onTap;
+
+  const _RailItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.emphasised = false,
+    this.badge,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg = emphasised
+        ? (selected ? UiTokens.primaryHover : UiTokens.primary)
+        : (selected ? UiTokens.selectedSurface : Colors.transparent);
+    final fg = emphasised || selected ? Colors.white : UiTokens.textSecondary;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: badge == null ? label : '$label, $badge',
+      excludeSemantics: true,
+      child: Material(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 56),
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: selected
+                  ? const Border(left: BorderSide(color: UiTokens.accent, width: 3))
+                  : null,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 20, color: fg),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 12,
+                    height: 1.15,
+                    fontWeight: selected || emphasised ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+                if (badge != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      badge!,
+                      style: const TextStyle(
+                        color: UiTokens.searchingFg,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Phone bottom bar (<768 px): Home · Find leads · Searches · Credits ·
+/// Account. Guests: Find leads · Sign in.
+class PhoneBottomBar extends StatelessWidget {
+  final ShellSection section;
+
+  const PhoneBottomBar({super.key, required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final signedIn = auth.isAuthenticated;
+    final live = signedIn ? _liveCount(context) : 0;
+
+    final items = <Widget>[];
+    if (signedIn) {
+      for (final d in ShellDestinations.phone) {
+        items.add(_BottomItem(
+          icon: d.section == section ? d.selectedIcon : d.icon,
+          label: d.phoneLabel,
+          selected: d.section == section,
+          emphasised: d.section == ShellSection.find,
+          badge: d.section == ShellSection.searches && live > 0 ? '$live' : null,
+          semanticsSuffix: d.section == ShellSection.searches && live > 0 ? '$live live' : null,
+          onTap: () => AppNav.go(context, d.route),
+        ));
+      }
+    } else {
+      const d = ShellDestinations.find;
+      items.add(_BottomItem(
+        icon: d.icon,
+        label: d.phoneLabel,
+        selected: section == ShellSection.find,
+        emphasised: true,
+        onTap: () => AppNav.go(context, d.route),
+      ));
+      items.add(_BottomItem(
+        icon: Icons.login_rounded,
+        label: 'Sign in',
+        selected: false,
+        onTap: () => AppNav.signIn(context),
+      ));
+    }
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: UiTokens.background,
+        border: Border(top: BorderSide(color: UiTokens.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 64,
+          child: Row(
+            children: [for (final w in items) Expanded(child: w)],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final bool emphasised;
+  final String? badge;
+  final String? semanticsSuffix;
+  final VoidCallback onTap;
+
+  const _BottomItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.emphasised = false,
+    this.badge,
+    this.semanticsSuffix,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : UiTokens.textSecondary;
+    Widget iconWidget = Icon(icon, size: 22, color: emphasised ? Colors.white : fg);
+    if (emphasised) {
+      iconWidget = Container(
+        width: 40,
+        height: 28,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? UiTokens.primaryHover : UiTokens.primary,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: iconWidget,
+      );
+    }
+    if (badge != null) {
+      iconWidget = Badge(
+        label: Text(badge!),
+        backgroundColor: UiTokens.searchingFg,
+        textColor: Colors.black,
+        child: iconWidget,
+      );
+    }
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: semanticsSuffix == null ? label : '$label, $semanticsSuffix',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Selected item: indicator bar on top (shape, not colour alone).
+            Container(
+              width: 24,
+              height: 3,
+              margin: const EdgeInsets.only(bottom: 5),
+              decoration: BoxDecoration(
+                color: selected ? UiTokens.accent : Colors.transparent,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            iconWidget,
+            const SizedBox(height: 3),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: fg,
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
