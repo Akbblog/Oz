@@ -984,6 +984,31 @@ def _user_role_level(user: dict) -> int:
     return ROLE_HIERARCHY.get(user.get("role", "user"), 0)
 
 
+def _stored_role(role: object, is_admin: object) -> str:
+    """Effective role of a users row (legacy rows may only carry is_admin)."""
+    normalized = (str(role).strip().lower() if role else "")
+    if normalized in VALID_ROLES:
+        return normalized
+    return "admin" if bool(is_admin) else "user"
+
+
+def _require_outranks(actor: dict, target_id: int, target_role: str, action: str) -> None:
+    """Staff may only manage accounts ranked strictly below their own role.
+
+    Owners therefore manage admins/support/users, admins manage support/users,
+    and nobody can suspend, delete, deny, restore or edit an owner or a peer
+    through these endpoints. Self-actions are handled by each endpoint.
+    """
+    if actor.get("id") == target_id:
+        return
+    if _user_role_level(actor) <= ROLE_HIERARCHY.get(target_role, 0):
+        label = {"owner": "an owner", "admin": "an admin", "support": "a support user"}.get(target_role, "this user")
+        raise HTTPException(
+            status_code=403,
+            detail=f"You can't {action} {label}. Only a higher-ranked account can do that.",
+        )
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Get current authenticated user"""
     token = credentials.credentials
@@ -1572,12 +1597,18 @@ async def update_user_profile(
     request: Request,
     admin: dict = Depends(get_admin_or_above),
 ):
-    """Update user profile fields (admin only)."""
+    """Update profile fields (username, email, phone) — never the role.
+
+    Role changes go through ``PUT /api/admin/users/{id}/role`` (owner only).
+    ``role`` / ``is_admin`` are still accepted here for older clients, but only
+    when they match the stored value (no-op); a differing value is refused so a
+    profile save can never silently promote or demote anyone.
+    """
     conn = get_db()
     cursor = conn.cursor()
 
     cursor.execute(
-        "SELECT id, username, email, phone, is_admin FROM users WHERE id = ?",
+        "SELECT id, username, email, phone, is_admin, role FROM users WHERE id = ?",
         (user_id,),
     )
     existing = cursor.fetchone()
@@ -1585,11 +1616,31 @@ async def update_user_profile(
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
 
+    target_role = _stored_role(existing[5], existing[4])
+    try:
+        _require_outranks(admin, user_id, target_role, "edit the profile of")
+    except HTTPException:
+        conn.close()
+        raise
+
+    role_requested = profile_data.role is not None and profile_data.role.strip().lower() != target_role
+    admin_flag_requested = (
+        profile_data.is_admin is not None
+        and bool(profile_data.is_admin) != bool(existing[4])
+        and bool(profile_data.is_admin) != (target_role in ("admin", "owner"))
+    )
+    if role_requested or admin_flag_requested:
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail="Profile edits can't change a role. Use the Change role action (owner only).",
+        )
+
     before_state = {
         "username": existing[1],
         "email": existing[2],
         "phone": existing[3],
-        "is_admin": bool(existing[4]),
+        "role": target_role,
     }
 
     update_fields: List[str] = []
@@ -1627,49 +1678,6 @@ async def update_user_profile(
         update_fields.append("phone = ?")
         params.append(phone or None)
 
-    if profile_data.role is not None:
-        if _user_role_level(admin) < ROLE_HIERARCHY["owner"]:
-            conn.close()
-            raise HTTPException(status_code=403, detail="Owner role required to change roles")
-        role = profile_data.role.strip().lower()
-        if role not in VALID_ROLES:
-            conn.close()
-            raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}")
-        # Prevent demoting the last owner/admin
-        cursor.execute(
-            "SELECT role FROM users WHERE id = ?", (user_id,),
-        )
-        current_role_row = cursor.fetchone()
-        current_role = current_role_row[0] if current_role_row and current_role_row[0] else "user"
-        if ROLE_HIERARCHY.get(current_role, 0) >= ROLE_HIERARCHY["admin"] and ROLE_HIERARCHY.get(role, 0) < ROLE_HIERARCHY["admin"]:
-            cursor.execute("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'owner') OR is_admin = 1")
-            admin_count = int((cursor.fetchone() or [0])[0] or 0)
-            if admin_count <= 1:
-                conn.close()
-                raise HTTPException(status_code=400, detail="Cannot remove the last admin/owner")
-        update_fields.append("role = ?")
-        params.append(role)
-        # Keep is_admin in sync
-        update_fields.append("is_admin = ?")
-        params.append(1 if role in ("admin", "owner") else 0)  # support is read-only (audit C-4)
-
-    elif profile_data.is_admin is not None:
-        if _user_role_level(admin) < ROLE_HIERARCHY["owner"]:
-            conn.close()
-            raise HTTPException(status_code=403, detail="Owner role required to change admin status")
-        target_is_admin = bool(existing[4])
-        if target_is_admin and not profile_data.is_admin:
-            cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
-            admin_count = int((cursor.fetchone() or [0])[0] or 0)
-            if admin_count <= 1:
-                conn.close()
-                raise HTTPException(status_code=400, detail="Cannot remove the last admin")
-        update_fields.append("is_admin = ?")
-        params.append(1 if profile_data.is_admin else 0)
-        # Keep role in sync
-        update_fields.append("role = ?")
-        params.append("admin" if profile_data.is_admin else "user")
-
     if not update_fields:
         conn.close()
         raise HTTPException(status_code=400, detail="No profile fields to update")
@@ -1682,7 +1690,9 @@ async def update_user_profile(
     conn.commit()
     conn.close()
 
-    after_state = {k: v for k, v in profile_data.dict(exclude_unset=True).items()}
+    after_state = {
+        k: v for k, v in profile_data.model_dump(exclude_unset=True).items() if k in ("username", "email", "phone")
+    }
 
     record_audit_event(
         "admin.user.update",
@@ -1698,6 +1708,69 @@ async def update_user_profile(
     )
 
     return {"ok": True}
+
+
+class AdminUserRoleChangeRequest(BaseModel):
+    role: str
+    reason: Optional[str] = None
+
+
+@app.put("/api/admin/users/{user_id}/role")
+async def change_user_role(
+    user_id: int,
+    role_change: AdminUserRoleChangeRequest,
+    request: Request,
+    admin: dict = Depends(get_owner_user),
+):
+    """Explicit, audited role change (owner only).
+
+    Owners cannot change their own role or another owner's role here, and the
+    last admin/owner can never be demoted.
+    """
+    new_role = (role_change.role or "").strip().lower()
+    if new_role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(sorted(VALID_ROLES))}")
+    if admin["id"] == user_id:
+        raise HTTPException(status_code=400, detail="You can't change your own role")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, username, is_admin, role FROM users WHERE id = ?", (user_id,))
+        existing = cursor.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="User not found")
+        current_role = _stored_role(existing[3], existing[2])
+        _require_outranks(admin, user_id, current_role, "change the role of")
+        if new_role == current_role:
+            return {"ok": True, "role": current_role, "changed": False}
+        if (
+            ROLE_HIERARCHY[current_role] >= ROLE_HIERARCHY["admin"]
+            and ROLE_HIERARCHY[new_role] < ROLE_HIERARCHY["admin"]
+            and _would_remove_last_admin_owner(cursor, current_role, existing[2])
+        ):
+            raise HTTPException(status_code=400, detail="Cannot remove the last admin/owner")
+        cursor.execute(
+            "UPDATE users SET role = ?, is_admin = ? WHERE id = ?",
+            (new_role, 1 if new_role in ("admin", "owner") else 0, user_id),  # support is read-only (audit C-4)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    record_audit_event(
+        "admin.user.role_change",
+        request_id=getattr(request.state, "request_id", None),
+        actor_user_id=admin["id"],
+        actor_username=admin["username"],
+        target_type="user",
+        target_id=str(user_id),
+        before={"role": current_role},
+        after={"role": new_role, "reason": (role_change.reason or None)},
+        ip_address=getattr(request.state, "client_ip", None),
+        user_agent=getattr(request.state, "user_agent", None),
+    )
+    return {"ok": True, "role": new_role, "changed": True}
 
 @app.post("/api/admin/users/{user_id}/approve")
 async def approve_user(
@@ -1917,11 +1990,19 @@ async def deny_user(
     cursor = conn.cursor()
 
     # Check if user exists and is not approved
-    cursor.execute("SELECT is_approved, email, username FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT is_approved, email, username, role, is_admin FROM users WHERE id = ?", (user_id,))
     user = cursor.fetchone()
     if not user:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
+    if admin["id"] == user_id:
+        conn.close()
+        raise HTTPException(status_code=400, detail="You cannot deny your own account")
+    try:
+        _require_outranks(admin, user_id, _stored_role(user[3], user[4]), "deny")
+    except HTTPException:
+        conn.close()
+        raise
 
     approval_state = _approval_state(user[0])
     if approval_state == APPROVAL_APPROVED:
@@ -2003,6 +2084,11 @@ async def suspend_user(
     if not user:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
+    try:
+        _require_outranks(admin, user_id, _stored_role(user[4], user[3]), "suspend")
+    except HTTPException:
+        conn.close()
+        raise
 
     approval_state = _approval_state(user[2])
     if approval_state != APPROVAL_APPROVED:
@@ -2052,11 +2138,16 @@ async def restore_user(user_id: int, request: Request, admin: dict = Depends(get
     """Restore a denied user back to pending status (admin only)."""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT is_approved FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT is_approved, role, is_admin FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
+    try:
+        _require_outranks(admin, user_id, _stored_role(row[1], row[2]), "restore")
+    except HTTPException:
+        conn.close()
+        raise
 
     state = _approval_state(row[0])
     if state != APPROVAL_DENIED:
@@ -2097,11 +2188,19 @@ async def unsuspend_user(user_id: int, request: Request, admin: dict = Depends(g
     """Restore a suspended user account (admin only)."""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT is_suspended FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT is_suspended, role, is_admin FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
+    if admin["id"] == user_id:
+        conn.close()
+        raise HTTPException(status_code=400, detail="You cannot unsuspend your own account")
+    try:
+        _require_outranks(admin, user_id, _stored_role(row[1], row[2]), "unsuspend")
+    except HTTPException:
+        conn.close()
+        raise
 
     if not _is_suspended(row[0]):
         conn.close()
@@ -2157,6 +2256,11 @@ async def delete_user(user_id: int, request: Request, admin: dict = Depends(get_
     if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
+    try:
+        _require_outranks(admin, user_id, _stored_role(existing[4], existing[3]), "delete")
+    except HTTPException:
+        conn.close()
+        raise
 
     approval_state = _approval_state(existing[5])
     is_suspended = _is_suspended(existing[6])

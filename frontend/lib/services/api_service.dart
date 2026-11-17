@@ -592,28 +592,32 @@ class ApiService {
     }
   }
 
+  /// Profile fields only (username, email, phone). Roles are never sent from
+  /// here; use [updateUserRole] for an explicit, owner-only role change. Pass
+  /// only the fields that changed.
   Future<void> updateUserProfileAdmin(
     int userId, {
     String? username,
     String? email,
     String? phone,
-    bool? isAdmin,
   }) async {
     final headers = await _getHeaders();
     final body = <String, dynamic>{};
     if (username != null) body['username'] = username;
     if (email != null) body['email'] = email;
     if (phone != null) body['phone'] = phone;
-    if (isAdmin != null) body['is_admin'] = isAdmin;
 
-    final response = await http.put(
-      Uri.parse('$baseUrl/api/admin/users/$userId'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
+    final response = await http
+        .put(
+          Uri.parse('$baseUrl/api/admin/users/$userId'),
+          headers: headers,
+          body: jsonEncode(body),
+        )
+        .timeout(timeout);
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to update user profile');
+      ErrorHandler.handleHttpError(response, context: 'Update profile');
+      throw ApiException('Failed to update user profile');
     }
   }
 
@@ -648,7 +652,8 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('Failed to suspend user');
+      ErrorHandler.handleHttpError(response, context: 'Suspend');
+      throw ApiException('Failed to suspend user');
     }
   }
 
@@ -662,7 +667,8 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('Failed to restore suspended user');
+      ErrorHandler.handleHttpError(response, context: 'Unsuspend');
+      throw ApiException('Failed to restore suspended user');
     }
   }
 
@@ -674,7 +680,8 @@ class ApiService {
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to delete user');
+      ErrorHandler.handleHttpError(response, context: 'Delete user');
+      throw ApiException('Failed to delete user');
     }
   }
 
@@ -2241,21 +2248,27 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> updateUserRole(int userId, String role) async {
+  /// Explicit role change (owner only): PUT /api/admin/users/{id}/role.
+  Future<Map<String, dynamic>> updateUserRole(int userId, String role,
+      {String? reason}) async {
     final headers = await _getHeaders();
     final response = await http
         .put(
-          Uri.parse('$baseUrl/api/admin/users/$userId'),
+          Uri.parse('$baseUrl/api/admin/users/$userId/role'),
           headers: headers,
-          body: jsonEncode({'role': role}),
+          body: jsonEncode({
+            'role': role,
+            if (reason != null && reason.trim().isNotEmpty)
+              'reason': reason.trim(),
+          }),
         )
         .timeout(timeout);
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to update user role');
     }
+    ErrorHandler.handleHttpError(response, context: 'Change role');
+    throw ApiException('Failed to update user role');
   }
 
   Future<Map<String, dynamic>> denyUser(int userId, {String? adminNote}) async {
@@ -2273,7 +2286,8 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('Failed to deny user');
+      ErrorHandler.handleHttpError(response, context: 'Deny');
+      throw ApiException('Failed to deny user');
     }
   }
 
@@ -2289,7 +2303,8 @@ class ApiService {
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('Failed to restore user');
+      ErrorHandler.handleHttpError(response, context: 'Restore');
+      throw ApiException('Failed to restore user');
     }
   }
 

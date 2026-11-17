@@ -11,6 +11,7 @@ import '../core/theme/app_breakpoints.dart';
 import '../widgets/brand_mark.dart';
 import '../widgets/analytics_charts.dart';
 import '../core/utils/server_time.dart';
+import '../core/admin_roles.dart';
 import 'admin_jobs_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -23,6 +24,45 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with SingleTickerProviderStateMixin {
   final ApiService _apiService = ApiService();
+
+  // ---- Role ranks: see core/admin_roles.dart (mirrors the backend) ----
+  static String _roleOf(Map<String, dynamic>? user) => AdminRoles.roleOf(user);
+
+  Map<String, dynamic>? get _viewer =>
+      Provider.of<AuthProvider>(context, listen: false).currentUser;
+
+  bool _canManage(Map<String, dynamic> user) =>
+      AdminRoles.canManage(_viewer, user);
+
+  bool _canEditProfile(Map<String, dynamic> user) =>
+      AdminRoles.canEditProfile(_viewer, user);
+
+  bool _canChangeRole(Map<String, dynamic> user) =>
+      AdminRoles.canChangeRole(_viewer, user);
+
+  String _protectedNote(Map<String, dynamic> user) =>
+      AdminRoles.protectedNote(_viewer, user);
+
+  Widget _protectedLabel(Map<String, dynamic> user) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        decoration: BoxDecoration(
+          color: AppColors.elevatedCardDark,
+          borderRadius: AppSpacing.borderRadiusMd,
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.lock_outline, size: 16, color: Colors.white70),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _protectedNote(user),
+                style: AppTypography.bodySmall.copyWith(color: Colors.white70),
+              ),
+            ),
+          ],
+        ),
+      );
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _creditRequests = [];
@@ -456,7 +496,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         TextEditingController(text: (user['email'] ?? '').toString());
     final phoneController =
         TextEditingController(text: (user['phone'] ?? '').toString());
-    bool isAdmin = user['is_admin'] == true;
+    final originalUsername = (user['username'] ?? '').toString();
+    final originalEmail = (user['email'] ?? '').toString();
+    final originalPhone = (user['phone'] ?? '').toString();
+    final currentRole = _roleOf(user);
+    final canChangeRole = _canChangeRole(user);
 
     final result = await showDialog<bool>(
       context: context,
@@ -530,16 +574,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   ),
                 ),
                 const SizedBox(height: AppSpacing.sm),
-                SwitchListTile.adaptive(
-                  value: isAdmin,
-                  onChanged: (value) => setDialogState(() => isAdmin = value),
-                  title: Text(
-                    'Admin Access',
-                    style:
-                        AppTypography.bodyMedium.copyWith(color: Colors.white),
-                  ),
-                  activeThumbColor: AppColors.brandPurple,
-                  contentPadding: EdgeInsets.zero,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Role: ${currentRole[0].toUpperCase()}${currentRole.substring(1)}',
+                        style: AppTypography.bodyMedium
+                            .copyWith(color: Colors.white),
+                      ),
+                    ),
+                    if (canChangeRole)
+                      TextButton(
+                        onPressed: () async {
+                          final changed = await _showChangeRoleDialog(user);
+                          if (changed == true && context.mounted) {
+                            Navigator.pop(context, true);
+                          }
+                        },
+                        child: const Text('Change role…'),
+                      ),
+                  ],
+                ),
+                Text(
+                  'Saving this form never changes the role.',
+                  style:
+                      AppTypography.bodySmall.copyWith(color: Colors.white60),
                 ),
                 const SizedBox(height: AppSpacing.sm),
                 Row(
@@ -573,12 +632,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             return;
                           }
                           try {
+                            if (username == originalUsername &&
+                                email == originalEmail &&
+                                phone == originalPhone) {
+                              Navigator.pop(context, false);
+                              return;
+                            }
                             await _apiService.updateUserProfileAdmin(
                               user['id'],
-                              username: username,
-                              email: email,
-                              phone: phone,
-                              isAdmin: isAdmin,
+                              username: username != originalUsername
+                                  ? username
+                                  : null,
+                              email: email != originalEmail ? email : null,
+                              phone: phone != originalPhone ? phone : null,
                             );
                             if (context.mounted) Navigator.pop(context, true);
                           } catch (e) {
@@ -604,6 +670,85 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     if (result == true) {
       _showSnackBar('User profile updated', AppColors.successGreen);
       _loadData();
+    }
+  }
+
+  /// Explicit owner-only role change with confirmation.
+  Future<bool?> _showChangeRoleDialog(Map<String, dynamic> user) async {
+    var selected = _roleOf(user);
+    final reasonController = TextEditingController();
+    const descriptions = {
+      'user': 'Searches and downloads only',
+      'support': 'Read-only admin access',
+      'admin': 'Manages accounts ranked below admin',
+      'owner': 'Full control, including roles',
+    };
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: AppColors.surfaceDark,
+          title: Text('Change role for ${user['username']}',
+              style: const TextStyle(color: Colors.white)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final role in const ['user', 'support', 'admin', 'owner'])
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      selected == role
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                      color: Colors.white,
+                    ),
+                    title: Text(
+                      '${role[0].toUpperCase()}${role.substring(1)}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    subtitle: Text(descriptions[role]!,
+                        style: const TextStyle(color: Colors.white70)),
+                    selected: selected == role,
+                    onTap: () => setDialogState(() => selected = role),
+                  ),
+                TextField(
+                  controller: reasonController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (saved in the audit log)',
+                    labelStyle: TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: selected == _roleOf(user)
+                  ? null
+                  : () => Navigator.pop(context, true),
+              child: const Text('Change role'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final reason = reasonController.text;
+    reasonController.dispose();
+    if (confirmed != true) return false;
+    try {
+      await _apiService.updateUserRole(user['id'], selected, reason: reason);
+      _showSnackBar('Role changed to $selected', AppColors.successGreen);
+      return true;
+    } catch (e) {
+      _showSnackBar('$e', AppColors.dangerRed);
+      return false;
     }
   }
 
@@ -1505,27 +1650,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     onTap: () => _approveUser(user['id']),
                   ),
                 ),
-              if (isPending) const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: _smallButton(
-                  label: isApproved
-                      ? 'Suspend'
-                      : (isSuspended || isDenied)
-                          ? 'Restore'
-                          : 'Deny',
-                  color: isApproved
-                      ? AppColors.brandOrange
-                      : AppColors.elevatedCardDark,
-                  textColor: Colors.white,
-                  onTap: isApproved
-                      ? () => _suspendUser(user)
-                      : isSuspended
-                          ? () => _unsuspendUser(user['id'])
-                          : isDenied
-                              ? () => _restoreUser(user['id'])
-                              : () => _denyUser(user['id']),
+              if (isPending && _canManage(user))
+                const SizedBox(width: AppSpacing.sm),
+              if (!_canManage(user) && !isPending)
+                Expanded(child: _protectedLabel(user)),
+              if (_canManage(user))
+                Expanded(
+                  child: _smallButton(
+                    label: isApproved
+                        ? 'Suspend'
+                        : (isSuspended || isDenied)
+                            ? 'Restore'
+                            : 'Deny',
+                    color: isApproved
+                        ? AppColors.brandOrange
+                        : AppColors.elevatedCardDark,
+                    textColor: Colors.white,
+                    onTap: isApproved
+                        ? () => _suspendUser(user)
+                        : isSuspended
+                            ? () => _unsuspendUser(user['id'])
+                            : isDenied
+                                ? () => _restoreUser(user['id'])
+                                : () => _denyUser(user['id']),
+                  ),
                 ),
-              ),
             ],
           ),
         ],
@@ -1663,7 +1812,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     final isApproved = approvalState == 'approved';
     final isPending = approvalState == 'pending';
     final isSuspended = approvalState == 'suspended';
-    final isAdmin = user['is_admin'] == true;
     final userId = (user['id'] as num?)?.toInt();
     final phone = (user['phone'] ?? '').toString().trim();
     final suspensionReason = _suspensionReason(user);
@@ -1703,7 +1851,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (isAdmin) ...[
+                        if (_roleOf(user) != 'user') ...[
                           const SizedBox(width: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -1716,7 +1864,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                               borderRadius: AppSpacing.borderRadiusSm,
                             ),
                             child: Text(
-                              'ADMIN',
+                              _roleOf(user).toUpperCase(),
                               style: AppTypography.labelSmall.copyWith(
                                 color: AppColors.brandPurple,
                                 fontWeight: FontWeight.w700,
@@ -1796,23 +1944,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     onTap: () => _approveUser(user['id']),
                   ),
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: _smallButton(
-                    label: 'Deny',
-                    color: AppColors.elevatedCardDark,
-                    textColor: Colors.white,
-                    onTap: () => _denyUser(user['id']),
+                if (_canManage(user)) ...[
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: _smallButton(
+                      label: 'Deny',
+                      color: AppColors.elevatedCardDark,
+                      textColor: Colors.white,
+                      onTap: () => _denyUser(user['id']),
+                    ),
                   ),
-                ),
+                ],
               ] else if (isApproved) ...[
-                Expanded(
-                  child: _smallButton(
-                    label: 'Suspend',
-                    color: AppColors.brandOrange,
-                    onTap: () => _suspendUser(user),
-                  ),
-                ),
+                if (_canManage(user))
+                  Expanded(
+                    child: _smallButton(
+                      label: 'Suspend',
+                      color: AppColors.brandOrange,
+                      onTap: () => _suspendUser(user),
+                    ),
+                  )
+                else
+                  Expanded(child: _protectedLabel(user)),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: _smallButton(
@@ -1822,6 +1975,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     onTap: () => _showGrantCreditsDialog(user),
                   ),
                 ),
+              ] else if (!_canManage(user)) ...[
+                Expanded(child: _protectedLabel(user)),
               ] else ...[
                 Expanded(
                   child: _smallButton(
@@ -1846,14 +2001,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
-              Expanded(
-                child: _smallButton(
-                  label: 'Manage Profile',
-                  color: AppColors.elevatedCardDark,
-                  textColor: Colors.white,
-                  onTap: () => _showManageUserDialog(user),
+              if (_canEditProfile(user))
+                Expanded(
+                  child: _smallButton(
+                    label: 'Manage Profile',
+                    color: AppColors.elevatedCardDark,
+                    textColor: Colors.white,
+                    onTap: () => _showManageUserDialog(user),
+                  ),
                 ),
-              ),
               const SizedBox(width: AppSpacing.xs),
               Expanded(
                 child: _smallButton(
