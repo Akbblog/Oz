@@ -82,6 +82,7 @@ def _strip_accents(text: str) -> str:
 
 def name_key(name: Any) -> Optional[str]:
     text = _strip_accents(str(name or "")).casefold()
+    text = re.sub(r"['’`]", "", text)  # "Joe's" == "Joes"
     text = re.sub(r"[^\w\s&]", " ", text)
     tokens = [t for t in text.split() if t and t not in _LEGAL_WORDS]
     key = " ".join(tokens)
@@ -96,6 +97,12 @@ def names_compatible(a: Optional[str], b: Optional[str]) -> bool:
     ta: Set[str] = set(a.split())
     tb: Set[str] = set(b.split())
     if not ta or not tb:
+        return False
+    # Numbers distinguish branches ("Clinic 2" vs "Clinic 12", "Unit 9-0" vs
+    # "Unit 6-0"): when both names carry numbers they must carry the same ones.
+    na = {t for t in ta if any(ch.isdigit() for ch in t)}
+    nb = {t for t in tb if any(ch.isdigit() for ch in t)}
+    if na and nb and na != nb:
         return False
     small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
     if small <= big and sum(len(t) for t in small) >= 3:
