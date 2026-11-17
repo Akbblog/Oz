@@ -53,6 +53,31 @@ String searchDateFilterLabel(SearchDateFilter f) {
   }
 }
 
+/// Client-side query/date/sort for servers that don't support them
+/// (fallback only; current servers filter all searches themselves).
+List<Map<String, dynamic>> filterAndSortSearchesLocally(
+  List<Map<String, dynamic>> jobs, {
+  required String query,
+  required SearchDateFilter date,
+  required SearchSort sort,
+  DateTime? now,
+}) {
+  final out = jobs.where((j) => searchMatchesQuery(j, query) && searchMatchesDate(j, date, now: now)).toList();
+  int created(Map<String, dynamic> j) => parseServerTime(j['created_at'])?.millisecondsSinceEpoch ?? 0;
+  switch (sort) {
+    case SearchSort.newest:
+      out.sort((a, b) => created(b).compareTo(created(a)));
+      break;
+    case SearchSort.oldest:
+      out.sort((a, b) => created(a).compareTo(created(b)));
+      break;
+    case SearchSort.mostLeads:
+      out.sort((a, b) => jobInt(b, 'result_count').compareTo(jobInt(a, 'result_count')));
+      break;
+  }
+  return out;
+}
+
 /// API value of a sort.
 String searchSortApi(SearchSort s) {
   switch (s) {
@@ -212,11 +237,29 @@ class _MySearchesScreenState extends State<MySearchesScreen> with SingleTickerPr
         sort: searchSortApi(_sort),
       );
       if (!mounted || generation != _generation) return;
-      final jobs = List<Map<String, dynamic>>.from(page['jobs'] as List);
+      var jobs = List<Map<String, dynamic>>.from(page['jobs'] as List);
+      var total = (page['total'] as num?)?.toInt() ?? jobs.length;
       final counts = Map<String, int>.from(page['counts'] as Map? ?? const <String, int>{});
+      // An older server ignores q/from/sort (no `overall_total` in its reply):
+      // fetch the tab's searches and filter/sort/page them here instead, so the
+      // list never pretends to be filtered when it is not.
+      final filtering = _query.trim().isNotEmpty || _date != SearchDateFilter.all || _sort != SearchSort.newest;
+      if (page['overall_total'] == null && filtering) {
+        final everything = await _api.getJobs(status: _tab.apiStatus);
+        if (!mounted || generation != _generation) return;
+        final local = filterAndSortSearchesLocally(
+          List<Map<String, dynamic>>.from(everything['jobs'] as List),
+          query: _query,
+          date: _date,
+          sort: _sort,
+        );
+        total = local.length;
+        final start = (_page * pageSize).clamp(0, total);
+        jobs = local.sublist(start, (start + pageSize).clamp(0, total));
+      }
       setState(() {
         _jobs = jobs;
-        _total = (page['total'] as num?)?.toInt() ?? jobs.length;
+        _total = total;
         _overallTotal = (page['overall_total'] as num?)?.toInt();
         _counts = counts;
         _loading = false;

@@ -534,4 +534,44 @@ void main() {
     final now = DateTime.now();
     expect(from, DateTime(now.year, now.month, now.day));
   });
+
+  testWidgets('My searches: an older server without server-side filters is filtered here', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final api = FakeApi()
+      ..jobsPage = {
+        // No overall_total: the server ignored q/from/sort.
+        'jobs': [
+          {..._payload(id: 'a', leads: 2), 'category': 'plumbers'},
+          {..._payload(id: 'b', leads: 5), 'category': 'dentists'},
+          {..._payload(id: 'c', leads: 1), 'category': 'plumbers'},
+        ],
+        'total': 3,
+        'counts': <String, int>{'all': 3, 'active': 0, 'completed': 3, 'cancelled': 0, 'failed': 0},
+      };
+    await tester.pumpWidget(_host(api, MySearchesScreen(api: api)));
+    await _settle(tester);
+    expect(find.text('dentists'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, 'plumb');
+    await tester.pump(const Duration(milliseconds: 400));
+    await _settle(tester);
+    expect(find.text('dentists'), findsNothing);
+    expect(find.text('plumbers'), findsNWidgets(2));
+    expect(find.textContaining('Showing 1–2 of 2'), findsOneWidget);
+  });
+
+  test('local fallback sorts by most leads and filters by date', () {
+    final now = DateTime(2026, 11, 18, 12);
+    final jobs = [
+      {..._payload(id: 'old', leads: 9), 'created_at': '2026-10-01T10:00:00Z'},
+      {..._payload(id: 'new', leads: 1), 'created_at': now.toUtc().toIso8601String()},
+      {..._payload(id: 'mid', leads: 4), 'created_at': '2026-11-15T10:00:00Z'},
+    ];
+    List<String> ids(List<Map<String, dynamic>> l) => [for (final j in l) '${j['job_id']}'];
+    expect(ids(filterAndSortSearchesLocally(jobs, query: '', date: SearchDateFilter.all, sort: SearchSort.mostLeads, now: now)),
+        ['old', 'mid', 'new']);
+    expect(ids(filterAndSortSearchesLocally(jobs, query: '', date: SearchDateFilter.last7Days, sort: SearchSort.newest, now: now)),
+        ['new', 'mid']);
+  });
 }

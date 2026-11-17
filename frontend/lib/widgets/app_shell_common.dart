@@ -137,7 +137,11 @@ String? jobCountry(Map<String, dynamic> job) {
 
 /// "Quebec, Canada", "Quebec", "Canada" or null.
 String? jobPlaceLabel(Map<String, dynamic> job) {
-  final parts = [jobRegion(job), jobCountry(job)].whereType<String>().toList();
+  final parts = <String>[];
+  for (final p in [jobRegion(job), jobCountry(job)].whereType<String>()) {
+    // "Doha, Qatar" stores the country as the region: show it once.
+    if (!parts.any((q) => q.toLowerCase() == p.toLowerCase())) parts.add(p);
+  }
   return parts.isEmpty ? null : parts.join(', ');
 }
 

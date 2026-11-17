@@ -1,0 +1,90 @@
+[
+ {
+  "run": "before 1440 tick",
+  "ok": true,
+  "steps": [
+   "Find leads",
+   "Canada, 13 provinces",
+   "Quebec, 30 cities",
+   "Montreal, not selected",
+   "Search cities in Quebec"
+  ],
+  "input_values": [
+   "",
+   "saint"
+  ],
+  "saint_rows": [
+   "Saint-Jérôme, not selected",
+   "Saint-Hyacinthe, not selected",
+   "Saint-Jean-sur-Richelieu, not selected"
+  ],
+  "non_saint_rows": [
+   "Montreal, selected",
+   "Quebec City, not selected",
+   "Laval, not selected",
+   "Gatineau, not selected",
+   "Montreal"
+  ]
+ },
+ {
+  "run": "before 1440 no tick",
+  "ok": true,
+  "steps": [
+   "Find leads",
+   "Canada, 13 provinces",
+   "Quebec, 30 cities",
+   "Search cities in Quebec"
+  ],
+  "input_values": [
+   "",
+   "saint"
+  ],
+  "saint_rows": [
+   "Saint-Jérôme, not selected",
+   "Saint-Hyacinthe, not selected",
+   "Saint-Jean-sur-Richelieu, not selected"
+  ],
+  "non_saint_rows": []
+ },
+ {
+  "run": "before 390 tick",
+  "ok": true,
+  "steps": [
+   "Find leads",
+   "Canada, 13 provinces",
+   "Quebec, 30 cities",
+   "Montreal, not selected",
+   "Search cities in Quebec"
+  ],
+  "input_values": [
+   "saint"
+  ],
+  "saint_rows": [
+   "Saint-Jérôme, not selected",
+   "Saint-Hyacinthe, not selected",
+   "Saint-Jean-sur-Richelieu, not selected"
+  ],
+  "non_saint_rows": [
+   "Montreal"
+  ]
+ },
+ {
+  "run": "before 390 no tick",
+  "ok": true,
+  "steps": [
+   "Find leads",
+   "Canada, 13 provinces",
+   "Quebec, 30 cities",
+   "Search cities in Quebec"
+  ],
+  "input_values": [
+   "saint"
+  ],
+  "saint_rows": [
+   "Saint-Jérôme, not selected",
+   "Saint-Hyacinthe, not selected",
+   "Saint-Jean-sur-Richelieu, not selected"
+  ],
+  "non_saint_rows": []
+ }
+]
