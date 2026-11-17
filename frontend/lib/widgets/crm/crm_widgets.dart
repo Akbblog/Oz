@@ -33,6 +33,19 @@ void crmSnack(BuildContext context, String message, {bool error = false}) {
   showSearchSnack(context, message, error: error);
 }
 
+/// [crmSnack] on a messenger captured before an async action, for actions
+/// whose triggering widget may be gone when they finish (e.g. a button that
+/// is swapped for a progress indicator while the action runs).
+void crmSnackOn(ScaffoldMessengerState? messenger, String message, {bool error = false}) {
+  if (messenger == null || !messenger.mounted) return;
+  messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(SnackBar(
+    content: Text(message),
+    behavior: SnackBarBehavior.floating,
+    backgroundColor: error ? const Color(0xFF8C2F2A) : const Color(0xFF2A2E33),
+  ));
+}
+
 /// Whether animations should be skipped (reduced motion).
 bool crmReduceMotion(BuildContext context) => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 

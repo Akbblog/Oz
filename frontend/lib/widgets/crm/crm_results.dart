@@ -90,6 +90,9 @@ class CrmResultsController extends ChangeNotifier {
     Iterable<int> ids = const [],
   }) async {
     if (_busy) return null;
+    // The button that started this may be replaced by a progress indicator
+    // while the import runs, so take the page's messenger now.
+    final messenger = ScaffoldMessenger.maybeOf(context);
     _busy = true;
     _adding.addAll(ids);
     _notify();
@@ -100,10 +103,12 @@ class CrmResultsController extends ChangeNotifier {
       _progress = null;
       _adding.clear();
       _notify();
-      if (context.mounted) crmSnack(context, result.summary);
+      crmSnackOn(messenger, result.summary);
       unawaited(loadState());
-      if (result.possibleMatches.isNotEmpty && context.mounted) {
-        await review(context, result.possibleMatches.values.toList());
+      // Same reason: open the review from the page, not the (possibly gone) button.
+      final host = context.mounted ? context : (messenger != null && messenger.mounted ? messenger.context : null);
+      if (result.possibleMatches.isNotEmpty && host != null && host.mounted) {
+        await review(host, result.possibleMatches.values.toList());
       }
       return result;
     } catch (e) {
@@ -111,14 +116,12 @@ class CrmResultsController extends ChangeNotifier {
       _progress = null;
       _adding.clear();
       _notify();
-      if (context.mounted) {
-        final retry = crmErrorKind(e) == CrmErrorKind.offline || crmErrorKind(e) == CrmErrorKind.other;
-        crmSnack(
-          context,
-          '${crmActionError('Adding to CRM', e)}${retry ? ' Trying again is safe: nothing is added twice.' : ''}',
-          error: true,
-        );
-      }
+      final retry = crmErrorKind(e) == CrmErrorKind.offline || crmErrorKind(e) == CrmErrorKind.other;
+      crmSnackOn(
+        messenger,
+        '${crmActionError('Adding to CRM', e)}${retry ? ' Trying again is safe: nothing is added twice.' : ''}',
+        error: true,
+      );
       return null;
     }
   }
