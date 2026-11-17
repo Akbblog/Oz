@@ -2447,7 +2447,7 @@ async def get_credit_history(current_user: dict = Depends(get_current_user)):
             "balance_after": row[3],
             "transaction_type": row[4],
             "reason": row[5],
-            "created_at": row[6]
+            "created_at": _api_ts(row[6])
         }
         for row in cursor.fetchall()
     ]

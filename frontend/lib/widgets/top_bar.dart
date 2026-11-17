@@ -40,7 +40,12 @@ class AppTopBar extends StatelessWidget {
             ),
           ),
           if (auth.isAuthenticated) ...[
-            const Flexible(child: LiveSearchChip()),
+            // Capped, not Flexible: a Flexible here split the bar 50/50 with
+            // the title and left the credits/avatar cluster mid-bar.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: const LiveSearchChip(),
+            ),
             const SizedBox(width: 12),
             const CreditPill(),
             const SizedBox(width: 12),

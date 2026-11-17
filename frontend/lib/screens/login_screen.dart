@@ -351,6 +351,8 @@ class _LoginScreenState extends State<LoginScreen>
             const SizedBox(height: 6),
             TextFormField(
               controller: _usernameController,
+              textInputAction: TextInputAction.next,
+              autofillHints: const [AutofillHints.username],
               style: const TextStyle(color: Colors.white),
               decoration: _inputDecoration(
                 hint: 'Enter your username',
@@ -370,11 +372,18 @@ class _LoginScreenState extends State<LoginScreen>
                 return TextFormField(
                   controller: _passwordController,
                   obscureText: !visible,
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.password],
+                  // Enter submits the form (keyboard users, audit A6).
+                  onFieldSubmitted: (_) {
+                    if (!_isLoading) _handleLogin();
+                  },
                   style: const TextStyle(color: Colors.white),
                   decoration: _inputDecoration(
                     hint: 'Enter your password',
                     icon: Icons.lock_outline_rounded,
                     suffixIcon: IconButton(
+                      tooltip: visible ? 'Hide password' : 'Show password',
                       icon: Icon(
                         visible
                             ? Icons.visibility_rounded
@@ -449,7 +458,7 @@ class _LoginScreenState extends State<LoginScreen>
                   child: GestureDetector(
                     onTap: () => setState(() => _rememberMe = !_rememberMe),
                     child: Text(
-                      'Remember me for 30 days',
+                      'Keep me signed in',
                       style: AppTypography.bodySmall.copyWith(
                         color: Colors.white70,
                         fontWeight: FontWeight.w500,

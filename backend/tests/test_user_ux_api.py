@@ -512,3 +512,16 @@ def test_locations_summary_has_counts_for_every_region(test_db):
     for country, info in data.items():
         source = locations.load_country_data(country)
         assert info["regions"] == {r: len(c) for r, c in source.items()}
+
+
+def test_credit_history_timestamps_are_explicit_utc(db_connection):
+    """Ledger times were raw server-local strings; the browser read them as UTC (5 h off in PKT)."""
+    import main
+
+    uid = _user(db_connection, "ux_hist", balance=100)
+    main.add_credits(uid, 7, "test grant", None)
+    client, headers = _client_and_headers("ux_hist")
+    rows = client.get("/api/credits/history", headers=headers).json()
+    rows = rows.get("history", rows.get("transactions", rows)) if isinstance(rows, dict) else rows
+    assert rows, rows
+    assert all(str(r["created_at"]).endswith("Z") for r in rows), rows

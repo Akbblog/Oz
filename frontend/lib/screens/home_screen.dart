@@ -175,7 +175,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _RecentSearches(
             loading: _loading,
             error: _error,
-            jobs: _jobs,
+            // Running rows use the same live numbers as the Running now card.
+            jobs: _withLiveCounts(_jobs, runningJobs),
             table: width >= 760,
             onRetry: _load,
             onRefresh: () => _load(silent: true),
@@ -212,6 +213,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// Active searches, with the followed job's fresher counters.
+  static List<Map<String, dynamic>> _withLiveCounts(
+    List<Map<String, dynamic>> jobs,
+    List<Map<String, dynamic>> live,
+  ) {
+    if (live.isEmpty) return jobs;
+    final byId = {for (final j in live) '${j['job_id']}': j};
+    return jobs.map((j) {
+      final l = byId['${j['job_id']}'];
+      if (l == null) return j;
+      return {
+        ...j,
+        for (final k in const ['status', 'completed_cities', 'total_cities', 'result_count', 'credit_charged'])
+          if (l[k] != null) k: l[k],
+      };
+    }).toList();
+  }
+
   List<Map<String, dynamic>> _runningJobs(ActiveSearchesProvider active) {
     final followed = context.watch<ScraperProvider>().currentJob;
     return active.jobs.map((j) {
