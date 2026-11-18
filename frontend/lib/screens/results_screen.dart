@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/display_url.dart';
@@ -1546,13 +1547,20 @@ class LeadActionButtons extends StatelessWidget {
 
     Widget action({
       required IconData icon,
+      Widget? iconWidget,
       required String label,
       required String semantics,
       required String tooltip,
       required VoidCallback onPressed,
     }) {
+      Widget accessible(Widget child) => Semantics(
+            label: semantics,
+            button: true,
+            onTap: onPressed,
+            child: ExcludeSemantics(child: child),
+          );
       if (compact) {
-        return IconButton(
+        return accessible(IconButton(
           style: IconButton.styleFrom(
                   foregroundColor: UiTokens.accent,
                   minimumSize: const Size(48, 48),
@@ -1560,44 +1568,49 @@ class LeadActionButtons extends StatelessWidget {
               .copyWith(side: _leadActionStyle().side),
           tooltip: semantics,
           onPressed: onPressed,
-          icon: Icon(icon, size: 20),
-        );
+          icon: iconWidget ?? Icon(icon, size: 20),
+        ));
       }
       if (phoneLayout) {
-        return Tooltip(
+        return accessible(Tooltip(
           message: tooltip,
           excludeFromSemantics: true,
           child: TextButton(
             style: _leadActionStyle(iconOnly: true),
             onPressed: onPressed,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(icon, size: 18),
-              const SizedBox(height: 3),
-              Text(label,
-                  maxLines: 1,
-                  style: const TextStyle(fontSize: 11),
-                  semanticsLabel: semantics),
-            ]),
+            child: SizedBox(
+              height: 52,
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                iconWidget ?? Icon(icon, size: 18),
+                const SizedBox(height: 4),
+                Text(label,
+                    maxLines: 1,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 11, height: 1),
+                    ),
+              ]),
+            ),
           ),
-        );
+        ));
       }
-      return Tooltip(
+      return accessible(Tooltip(
         message: tooltip,
         excludeFromSemantics: true,
         waitDuration: const Duration(milliseconds: 500),
         child: TextButton.icon(
           style: _leadActionStyle(),
           onPressed: onPressed,
-          icon: Icon(icon, size: 18),
-          label: Text(label, semanticsLabel: semantics),
+          icon: iconWidget ?? Icon(icon, size: 18),
+          label: Text(label),
         ),
-      );
+      ));
     }
 
     final buttons = <Widget>[
       if (_has(phone))
         action(
           icon: Icons.call_rounded,
+          iconWidget: const _LeadVectorIcon(kind: 'call'),
           label: 'Call',
           semantics: 'Call $name, $phone',
           tooltip: 'Call $phone',
@@ -1622,6 +1635,7 @@ class LeadActionButtons extends StatelessWidget {
       if (hasMap)
         action(
           icon: Icons.place_outlined,
+          iconWidget: const _LeadVectorIcon(kind: 'map'),
           label: 'Map',
           semantics: 'Open $name in Google Maps',
           tooltip: 'Open in Google Maps',
@@ -1651,6 +1665,24 @@ class LeadActionButtons extends StatelessWidget {
       return Row(
           children: [for (final button in buttons) Expanded(child: button)]);
     return Wrap(spacing: 2, runSpacing: 0, children: buttons);
+  }
+}
+
+/// These two icons are inline so older cached Flutter icon fonts cannot hide
+/// Call or Map after a web release changes the tree-shaken font subset.
+class _LeadVectorIcon extends StatelessWidget {
+  final String kind;
+  const _LeadVectorIcon({required this.kind});
+
+  @override
+  Widget build(BuildContext context) {
+    const call = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.56 3.57.56a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.61 21 3 13.39 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.56 3.57a1 1 0 0 1-.25 1.02l-2.19 2.2Z"/></svg>';
+    const map = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+    return ExcludeSemantics(
+      child: SvgPicture.string(kind == 'call' ? call : map,
+          width: 18, height: 18,
+          colorFilter: const ColorFilter.mode(UiTokens.accent, BlendMode.srcIn)),
+    );
   }
 }
 
@@ -1700,15 +1732,20 @@ class _CopyMenu extends StatelessWidget {
           );
         }
         if (stacked) {
-          return TextButton(
+          return Semantics(label: semantics, button: true, onTap: toggle,
+            child: ExcludeSemantics(child: TextButton(
             style: _leadActionStyle(iconOnly: true),
             onPressed: toggle,
-            child: const Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.content_copy_rounded, size: 18),
-              SizedBox(height: 3),
-              Text('Copy', style: TextStyle(fontSize: 11)),
-            ]),
-          );
+            child: const SizedBox(height: 52, child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.content_copy_rounded, size: 18),
+                SizedBox(height: 4),
+                Text('Copy', textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11, height: 1)),
+              ],
+            )),
+          )));
         }
         return TextButton.icon(
           style: _leadActionStyle(),

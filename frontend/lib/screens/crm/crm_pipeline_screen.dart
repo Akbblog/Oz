@@ -651,26 +651,42 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
         Semantics(
           label: 'Stages',
           container: true,
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final c in _columns)
-                ChoiceChip(
-                  label: Text('${c.name} · ${formatCount(c.count)}',
-                      style: TextStyle(
-                          color: identical(c, selected) ? UiTokens.text : UiTokens.textSecondary,
-                          fontWeight: identical(c, selected) ? FontWeight.w700 : FontWeight.w500)),
-                  selected: identical(c, selected),
-                  showCheckmark: true,
-                  checkmarkColor: UiTokens.accent,
-                  selectedColor: UiTokens.selectedSurface,
-                  backgroundColor: UiTokens.card,
-                  side: BorderSide(color: identical(c, selected) ? UiTokens.accent : UiTokens.border),
-                  materialTapTargetSize: MaterialTapTargetSize.padded,
-                  onSelected: (_) => _setFilters(_filters.copyWith(stage: () => crmStr(c.stage['key']).isEmpty ? c.id : crmStr(c.stage['key'])), reload: false),
-                ),
-            ],
+          child: LayoutBuilder(
+            builder: (context, bounds) => Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (var i = 0; i < _columns.length; i++)
+                  SizedBox(
+                    width: i == _columns.length - 1 && i.isEven
+                        ? bounds.maxWidth
+                        : (bounds.maxWidth - 8) / 2,
+                    height: 44,
+                    child: ChoiceChip(
+                      label: Center(child: Text(
+                        '${_columns[i].name} · ${formatCount(_columns[i].count)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: identical(_columns[i], selected) ? UiTokens.text : UiTokens.textSecondary,
+                          fontWeight: identical(_columns[i], selected) ? FontWeight.w700 : FontWeight.w500,
+                        ),
+                      )),
+                      labelPadding: EdgeInsets.zero,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      selected: identical(_columns[i], selected),
+                      showCheckmark: false,
+                      selectedColor: UiTokens.selectedSurface,
+                      backgroundColor: UiTokens.card,
+                      side: BorderSide(color: identical(_columns[i], selected) ? UiTokens.accent : UiTokens.border),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onSelected: (_) => _setFilters(_filters.copyWith(stage: () =>
+                          crmStr(_columns[i].stage['key']).isEmpty ? _columns[i].id : crmStr(_columns[i].stage['key'])), reload: false),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
         if (crmCurrencyTotals(selected.values).isNotEmpty)

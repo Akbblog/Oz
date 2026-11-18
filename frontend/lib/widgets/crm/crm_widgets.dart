@@ -451,8 +451,9 @@ class CrmBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget pill = Container(
-      constraints: const BoxConstraints(minHeight: 28),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      height: 30,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(999),
@@ -460,6 +461,7 @@ class CrmBadge extends StatelessWidget {
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (icon != null) ...[
             ExcludeSemantics(child: Icon(icon, size: 14, color: fg)),
@@ -469,9 +471,11 @@ class CrmBadge extends StatelessWidget {
             child: Text(
               label,
               maxLines: 1,
+              textAlign: TextAlign.center,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  color: fg, fontSize: 12, fontWeight: FontWeight.w600),
+                  color: fg, fontSize: 12, height: 1,
+                  fontWeight: FontWeight.w600),
             ),
           ),
         ],

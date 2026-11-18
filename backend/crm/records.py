@@ -830,3 +830,32 @@ def restore(conn, ws, user, record_id: str, version: Any) -> Dict[str, Any]:
         return {"archived_at": None}, "restored", {"archived": True}, {"archived": False}
 
     return _transition(conn, ws, user, record_id, version, fn)
+
+
+def delete_record(conn, ws, user, record_id: str, version: Any) -> Dict[str, Any]:
+    """Permanently remove one CRM record, without touching scraped results."""
+    begin_write(conn)
+    try:
+        cur = conn.cursor()
+        r = load_record(cur, ws["id"], record_id, lock=True)
+        _check_version(conn, ws, r, version)
+        for table in ("crm_activities", "crm_notes", "crm_events", "crm_record_tags",
+                      "crm_source_links", "crm_people"):
+            cur.execute(f"DELETE FROM {table} WHERE workspace_id = ? AND record_id = ?",
+                        (ws["id"], record_id))
+        cur.execute("DELETE FROM crm_records WHERE workspace_id = ? AND id = ? AND version = ?",
+                    (ws["id"], record_id, r["version"]))
+        if cur.rowcount != 1:
+            raise CRMError(409, "This record was changed elsewhere. Review the latest version and try again.",
+                           "version_conflict")
+        if not scalar(cur, "SELECT COUNT(*) FROM crm_records WHERE workspace_id = ? AND company_id = ?",
+                      (ws["id"], r["company_id"])):
+            cur.execute("DELETE FROM crm_people WHERE workspace_id = ? AND company_id = ?",
+                        (ws["id"], r["company_id"]))
+            cur.execute("DELETE FROM crm_companies WHERE workspace_id = ? AND id = ?",
+                        (ws["id"], r["company_id"]))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"deleted": True, "id": record_id}

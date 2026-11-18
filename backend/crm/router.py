@@ -179,6 +179,11 @@ def create_router(get_current_user: Callable) -> APIRouter:
         b = opt_body(body)
         return run(user, lambda c, ws: records.restore(c, ws, user, record_id, b.get("version")))
 
+    @router.delete("/records/{record_id}")
+    def crm_delete_record(record_id: str, version: Optional[int] = None,
+                          user: dict = Depends(get_current_user)):
+        return run(user, lambda c, ws: records.delete_record(c, ws, user, record_id, version))
+
     # ------------------------------------------------------------ notes
     @router.post("/records/{record_id}/notes")
     def crm_add_note(record_id: str, body: Any = Body(...), user: dict = Depends(get_current_user)):

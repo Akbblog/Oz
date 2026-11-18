@@ -379,6 +379,22 @@ void main() {
       expect(api2.callsOf('restore'), hasLength(1));
     });
 
+    testWidgets('Delete is visible, requires confirmation, and sends the record version', (tester) async {
+      final api = await open(tester, size: const Size(390, 844));
+      expect(find.widgetWithText(OutlinedButton, 'Delete'), findsOneWidget);
+      await tester.tap(find.text('Delete'));
+      await _settle(tester);
+      expect(find.text('Delete this CRM record?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await _settle(tester);
+      expect(api.callsOf('delete'), isEmpty);
+      await tester.tap(find.text('Delete'));
+      await _settle(tester);
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete record'));
+      await _settle(tester);
+      expect(api.callsOf('delete').single.args, {'id': 'rec-1', 'version': 3});
+    });
+
     testWidgets('Convert and Mark won send the version', (tester) async {
       final api = await open(tester);
       await tester.tap(find.text('Convert to opportunity'));

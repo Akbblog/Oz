@@ -249,6 +249,12 @@ class FakeCrmApi extends CrmApi {
   Future<Map<String, dynamic>> restore(String id, {int? version}) async => _transition('restore', {'id': id, 'version': version});
 
   @override
+  Future<Map<String, dynamic>> deleteRecord(String id, {int? version}) async {
+    calls.add(CrmCall('delete', {'id': id, 'version': version}));
+    return {'deleted': true, 'id': id};
+  }
+
+  @override
   Future<Map<String, dynamic>> scheduleActivity(String recordId,
           {required String type, required String subject, required String dueAtUtc, String? notes}) async =>
       _transition('schedule', {'id': recordId, 'type': type, 'subject': subject, 'due_at': dueAtUtc, 'notes': notes});

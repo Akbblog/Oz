@@ -285,6 +285,30 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
       _run('Restoring', () => _api.restore(_id, version: _version),
           done: 'Restored.');
 
+  Future<void> _deleteRecord() async {
+    final ok = await crmConfirm(
+      context,
+      title: 'Delete this CRM record?',
+      body: 'This permanently removes the CRM record, its notes and activities. '
+          'The original search result stays available and can be added again.',
+      confirmLabel: 'Delete record',
+      danger: true,
+    );
+    if (!ok || !mounted || _busy != null) return;
+    setState(() => _busy = 'Deleting');
+    try {
+      await _api.deleteRecord(_id, version: _version);
+      if (!mounted) return;
+      unawaited(context.read<CrmProvider?>()?.refreshCounts());
+      AppNav.go(context, '/crm');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = null);
+      if (crmErrorKind(e) == CrmErrorKind.conflict) await _load(silent: true);
+      if (mounted) crmSnack(context, crmActionError('Deleting the record', e), error: true);
+    }
+  }
+
   // ------------------------------------------------------------- editing
 
   void _startBusinessEdit() {
@@ -760,6 +784,16 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
           )
         : null;
 
+    final deleteButton = OutlinedButton.icon(
+      style: searchSecondaryButtonStyle().copyWith(
+        foregroundColor: const WidgetStatePropertyAll(UiTokens.failedFg),
+        minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+      ),
+      onPressed: busy ? null : _deleteRecord,
+      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+      label: const Text('Delete'),
+    );
+
     final actions = <Widget>[
       if (stageSelector != null) stageSelector,
       if (_open && !_archived && isLead)
@@ -800,24 +834,31 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
           onPressed: busy ? null : _restore,
           icon: const Icon(Icons.unarchive_outlined, size: 18),
           label: const Text('Restore'),
-        )
-      else
-        PopupMenuButton<String>(
+        ),
+      if (!narrow || !_open || _archived) deleteButton,
+      PopupMenuButton<String>(
           tooltip: 'More actions',
           color: UiTokens.card,
           enabled: !busy,
           onSelected: (v) {
             if (v == 'archive') _archive();
+            if (v == 'delete') _deleteRecord();
             if (v == 'copy') {
               copyWithSnack(
                   context, Uri.base.resolve(crmRecordRoute(_id)).toString(),
                   message: 'Link copied');
             }
           },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'copy', child: Text('Copy link')),
-            PopupMenuDivider(),
-            PopupMenuItem(value: 'archive', child: Text('Archive…')),
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'copy', child: Text('Copy link')),
+            const PopupMenuDivider(),
+            if (!_archived)
+              const PopupMenuItem(value: 'archive', child: Text('Archive…')),
+            const PopupMenuItem(
+              value: 'delete',
+              child: Text('Delete record…',
+                  style: TextStyle(color: UiTokens.failedFg)),
+            ),
           ],
           child: const SizedBox(
             width: 48,
@@ -933,9 +974,11 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                   ),
                 ),
               ]),
-              Align(
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: actions.last),
+              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                deleteButton,
+                const SizedBox(width: 8),
+                actions.last,
+              ]),
             ])
           else
             Wrap(

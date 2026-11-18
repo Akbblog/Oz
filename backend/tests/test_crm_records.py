@@ -12,6 +12,25 @@ def _imported(crm, a, n=1):
     return [c["record_id"] for c in body["created"]], job
 
 
+def test_delete_record_removes_crm_only_and_allows_reimport(crm):
+    a = crm.user("alice")
+    b = crm.user("bob")
+    (rid,), job = _imported(crm, a)
+    record = a.record(rid)
+    a.ok(a.post(f"/records/{rid}/notes", {"body": "Follow up"}))
+    assert b.delete(f"/records/{rid}").status_code == 404
+    assert a.delete(f"/records/{rid}?version={record['version'] + 1}").status_code == 409
+    assert a.record(rid)["id"] == rid
+    assert a.ok(a.delete(f"/records/{rid}?version={record['version']}")) == {"deleted": True, "id": rid}
+    assert a.get(f"/records/{rid}").status_code == 404
+    assert a.ok(a.get("/records"))["total"] == 0
+    # The search results are independent of CRM and can be imported again.
+    result_ids = [crm.conn.execute("SELECT id FROM results WHERE job_id = ?", (job,)).fetchone()[0]]
+    again = a.import_ids(job, result_ids)
+    assert len(again["created"]) == 1
+    assert again["created"][0]["record_id"] != rid
+
+
 def test_stage_change_versions_conflict_and_idempotency(crm):
     a = crm.user("alice")
     st = _stages(a)

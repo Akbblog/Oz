@@ -307,6 +307,10 @@ class CrmApi {
   Future<Map<String, dynamic>> restore(String id, {int? version}) =>
       _post('/api/crm/records/${_seg(id)}/restore', _withVersion({}, version));
 
+  Future<Map<String, dynamic>> deleteRecord(String id, {int? version}) async =>
+      _map(await _send('DELETE', '/api/crm/records/${_seg(id)}',
+          query: {if (version != null) 'version': '$version'}));
+
   /// Older history of a record.
   Future<CrmPage> getEvents(String id, {String? cursor}) async => CrmPage.fromJson(
       await _send('GET', '/api/crm/records/${_seg(id)}/events', query: {if (cursor != null) 'cursor': cursor}));

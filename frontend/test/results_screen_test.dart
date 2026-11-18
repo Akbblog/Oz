@@ -96,6 +96,7 @@ void main() {
     });
 
     testWidgets('contact actions have visible labels, 48 dp targets and screen-reader names', (tester) async {
+      final semanticsHandle = tester.ensureSemantics();
       final r = _Recorder();
       final lead = _lead(5, extra: {'email': 'hi@biz5.qa', 'website': 'biz5.qa'});
       await _pump(
@@ -118,6 +119,7 @@ void main() {
       await tester.tap(find.text('Email'));
       await tester.tap(find.text('Map'));
       expect(r.calls, ['call:+974 4400 005', 'email:hi@biz5.qa', 'maps:Biz 5']);
+      semanticsHandle.dispose();
     });
 
     testWidgets('pressing and holding a phone or email copies that exact value', (tester) async {
