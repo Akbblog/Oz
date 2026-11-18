@@ -11,6 +11,7 @@ import '../../providers/crm_provider.dart';
 import '../../services/crm_api.dart';
 import '../../widgets/app_shell.dart';
 import '../../widgets/crm/crm_new_record_dialog.dart';
+import '../../widgets/crm/crm_manage_stages_dialog.dart';
 import '../../widgets/crm/crm_record_card.dart';
 import '../../widgets/crm/crm_widgets.dart';
 
@@ -175,6 +176,17 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
     await _open(created);
   }
 
+  Future<void> _manageStages() async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) => CrmManageStagesDialog(api: _api),
+    );
+    if (changed != true || !mounted) return;
+    await context.read<CrmProvider?>()?.loadWorkspace(force: true);
+    if (!mounted) return;
+    _load();
+  }
+
   CrmPipelineColumn? _columnOf(String recordId) {
     for (final c in _columns) {
       if (c.items.any((r) => crmStr(r['id']) == recordId)) return c;
@@ -284,7 +296,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
       tab: CrmTab.pipeline,
       child: LayoutBuilder(builder: (context, constraints) {
         final pad = crmPagePadding(constraints.maxWidth);
-        final header = _buildHeader(constraints.maxWidth < 600);
+        final header = _buildHeader(constraints.maxWidth < 900);
         Widget? state;
         if (_loading && _columns.isEmpty) {
           state = const CrmLoading(label: 'Loading your pipeline…');
@@ -412,6 +424,12 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
       icon: const Icon(Icons.view_list_rounded, size: 18),
       label: const Text('List view'),
     );
+    final manageStages = OutlinedButton.icon(
+      style: searchSecondaryButtonStyle(),
+      onPressed: _manageStages,
+      icon: const Icon(Icons.view_column_outlined, size: 18),
+      label: const Text('Manage stages'),
+    );
     final tagMenu = tags.isEmpty
         ? null
         : CrmMenu<String>(
@@ -430,7 +448,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
         if (phone) ...[
           search,
           const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 8, children: [newLead, listView, if (tagMenu != null) tagMenu]),
+          Wrap(spacing: 8, runSpacing: 8, children: [newLead, listView, manageStages, if (tagMenu != null) tagMenu]),
         ] else
           Row(
             children: [
@@ -438,6 +456,8 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
               const SizedBox(width: 8),
               if (tagMenu != null) ...[Flexible(child: tagMenu), const SizedBox(width: 8)],
               listView,
+              const SizedBox(width: 8),
+              manageStages,
               const SizedBox(width: 8),
               newLead,
             ],

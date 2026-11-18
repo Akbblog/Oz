@@ -12,7 +12,7 @@ from fastapi.routing import APIRoute
 
 from database import get_db
 
-from . import activities, importer, records, reports
+from . import activities, importer, records, reports, stage_management
 from .common import CRMError, check_import_rate, crm_enabled
 from .workspace import get_or_create, workspace_payload
 
@@ -76,6 +76,26 @@ def create_router(get_current_user: Callable) -> APIRouter:
     @router.get("/workspace")
     def crm_workspace(user: dict = Depends(get_current_user)):
         return run(user, lambda c, ws: workspace_payload(c, ws))
+
+    @router.get("/stages")
+    def crm_stages(user: dict = Depends(get_current_user)):
+        return run(user, stage_management.list_stages)
+
+    @router.post("/stages")
+    def crm_create_stage(body: Any = Body(...), user: dict = Depends(get_current_user)):
+        return run(user, lambda c, ws: stage_management.create(c, ws, body_dict(body)))
+
+    @router.put("/stages/reorder")
+    def crm_reorder_stages(body: Any = Body(...), user: dict = Depends(get_current_user)):
+        return run(user, lambda c, ws: stage_management.reorder(c, ws, body_dict(body)))
+
+    @router.patch("/stages/{stage_id}")
+    def crm_rename_stage(stage_id: str, body: Any = Body(...), user: dict = Depends(get_current_user)):
+        return run(user, lambda c, ws: stage_management.rename(c, ws, stage_id, body_dict(body)))
+
+    @router.post("/stages/{stage_id}/delete")
+    def crm_delete_stage(stage_id: str, body: Any = Body(...), user: dict = Depends(get_current_user)):
+        return run(user, lambda c, ws: stage_management.delete(c, ws, user, stage_id, body_dict(body)))
 
     @router.get("/jobs/{job_id}/state")
     def crm_job_state(job_id: str, user: dict = Depends(get_current_user)):

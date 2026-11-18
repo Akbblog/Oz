@@ -452,7 +452,6 @@ class CrmBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget pill = Container(
       height: 30,
-      alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: bg,

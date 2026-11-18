@@ -16,6 +16,7 @@ import 'package:business_scraper_app/screens/results_screen.dart';
 import 'package:business_scraper_app/services/api_service.dart';
 import 'package:business_scraper_app/services/crm_api.dart';
 import 'package:business_scraper_app/widgets/app_shell.dart';
+import 'package:business_scraper_app/widgets/crm/crm_widgets.dart';
 import 'package:business_scraper_app/widgets/sidebar_navigation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -129,6 +130,17 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     CreditProvider.instance.clear();
+  });
+
+  testWidgets('record status badges stay compact on wide screens', (tester) async {
+    _size(tester, const Size(1200, 800));
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: Center(child: Wrap(children: [CrmBadge(label: 'Open'), CrmBadge(label: 'Lead')])),
+      ),
+    ));
+    expect(tester.getSize(find.byType(CrmBadge).first).width, lessThan(100));
+    expect(tester.getSize(find.byType(CrmBadge).last).width, lessThan(100));
   });
 
   group('nav gating', () {

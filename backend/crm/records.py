@@ -126,7 +126,7 @@ def build_items(cur, ws: Dict[str, Any], rows: Sequence[Dict[str, Any]], now: Op
 
     companies = {
         c["id"]: c for c in fetch_all(
-            cur, f"SELECT id, name, city, region, country, phone, email, website FROM crm_companies "
+            cur, f"SELECT id, name, city, region, country, phone, email, website, address, maps_url FROM crm_companies "
                  f"WHERE workspace_id = ? AND id IN ({ph_c})", (ws_id, *comp_ids))
     }
     tags: Dict[str, List[Dict[str, Any]]] = {}
@@ -162,6 +162,7 @@ def build_items(cur, ws: Dict[str, Any], rows: Sequence[Dict[str, Any]], now: Op
             "company": {
                 "id": c.get("id"), "name": c.get("name"), "city": c.get("city"), "region": c.get("region"),
                 "country": c.get("country"), "phone": c.get("phone"), "email": c.get("email"), "website": c.get("website"),
+                "address": c.get("address"), "maps_url": c.get("maps_url"),
             },
             "tags": tags.get(r["id"], []),
             "next_activity": next_act.get(r["id"]),

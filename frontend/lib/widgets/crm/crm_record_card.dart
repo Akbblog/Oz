@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/crm/crm_format.dart';
 import '../app_shell_common.dart';
@@ -75,6 +76,26 @@ class CrmRecordCard extends StatelessWidget {
     this.showStage = false,
   });
 
+  Future<void> _openLink(BuildContext context, Uri uri, String label) async {
+    try {
+      if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+    } catch (_) {}
+    if (context.mounted) crmSnack(context, "Couldn't open $label", error: true);
+  }
+
+  Widget _contactAction(BuildContext context, IconData icon, String label, VoidCallback action) =>
+      TextButton.icon(
+        style: TextButton.styleFrom(
+          foregroundColor: UiTokens.accent,
+          minimumSize: const Size(48, 40),
+          padding: const EdgeInsets.symmetric(horizontal: 7),
+          tapTargetSize: MaterialTapTargetSize.padded,
+        ),
+        onPressed: action,
+        icon: Icon(icon, size: 16),
+        label: Text(label, style: const TextStyle(fontSize: 12.5)),
+      );
+
   @override
   Widget build(BuildContext context) {
     final title = crmRecordTitle(record);
@@ -83,6 +104,11 @@ class CrmRecordCard extends StatelessWidget {
     final tags = crmList(record['tags']);
     final next = record['next_activity'] is Map ? crmMap(record['next_activity']) : null;
     final hint = crmContactHint(company);
+    final phone = crmStr(company['phone']);
+    final email = crmStr(company['email']);
+    final website = crmStr(company['website']);
+    final address = crmStr(company['address']);
+    final mapsUrl = crmStr(company['maps_url']);
     final value = crmMoney(record['value'], record['currency']);
     final outcome = crmStr(record['outcome']);
     final archived = record['archived'] == true;
@@ -209,6 +235,39 @@ class CrmRecordCard extends StatelessWidget {
                                 ],
                               ),
                             ),
+                          if (phone.isNotEmpty || email.isNotEmpty || website.isNotEmpty || mapsUrl.isNotEmpty || address.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Wrap(spacing: 2, runSpacing: 0, children: [
+                              if (phone.isNotEmpty) _contactAction(context, Icons.call_outlined, 'Call', () =>
+                                  _openLink(context, Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[^0-9+]'), '')), 'phone')),
+                              if (email.isNotEmpty) _contactAction(context, Icons.email_outlined, 'Email', () =>
+                                  _openLink(context, Uri(scheme: 'mailto', path: email), 'email')),
+                              if (website.isNotEmpty) _contactAction(context, Icons.language_rounded, 'Website', () {
+                                final url = website.startsWith(RegExp(r'https?://', caseSensitive: false)) ? website : 'https://$website';
+                                final uri = Uri.tryParse(url);
+                                if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) _openLink(context, uri, 'website');
+                              }),
+                              if (mapsUrl.isNotEmpty || address.isNotEmpty) _contactAction(context, Icons.map_outlined, 'Map', () {
+                                final uri = mapsUrl.isNotEmpty ? Uri.tryParse(mapsUrl) : Uri.https('www.google.com', '/maps/search/', {'api': '1', 'query': address});
+                                if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) _openLink(context, uri, 'map');
+                              }),
+                              PopupMenuButton<String>(
+                                tooltip: 'Copy contact details',
+                                icon: const Icon(Icons.copy_outlined, size: 18, color: UiTokens.accent),
+                                onSelected: (value) {
+                                  final label = value == 'phone' ? 'Phone' : value == 'email' ? 'Email' : value == 'website' ? 'Website' : 'Address';
+                                  final text = value == 'phone' ? phone : value == 'email' ? email : value == 'website' ? website : address;
+                                  copyWithSnack(context, text, message: '$label copied');
+                                },
+                                itemBuilder: (_) => [
+                                  if (phone.isNotEmpty) const PopupMenuItem(value: 'phone', child: Text('Copy phone')),
+                                  if (email.isNotEmpty) const PopupMenuItem(value: 'email', child: Text('Copy email')),
+                                  if (website.isNotEmpty) const PopupMenuItem(value: 'website', child: Text('Copy website')),
+                                  if (address.isNotEmpty) const PopupMenuItem(value: 'address', child: Text('Copy address')),
+                                ],
+                              ),
+                            ]),
+                          ],
                         ],
                       ),
                     ),

@@ -222,6 +222,17 @@ class CrmApi {
   /// `GET /api/crm/workspace`: pipeline with stages, lost reasons, tags.
   Future<Map<String, dynamic>> getWorkspace() => _get('/api/crm/workspace');
 
+  Future<Map<String, dynamic>> getStages() => _get('/api/crm/stages');
+  Future<Map<String, dynamic>> createStage(String name) => _post('/api/crm/stages', {'name': name});
+  Future<Map<String, dynamic>> renameStage(String id, String name) =>
+      _patch('/api/crm/stages/${_seg(id)}', {'name': name});
+  Future<Map<String, dynamic>> reorderStages(List<String> ids) =>
+      _put('/api/crm/stages/reorder', {'stage_ids': ids});
+  Future<Map<String, dynamic>> deleteStage(String id, {String? replacementId}) =>
+      _post('/api/crm/stages/${_seg(id)}/delete', {
+        if (replacementId != null) 'replacement_stage_id': replacementId,
+      });
+
   /// `GET /api/crm/jobs/{job_id}/state`: CRM state per result of a search.
   Future<Map<String, dynamic>> getJobState(String jobId) => _get('/api/crm/jobs/${_seg(jobId)}/state');
 
