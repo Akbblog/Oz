@@ -116,6 +116,22 @@ void main() {
       expect(api.callsOf('import').last.args['key'], 'key-2');
     });
 
+    test('selected imports use short, independently retryable chunks', () async {
+      final api = FakeCrmApi()
+        ..importResponses = [
+          {'done': true, 'created': <dynamic>[], 'already_added': <dynamic>[], 'possible_matches': <dynamic>[], 'rejected': <dynamic>[]},
+          {'done': true, 'created': <dynamic>[], 'already_added': <dynamic>[], 'possible_matches': <dynamic>[], 'rejected': <dynamic>[]},
+        ];
+      var n = 0;
+      final importer = CrmImporter(api, newKey: () => 'chunk-${++n}');
+      await importer.importIds('job-1', [for (var i = 1; i <= 41; i++) i]);
+      final calls = api.callsOf('import');
+      expect(calls.length, 2);
+      expect((calls[0].args['result_ids'] as List).length, 40);
+      expect((calls[1].args['result_ids'] as List).length, 1);
+      expect(calls[0].args['key'], isNot(calls[1].args['key']));
+    });
+
     test('"all" repeats the same request until done and merges by result id', () async {
       Map<String, dynamic> page(List<int> created, {required bool done, int remaining = 0}) => {
             'done': done,

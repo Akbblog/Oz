@@ -124,11 +124,14 @@ class CrmResultsController extends ChangeNotifier {
       _progress = null;
       _adding.clear();
       _notify();
+      // Earlier batches may already be committed even if the last request
+      // failed. Refresh the per-result state before the user retries.
+      unawaited(loadState());
       final retry = crmErrorKind(e) == CrmErrorKind.offline ||
           crmErrorKind(e) == CrmErrorKind.other;
       crmSnackOn(
         messenger,
-        '${crmActionError('Adding to CRM', e)}${retry ? ' Trying again is safe: nothing is added twice.' : ''}',
+        '${crmActionError('Adding to CRM', e)}${retry ? ' Try again to continue; leads already added will not be duplicated.' : ''}',
         error: true,
       );
       return null;

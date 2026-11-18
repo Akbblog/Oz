@@ -1,5 +1,6 @@
 """CRM import: one / selected / all, idempotency, possible matches, resolve, job state, deletion."""
 import uuid
+import pytest
 
 from tests.crm_fixtures import maps_url, crm  # noqa: F401  (fixture)
 
@@ -8,6 +9,24 @@ def _count(conn, table, where="1 = 1", params=()):
     cur = conn.cursor()
     cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params)
     return cur.fetchone()[0]
+
+
+def test_disconnected_rollback_keeps_the_original_import_error():
+    from crm.importer import _with_retries
+
+    class DisconnectedConnection:
+        def execute(self, _):
+            return None
+
+        def cursor(self):
+            return self
+
+        def rollback(self):
+            raise RuntimeError("rollback connection closed")
+
+    conn = DisconnectedConnection()
+    with pytest.raises(RuntimeError, match="query timed out"):
+        _with_retries(conn, lambda _: (_ for _ in ()).throw(RuntimeError("query timed out")), attempts=1)
 
 
 def test_import_one_snapshots_the_stored_row(crm):
@@ -29,34 +48,34 @@ def test_import_one_snapshots_the_stored_row(crm):
     assert [e["type"] for e in rec["events"]] == ["imported"]
 
 
-def test_import_fifty_selected_and_refresh(crm):
+def test_import_forty_selected_and_refresh(crm):
     a = crm.user("alice")
     job = crm.job(a.id)
     ids = crm.results(job, 60)
-    body = a.import_ids(job, ids[:50])
-    assert body["summary"]["created"] == 50 and len({c["record_id"] for c in body["created"]}) == 50
-    assert [c["result_id"] for c in body["created"]] == ids[:50]
+    body = a.import_ids(job, ids[:40])
+    assert body["summary"]["created"] == 40 and len({c["record_id"] for c in body["created"]}) == 40
+    assert [c["result_id"] for c in body["created"]] == ids[:40]
     listed = a.ok(a.get("/records", limit=100))
-    assert listed["total"] == 50 and len(listed["items"]) == 50
+    assert listed["total"] == 40 and len(listed["items"]) == 40
     # refresh: same records, nothing new
     again = a.ok(a.get("/records", limit=100))
     assert sorted(i["id"] for i in again["items"]) == sorted(i["id"] for i in listed["items"])
     state = a.ok(a.get(f"/jobs/{job}/state"))
-    assert state["counts"] == {"not_added": 10, "added": 50, "possible_match": 0}
+    assert state["counts"] == {"not_added": 20, "added": 40, "possible_match": 0}
     assert state["results"][str(ids[0])]["state"] == "added"
     assert state["results"][str(ids[0])]["record_id"] == body["created"][0]["record_id"]
 
 
-def test_import_all_is_resumable_in_batches_of_200(crm):
+def test_import_all_is_resumable_in_batches_of_40(crm):
     a = crm.user("alice")
     job = crm.job(a.id)
     ids = crm.results(job, 450)
     key = uuid.uuid4().hex
     calls = a.import_all(job, key)
-    assert [c["done"] for c in calls] == [False, False, True]
-    assert [c["processed"] for c in calls] == [200, 400, 450]
-    assert [c["remaining"] for c in calls] == [250, 50, 0]
-    assert [len(c["created"]) for c in calls] == [200, 200, 50]
+    assert [c["done"] for c in calls] == [False] * 11 + [True]
+    assert [c["processed"] for c in calls] == [40 * n for n in range(1, 12)] + [450]
+    assert [c["remaining"] for c in calls] == [450 - 40 * n for n in range(1, 12)] + [0]
+    assert [len(c["created"]) for c in calls] == [40] * 11 + [10]
     assert calls[-1]["summary"]["created"] == 450 and len({c["import_id"] for c in calls}) == 1
     assert _count(crm.conn, "crm_records") == 450 and _count(crm.conn, "crm_source_links") == 450
     # replaying the finished key returns the stored response unchanged

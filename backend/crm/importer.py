@@ -7,7 +7,7 @@ Rules (docs/CRM_PHASE1_CONTRACT.md "Import"):
   (``already_added``) whatever idempotency key is used.
 * Probable matches (place / website+name / phone+name) are never auto-merged:
   they are returned for review and resolved with ``/import/resolve``.
-* Each call is one transaction. ``all`` processes at most 200 rows per call and
+* Each call is one transaction. ``all`` processes at most 40 rows per call and
   remembers its position in ``crm_imports.cursor_result_id``.
 """
 
@@ -26,7 +26,8 @@ from .common import (
 )
 from .records import add_event, first_open_stage, insert_company, insert_record, stage_map, touch
 
-BATCH = 200
+BATCH = 40
+MAX_RESOLVE = 200
 KEY_RE = re.compile(r"^[A-Za-z0-9_.:\-]{8,80}$")
 RESULT_COLS = "id, job_id, dedupe_key, business_name, phone, website, email, address, category, city, state, google_maps_url"
 SNAPSHOT_FIELDS = ("business_name", "phone", "website", "email", "address", "city", "state", "category", "google_maps_url")
@@ -254,10 +255,19 @@ def _with_retries(conn, fn, attempts: int = 3):
             conn.commit()
             return result
         except CRMError:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             raise
         except Exception as exc:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                # A timed-out MySQL connection can no longer roll back locally.
+                # Preserve the original error; the next request uses a new
+                # connection and the idempotency key resumes committed batches.
+                pass
             if is_retryable(exc) and attempt < attempts - 1:
                 continue
             raise
@@ -275,7 +285,7 @@ def run_import(conn, ws: Dict[str, Any], user: Dict[str, Any], body: Dict[str, A
     ids: List[int] = []
     if ids_raw is not None:
         if not isinstance(ids_raw, list) or not ids_raw:
-            raise invalid("result_ids must be a list of 1 to 200 result IDs.")
+            raise invalid("result_ids must be a list of 1 to 40 result IDs.")
         seen = set()
         for v in ids_raw:
             n = _int_id(v)
@@ -283,7 +293,7 @@ def run_import(conn, ws: Dict[str, Any], user: Dict[str, Any], body: Dict[str, A
                 seen.add(n)
                 ids.append(n)
         if len(ids) > BATCH:
-            raise invalid("Send at most 200 result IDs per request.")
+            raise invalid("Send at most 40 result IDs per request.")
     mode = "all" if all_ else "ids"
     req_hash = _request_hash({"job_id": job_id, "mode": mode, "result_ids": ids})
 
@@ -345,7 +355,7 @@ def resolve(conn, ws: Dict[str, Any], user: Dict[str, Any], body: Dict[str, Any]
     job_id = _job_id(body.get("job_id"))
     key = "resolve:" + _key(body.get("idempotency_key"))
     decisions = body.get("decisions")
-    if not isinstance(decisions, list) or not decisions or len(decisions) > BATCH:
+    if not isinstance(decisions, list) or not decisions or len(decisions) > MAX_RESOLVE:
         raise invalid("decisions must be a list of 1 to 200 items.")
     clean: List[Dict[str, Any]] = []
     seen = set()

@@ -129,7 +129,7 @@ class CrmImporter {
   final String Function() _newKey;
   final Map<String, String> _pending = {};
 
-  /// Upper bound of "Add all" round trips (200 rows each).
+  /// Upper bound of "Add all" round trips (40 rows each).
   static const int maxAllCalls = 500;
 
   String _keyFor(String signature) => _pending.putIfAbsent(signature, _newKey);
@@ -148,9 +148,10 @@ class CrmImporter {
     final unique = [...{...ids}];
     if (unique.isEmpty) return CrmImportResult()..done = true;
     final result = CrmImportResult();
-    // At most 200 ids per call; each chunk is its own retry-safe submission.
-    for (var start = 0; start < unique.length; start += 200) {
-      final chunk = unique.sublist(start, (start + 200).clamp(0, unique.length));
+    // Keep each request short enough for the API and database timeouts.
+    // Each chunk is its own retry-safe submission.
+    for (var start = 0; start < unique.length; start += 40) {
+      final chunk = unique.sublist(start, (start + 40).clamp(0, unique.length));
       final sig = idsSignature(jobId, chunk);
       final key = _keyFor(sig);
       final response = await api.importResults(jobId: jobId, resultIds: chunk, idempotencyKey: key);

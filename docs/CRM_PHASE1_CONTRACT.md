@@ -63,13 +63,13 @@ Tables: `crm_workspaces`, `crm_memberships`, `crm_pipelines`, `crm_stages`, `crm
 
 ### Import
 - `POST /api/crm/import` body `{"job_id": str, "result_ids": [int]?, "all": bool?, "idempotency_key": str(8–80)}`.
-  - Exactly one of `result_ids` (1–200 unique ints) or `all: true`. Results must belong to the caller's job; unknown IDs
+  - Exactly one of `result_ids` (1–40 unique ints) or `all: true`. Results must belong to the caller's job; unknown IDs
     or IDs from other jobs/users go to `rejected` with reason `not_found` (no details leaked). Result rows are read from
     the DB; client business data is never accepted. A running job is allowed; only rows that exist are importable.
   - Per item: `created` (new company + lead record + source link + `imported` event), `already_added` (same
     workspace+result_id), `possible_match` (candidates by place key, host+name, phone+name; name alone never matches),
     `rejected`.
-  - `all: true` processes at most 200 rows per call ordered by result id; response has
+  - `all: true` processes at most 40 rows per call ordered by result id; response has
     `"import_id", "done": bool, "processed": int, "remaining": int`; the client repeats the same request (same
     idempotency_key) until `done`. Replaying a finished key returns the stored response unchanged.
   - Response: `{"import_id","job_id","done","processed","remaining","created":[{"result_id","record_id"}],
