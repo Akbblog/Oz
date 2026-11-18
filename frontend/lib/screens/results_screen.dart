@@ -63,13 +63,16 @@ Uri? leadMapsUri(Map<String, dynamic> lead) {
   final stored = '${lead['google_maps_url'] ?? ''}'.trim();
   if (stored.isNotEmpty) {
     final u = Uri.tryParse(stored);
-    if (u != null && (u.scheme == 'https' || u.scheme == 'http') && u.host.isNotEmpty) return u;
+    if (u != null &&
+        (u.scheme == 'https' || u.scheme == 'http') &&
+        u.host.isNotEmpty) return u;
   }
   final address = '${lead['address'] ?? ''}'.trim();
   if (!_has(address)) return null;
   final name = leadName(lead);
   final q = name == 'Unnamed business' ? address : '$name, $address';
-  return Uri.parse('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
+  return Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
 }
 
 final RegExp _strongLetter = RegExp(r'\p{L}', unicode: true);
@@ -78,7 +81,8 @@ final RegExp _rtlLetter = RegExp('[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]');
 /// Paragraph direction of [text] from its first strong letter (like HTML
 /// `dir="auto"`): Arabic/Hebrew/... -> RTL, any other letter -> LTR, no
 /// letter -> [fallback].
-TextDirection leadTextDirection(String text, {TextDirection fallback = TextDirection.ltr}) {
+TextDirection leadTextDirection(String text,
+    {TextDirection fallback = TextDirection.ltr}) {
   final m = _strongLetter.firstMatch(text);
   if (m == null) return fallback;
   return _rtlLetter.hasMatch(m[0]!) ? TextDirection.rtl : TextDirection.ltr;
@@ -87,7 +91,8 @@ TextDirection leadTextDirection(String text, {TextDirection fallback = TextDirec
 /// [text] wrapped in Unicode first-strong isolates (FSI … PDI) when it has
 /// right-to-left letters, so it can be joined with other parts
 /// (`Restaurant · <Arabic city>`) without punctuation jumping between runs.
-String bidiIsolate(String text) => _rtlLetter.hasMatch(text) ? '\u2068$text\u2069' : text;
+String bidiIsolate(String text) =>
+    _rtlLetter.hasMatch(text) ? '\u2068$text\u2069' : text;
 
 /// Plain-text block of [leads] for the clipboard (original website URLs).
 String leadsToClipboardText(Iterable<Map<String, dynamic>> leads) {
@@ -96,8 +101,10 @@ String leadsToClipboardText(Iterable<Map<String, dynamic>> leads) {
     final lines = <String>[
       leadName(l),
       if (_has(l['category']) || leadCityLabel(l).isNotEmpty)
-        [if (_has(l['category'])) '${l['category']}'.trim(), if (leadCityLabel(l).isNotEmpty) leadCityLabel(l)]
-            .join(' · '),
+        [
+          if (_has(l['category'])) '${l['category']}'.trim(),
+          if (leadCityLabel(l).isNotEmpty) leadCityLabel(l)
+        ].join(' · '),
       if (_has(l['phone'])) 'Phone: ${'${l['phone']}'.trim()}',
       if (_has(l['email'])) 'Email: ${'${l['email']}'.trim()}',
       if (_has(l['website'])) 'Website: ${'${l['website']}'.trim()}',
@@ -161,7 +168,8 @@ class ResultsScreen extends StatefulWidget {
   State<ResultsScreen> createState() => _ResultsScreenState();
 }
 
-class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveClientMixin {
+class _ResultsScreenState extends State<ResultsScreen>
+    with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 
@@ -207,7 +215,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
     if (_crm == null || _crm!.jobId != jobId) {
       _crm?.removeListener(_onCrmChanged);
       _crm?.dispose();
-      _crm = CrmResultsController(jobId: jobId, api: widget.crmApi ?? CrmApi())..addListener(_onCrmChanged);
+      _crm = CrmResultsController(jobId: jobId, api: widget.crmApi ?? CrmApi())
+        ..addListener(_onCrmChanged);
       _crmStateFor = -1;
     }
     if (_crmStateFor != _all.length) {
@@ -275,13 +284,15 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       _selection.setScope(widget.jobId);
     }
     if (widget.overrideResults != null &&
-        (jobChanged || !identical(widget.overrideResults, oldWidget.overrideResults))) {
+        (jobChanged ||
+            !identical(widget.overrideResults, oldWidget.overrideResults))) {
       _setLeads(widget.overrideResults!, widget.jobId);
       _error = null;
       _loading = false;
     } else if (widget.overrideResults == null && widget.resultsPending) {
       _loading = true;
-    } else if (widget.overrideResults == null && (jobChanged || oldWidget.resultsPending)) {
+    } else if (widget.overrideResults == null &&
+        (jobChanged || oldWidget.resultsPending)) {
       _load();
     }
   }
@@ -350,7 +361,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   // ----------------------------------------------------------- filtering
 
   bool get _filtersActive =>
-      _query.trim().isNotEmpty || _city.isNotEmpty || _contacts.isNotEmpty || _sort != LeadSort.original;
+      _query.trim().isNotEmpty ||
+      _city.isNotEmpty ||
+      _contacts.isNotEmpty ||
+      _sort != LeadSort.original;
 
   /// Clears search, filters and sort. The selection is kept.
   void _clearFilters() {
@@ -454,24 +468,34 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   String get _fileBase {
     final id = (widget.jobId ?? _loadedJobId ?? '');
     final shortId = id.length > 8 ? id.substring(0, 8) : id;
-    final cat = safeFileNamePart(widget.category ?? (widget.title ?? 'leads'), maxLength: 30);
+    final cat = safeFileNamePart(widget.category ?? (widget.title ?? 'leads'),
+        maxLength: 30);
     return shortId.isEmpty ? 'leads_$cat' : 'leads_${cat}_$shortId';
   }
 
   /// Selected leads in list order (hidden-by-filter ones included).
   List<Map<String, dynamic>> _selectedLeads() => _selection.selectedLeads(_all);
 
-  Future<void> _exportCsv(List<Map<String, dynamic>> leads, String suffix) async {
+  Future<void> _exportCsv(
+      List<Map<String, dynamic>> leads, String suffix) async {
     if (leads.isEmpty) return;
-    await saveCsv(leadsToCsv(leads), '${_fileBase}_${suffix}_${fileTimestamp()}', context: context);
+    await saveCsv(
+        leadsToCsv(leads), '${_fileBase}_${suffix}_${fileTimestamp()}',
+        context: context);
   }
 
-  Future<void> _exportJson(List<Map<String, dynamic>> leads, String suffix) async {
+  Future<void> _exportJson(
+      List<Map<String, dynamic>> leads, String suffix) async {
     if (leads.isEmpty) return;
     final clean = leads
-        .map((l) => {for (final c in leadCsvColumns) c: l[c] ?? (c == 'business_name' ? l['name'] : null)})
+        .map((l) => {
+              for (final c in leadCsvColumns)
+                c: l[c] ?? (c == 'business_name' ? l['name'] : null)
+            })
         .toList();
-    await saveJson(jsonEncode(clean), '${_fileBase}_${suffix}_${fileTimestamp()}', context: context);
+    await saveJson(
+        jsonEncode(clean), '${_fileBase}_${suffix}_${fileTimestamp()}',
+        context: context);
   }
 
   Future<void> _copyLeads(List<Map<String, dynamic>> leads) async {
@@ -496,8 +520,12 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   Future<void> _open(Uri uri, {bool external = true, String? label}) async {
     final what = label ?? uri.toString();
     try {
-      final ok = await launchUrl(uri, mode: external ? LaunchMode.externalApplication : LaunchMode.platformDefault);
-      if (!ok && mounted) showSearchSnack(context, "Couldn't open $what", error: true);
+      final ok = await launchUrl(uri,
+          mode: external
+              ? LaunchMode.externalApplication
+              : LaunchMode.platformDefault);
+      if (!ok && mounted)
+        showSearchSnack(context, "Couldn't open $what", error: true);
     } catch (_) {
       if (mounted) showSearchSnack(context, "Couldn't open $what", error: true);
     }
@@ -519,7 +547,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   void _website(String website) {
     final uri = websiteLaunchUri(website);
     if (uri == null) {
-      showSearchSnack(context, "This website address can't be opened.", error: true);
+      showSearchSnack(context, "This website address can't be opened.",
+          error: true);
       return;
     }
     _open(uri, label: displayWebsite(website));
@@ -535,7 +564,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         email: _email,
         website: _website,
         maps: _maps,
-        copy: (text, what) => copyWithSnack(context, text, message: 'Copied $what'),
+        copy: (text, what) =>
+            copyWithSnack(context, text, message: 'Copied $what'),
       );
 
   // --------------------------------------------------------------- build
@@ -555,17 +585,27 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
               elevation: 0,
               title: Text(
                 widget.title ?? 'Leads',
-                style: const TextStyle(color: UiTokens.text, fontSize: 18, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: UiTokens.text,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700),
               ),
               actions: [
-                if (widget.overrideResults == null && (widget.jobId ?? _loadedJobId) != null && _all.isNotEmpty)
+                if (widget.overrideResults == null &&
+                    (widget.jobId ?? _loadedJobId) != null &&
+                    _all.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: TextButton.icon(
-                      style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
+                      style: TextButton.styleFrom(
+                          foregroundColor: UiTokens.accent,
+                          minimumSize: const Size(48, 48)),
                       onPressed: _downloading ? null : _downloadExcel,
                       icon: _downloading
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.download_rounded, size: 18),
                       label: const Text('Download Excel'),
                     ),
@@ -574,7 +614,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: TextButton.icon(
-                      style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
+                      style: TextButton.styleFrom(
+                          foregroundColor: UiTokens.accent,
+                          minimumSize: const Size(48, 48)),
                       onPressed: () => _exportCsv(_all, 'all'),
                       icon: const Icon(Icons.download_rounded, size: 18),
                       label: const Text('CSV'),
@@ -594,8 +636,14 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       final gutter = phone ? 16.0 : 24.0;
       final side = math.max(gutter, (width - 1200) / 2);
       final visible = _visibleIndices();
-      final scroll = _buildScroll(context, width: width, phone: phone, gutter: gutter, side: side, visible: visible);
-      if (_selection.isEmpty || _loading || _error != null || _all.isEmpty) return scroll;
+      final scroll = _buildScroll(context,
+          width: width,
+          phone: phone,
+          gutter: gutter,
+          side: side,
+          visible: visible);
+      if (_selection.isEmpty || _loading || _error != null || _all.isEmpty)
+        return scroll;
       return Column(
         children: [
           Expanded(child: scroll),
@@ -622,8 +670,14 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         padding: EdgeInsets.fromLTRB(side, phone ? 8 : gutter, side, 0),
         sliver: SliverList(
           delegate: SliverChildListDelegate([
-            for (final w in widget.leading) ...[w, SizedBox(height: phone ? 10 : 16)],
-            if (_crm != null && !_loading && _error == null && _all.isNotEmpty) ...[
+            for (final w in widget.leading) ...[
+              w,
+              SizedBox(height: phone ? 10 : 16)
+            ],
+            if (_crm != null &&
+                !_loading &&
+                _error == null &&
+                _all.isNotEmpty) ...[
               CrmResultsStrip(controller: _crm!, leads: _all),
               SizedBox(height: phone ? 10 : 12),
             ],
@@ -643,7 +697,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
               children: [
                 CircularProgressIndicator(),
                 SizedBox(height: 12),
-                Text('Loading leads…', style: TextStyle(color: UiTokens.textSecondary)),
+                Text('Loading leads…',
+                    style: TextStyle(color: UiTokens.textSecondary)),
               ],
             ),
           ),
@@ -675,7 +730,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('No leads match these filters.',
-                    style: TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: UiTokens.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600)),
                 const SizedBox(height: 10),
                 OutlinedButton(
                   style: searchSecondaryButtonStyle(),
@@ -700,7 +758,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
           delegate: SliverChildBuilderDelegate(
             (context, r) {
               final start = r * columns;
-              final items = visible.sublist(start, math.min(start + columns, visible.length));
+              final items = visible.sublist(
+                  start, math.min(start + columns, visible.length));
               Widget card(int i) {
                 final lead = _all[i];
                 return LeadCard(
@@ -709,7 +768,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                   selected: _selection.isSelected(lead),
                   onSelected: (v) => _selection.toggle(lead, v),
                   actions: _actions,
-                  footer: _crm == null ? null : CrmLeadChip(lead: lead, controller: _crm!),
+                  footer: _crm == null
+                      ? null
+                      : CrmLeadChip(lead: lead, controller: _crm!),
                 );
               }
 
@@ -722,7 +783,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                         children: [
                           for (var k = 0; k < columns; k++) ...[
                             if (k > 0) const SizedBox(width: 12),
-                            Expanded(child: k < items.length ? card(items[k]) : const SizedBox.shrink()),
+                            Expanded(
+                                child: k < items.length
+                                    ? card(items[k])
+                                    : const SizedBox.shrink()),
                           ],
                         ],
                       ),
@@ -755,7 +819,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(message, style: const TextStyle(color: UiTokens.text, fontSize: 14)),
+          Text(message,
+              style: const TextStyle(color: UiTokens.text, fontSize: 14)),
           const SizedBox(height: 10),
           OutlinedButton(
             style: searchSecondaryButtonStyle(),
@@ -782,7 +847,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
   }) {
     final cities = _cityOptions();
     final safeCity = cities.contains(_city) ? _city : '';
-    final citiesShown = <String>{for (final i in visible) leadCityLabel(_all[i])}..remove('');
+    final citiesShown = <String>{
+      for (final i in visible) leadCityLabel(_all[i])
+    }..remove('');
     final visibleCount = visible.length;
 
     final searchField = TextField(
@@ -795,12 +862,14 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         isDense: true,
         hintText: 'Search leads by name, phone, city',
         hintStyle: const TextStyle(color: UiTokens.textMuted),
-        prefixIcon: const Icon(Icons.search_rounded, size: 20, color: UiTokens.textMuted),
+        prefixIcon: const Icon(Icons.search_rounded,
+            size: 20, color: UiTokens.textMuted),
         suffixIcon: _query.isEmpty
             ? null
             : IconButton(
                 tooltip: 'Clear search',
-                icon: const Icon(Icons.close_rounded, size: 18, color: UiTokens.textMuted),
+                icon: const Icon(Icons.close_rounded,
+                    size: 18, color: UiTokens.textMuted),
                 onPressed: () => setState(() {
                   _searchController.clear();
                   _query = '';
@@ -808,11 +877,14 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
               ),
         filled: true,
         fillColor: UiTokens.background,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: UiTokens.border)),
         enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: UiTokens.border)),
       ),
     );
 
@@ -822,8 +894,13 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       initialValue: safeCity,
       onSelected: (v) => setState(() => _city = v),
       itemBuilder: (_) => [
-        CheckedPopupMenuItem<String>(value: '', checked: safeCity.isEmpty, child: const Text('All cities')),
-        for (final c in cities) CheckedPopupMenuItem<String>(value: c, checked: safeCity == c, child: Text(c)),
+        CheckedPopupMenuItem<String>(
+            value: '',
+            checked: safeCity.isEmpty,
+            child: const Text('All cities')),
+        for (final c in cities)
+          CheckedPopupMenuItem<String>(
+              value: c, checked: safeCity == c, child: Text(c)),
       ],
       child: _MenuButtonFace(
         icon: Icons.location_city_rounded,
@@ -838,9 +915,11 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       onSelected: (v) => setState(() => _sort = v),
       itemBuilder: (_) => [
         for (final s in LeadSort.values)
-          CheckedPopupMenuItem<LeadSort>(value: s, checked: _sort == s, child: Text(_sortLabel(s))),
+          CheckedPopupMenuItem<LeadSort>(
+              value: s, checked: _sort == s, child: Text(_sortLabel(s))),
       ],
-      child: _MenuButtonFace(icon: Icons.sort_rounded, label: 'Sort: ${_sortLabel(_sort)}'),
+      child: _MenuButtonFace(
+          icon: Icons.sort_rounded, label: 'Sort: ${_sortLabel(_sort)}'),
     );
 
     final chips = <Widget>[
@@ -852,7 +931,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
           checkmarkColor: UiTokens.accent,
           selectedColor: UiTokens.selectedSurface,
           backgroundColor: UiTokens.card,
-          side: BorderSide(color: _contacts.contains(c) ? UiTokens.accent : UiTokens.border),
+          side: BorderSide(
+              color: _contacts.contains(c) ? UiTokens.accent : UiTokens.border),
           materialTapTargetSize: MaterialTapTargetSize.padded,
           onSelected: (v) => setState(() {
             if (v) {
@@ -865,7 +945,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       if (_contacts.length >= 2) ...[
         const Padding(
           padding: EdgeInsets.only(left: 4),
-          child: Text('Match', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          child: Text('Match',
+              style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
         ),
         ChoiceChip(
           label: _chipLabel('Any', !_matchAll),
@@ -902,7 +983,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
             if (c.maxWidth < 560) {
               // Phone: search plus a "Filters" toggle keeps the first lead
               // on the first screen; filters open below when asked for.
-              final active = (_city.isNotEmpty ? 1 : 0) + _contacts.length + (_sort != LeadSort.original ? 1 : 0);
+              final active = (_city.isNotEmpty ? 1 : 0) +
+                  _contacts.length +
+                  (_sort != LeadSort.original ? 1 : 0);
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -914,16 +997,25 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                         expanded: _filtersOpen,
                         child: OutlinedButton.icon(
                           style: searchSecondaryButtonStyle(),
-                          onPressed: () => setState(() => _filtersOpen = !_filtersOpen),
-                          icon: Icon(_filtersOpen ? Icons.expand_less_rounded : Icons.tune_rounded, size: 18),
-                          label: Text(active > 0 ? 'Filters ($active)' : 'Filters'),
+                          onPressed: () =>
+                              setState(() => _filtersOpen = !_filtersOpen),
+                          icon: Icon(
+                              _filtersOpen
+                                  ? Icons.expand_less_rounded
+                                  : Icons.tune_rounded,
+                              size: 18),
+                          label: Text(
+                              active > 0 ? 'Filters ($active)' : 'Filters'),
                         ),
                       ),
                     ],
                   ),
                   if (_filtersOpen) ...[
                     const SizedBox(height: 8),
-                    Wrap(spacing: 8, runSpacing: 8, children: [cityMenu, sortMenu]),
+                    Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [cityMenu, sortMenu]),
                   ],
                 ],
               );
@@ -948,8 +1040,13 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                     ),
                     segments: const [
                       ButtonSegment(
-                          value: false, icon: Icon(Icons.view_agenda_outlined, size: 18), label: Text('Cards')),
-                      ButtonSegment(value: true, icon: Icon(Icons.table_rows_outlined, size: 18), label: Text('Table')),
+                          value: false,
+                          icon: Icon(Icons.view_agenda_outlined, size: 18),
+                          label: Text('Cards')),
+                      ButtonSegment(
+                          value: true,
+                          icon: Icon(Icons.table_rows_outlined, size: 18),
+                          label: Text('Table')),
                     ],
                     selected: {_table},
                     onSelectionChanged: (s) => setState(() {
@@ -963,7 +1060,11 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
           }),
           if (!compact || _filtersOpen) ...[
             const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: chips),
+            Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: chips),
           ],
           const SizedBox(height: 4),
           Wrap(
@@ -975,8 +1076,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                 _SelectShownCheckbox(
                   state: shownState,
                   count: visibleCount,
-                  onChanged: (select) =>
-                      select ? _selection.selectAll(visibleLeads) : _selection.deselectAll(visibleLeads),
+                  onChanged: (select) => select
+                      ? _selection.selectAll(visibleLeads)
+                      : _selection.deselectAll(visibleLeads),
                 ),
               Semantics(
                 liveRegion: true,
@@ -987,12 +1089,15 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                           ? 'Showing ${plural(_all.length, 'lead', 'leads')}'
                               '${citiesShown.isEmpty ? '' : ' · ${plural(citiesShown.length, 'city', 'cities')}'}'
                           : 'Showing $visibleCount of ${plural(_all.length, 'lead', 'leads')}',
-                  style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+                  style: const TextStyle(
+                      color: UiTokens.textSecondary, fontSize: 13),
                 ),
               ),
               if (_filtersActive)
                 TextButton(
-                  style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
+                  style: TextButton.styleFrom(
+                      foregroundColor: UiTokens.accent,
+                      minimumSize: const Size(48, 48)),
                   onPressed: _clearFilters,
                   child: const Text('Clear filters'),
                 ),
@@ -1005,7 +1110,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
 
   /// Sticky bar under the leads while something is selected: counts and
   /// the bulk actions (export CSV/JSON, copy) for the selected leads.
-  Widget _buildSelectionBar({required List<int> visible, required double side, required bool compact}) {
+  Widget _buildSelectionBar(
+      {required List<int> visible,
+      required double side,
+      required bool compact}) {
     final visibleLeads = [for (final i in visible) _all[i]];
     final selected = _selection.count;
     final shownSelected = _selection.countIn(visibleLeads);
@@ -1017,16 +1125,20 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
     );
     final buttonStyle = searchSecondaryButtonStyle().copyWith(
       minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
-      padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: compact ? 10 : 14)),
+      padding: WidgetStatePropertyAll(
+          EdgeInsets.symmetric(horizontal: compact ? 10 : 14)),
     );
-    final linkStyle = TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48));
+    final linkStyle = TextButton.styleFrom(
+        foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48));
     return Material(
       color: UiTokens.card,
       child: SafeArea(
         top: false,
         child: Container(
           width: double.infinity,
-          decoration: const BoxDecoration(border: Border(top: BorderSide(color: UiTokens.accent, width: 1))),
+          decoration: const BoxDecoration(
+              border:
+                  Border(top: BorderSide(color: UiTokens.accent, width: 1))),
           padding: EdgeInsets.fromLTRB(side, 8, side, 8),
           child: Wrap(
             crossAxisAlignment: WrapCrossAlignment.center,
@@ -1036,7 +1148,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
               Semantics(
                 liveRegion: true,
                 child: Text(summary,
-                    style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
+                    style: const TextStyle(
+                        color: UiTokens.text,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14)),
               ),
               if (_crm != null) ..._crmSelectionActions(selected, compact),
               OutlinedButton.icon(
@@ -1044,21 +1159,24 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                 onPressed: () => _exportCsv(_selectedLeads(), 'selected'),
                 icon: const Icon(Icons.download_rounded, size: 18),
                 label: Text('Export CSV',
-                    semanticsLabel: 'Export ${plural(selected, 'selected lead', 'selected leads')} as CSV'),
+                    semanticsLabel:
+                        'Export ${plural(selected, 'selected lead', 'selected leads')} as CSV'),
               ),
               OutlinedButton.icon(
                 style: buttonStyle,
                 onPressed: () => _exportJson(_selectedLeads(), 'selected'),
                 icon: const Icon(Icons.data_object_rounded, size: 18),
                 label: Text('Export JSON',
-                    semanticsLabel: 'Export ${plural(selected, 'selected lead', 'selected leads')} as JSON'),
+                    semanticsLabel:
+                        'Export ${plural(selected, 'selected lead', 'selected leads')} as JSON'),
               ),
               OutlinedButton.icon(
                 style: buttonStyle,
                 onPressed: () => _copyLeads(_selectedLeads()),
                 icon: const Icon(Icons.content_copy_rounded, size: 18),
                 label: Text('Copy',
-                    semanticsLabel: 'Copy details of ${plural(selected, 'selected lead', 'selected leads')}'),
+                    semanticsLabel:
+                        'Copy details of ${plural(selected, 'selected lead', 'selected leads')}'),
               ),
               if (shownSelected < visibleLeads.length)
                 TextButton(
@@ -1092,27 +1210,41 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
       FilledButton.icon(
         style: searchPrimaryButtonStyle().copyWith(
           minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
-          padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: compact ? 10 : 14)),
+          padding: WidgetStatePropertyAll(
+              EdgeInsets.symmetric(horizontal: compact ? 10 : 14)),
         ),
-        onPressed: crm.busy || reason != null || ids.isEmpty ? null : _addSelectedToCrm,
+        onPressed: crm.busy || reason != null || ids.isEmpty
+            ? null
+            : _addSelectedToCrm,
         icon: const Icon(Icons.playlist_add_rounded, size: 18),
         label: Text('Add selected to CRM',
-            semanticsLabel: reason ?? 'Add ${plural(selected, 'selected lead', 'selected leads')} to CRM'),
+            semanticsLabel: reason ??
+                'Add ${plural(selected, 'selected lead', 'selected leads')} to CRM'),
       ),
       if (reason != null)
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: Text(reason, style: const TextStyle(color: UiTokens.partialFg, fontSize: 13)),
+          child: Text(reason,
+              style: const TextStyle(color: UiTokens.partialFg, fontSize: 13)),
         ),
     ];
   }
 
-  static const List<String> _tableKeys = ['business_name', 'category', 'city', 'phone', 'email', 'website'];
+  static const List<String> _tableKeys = [
+    'business_name',
+    'category',
+    'city',
+    'phone',
+    'email',
+    'website'
+  ];
 
   Widget _buildTable(List<int> visible) {
     final ordered = List<int>.from(visible);
     final sortCol = _tableSortColumn;
-    final key = sortCol == null || sortCol < 0 || sortCol >= _tableKeys.length ? null : _tableKeys[sortCol];
+    final key = sortCol == null || sortCol < 0 || sortCol >= _tableKeys.length
+        ? null
+        : _tableKeys[sortCol];
     if (key != null) {
       String v(int i) => key == 'business_name'
           ? leadName(_all[i]).toLowerCase()
@@ -1121,11 +1253,13 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
               : key == 'website'
                   ? displayWebsite('${_all[i]['website'] ?? ''}')
                   : '${_all[i][key] ?? ''}'.toLowerCase();
-      ordered.sort((a, b) => _tableSortAscending ? v(a).compareTo(v(b)) : v(b).compareTo(v(a)));
+      ordered.sort((a, b) =>
+          _tableSortAscending ? v(a).compareTo(v(b)) : v(b).compareTo(v(a)));
     }
     final shownLeads = [for (final i in ordered) _all[i]];
 
-    Widget text(String value, {int maxLines = 1, bool ltr = false, double maxWidth = 240}) {
+    Widget text(String value,
+        {int maxLines = 1, bool ltr = false, double maxWidth = 240}) {
       final shown = _has(value) ? value : '—';
       return ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
@@ -1144,7 +1278,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
           _tableSortAscending = ascending;
         });
 
-    DataColumn col(String label) => DataColumn(label: Text(label), onSort: sort);
+    DataColumn col(String label) =>
+        DataColumn(label: Text(label), onSort: sort);
 
     return Container(
       decoration: BoxDecoration(
@@ -1157,14 +1292,16 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         scrollDirection: Axis.horizontal,
         child: DataTable(
           showCheckboxColumn: false,
-          sortColumnIndex: _tableSortColumn == null ? null : _tableSortColumn! + 1,
+          sortColumnIndex:
+              _tableSortColumn == null ? null : _tableSortColumn! + 1,
           sortAscending: _tableSortAscending,
           dataRowMinHeight: 52,
           dataRowMaxHeight: 60,
           headingRowHeight: 52,
           columnSpacing: 20,
           headingRowColor: WidgetStateProperty.all(AppColors.primaryBlue),
-          headingTextStyle: AppTypography.labelLarge.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+          headingTextStyle: AppTypography.labelLarge
+              .copyWith(color: Colors.white, fontWeight: FontWeight.w700),
           dividerThickness: 0.5,
           columns: [
             DataColumn(
@@ -1172,7 +1309,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                 state: _selection.stateOf(shownLeads),
                 count: shownLeads.length,
                 compact: true,
-                onChanged: (select) => select ? _selection.selectAll(shownLeads) : _selection.deselectAll(shownLeads),
+                onChanged: (select) => select
+                    ? _selection.selectAll(shownLeads)
+                    : _selection.deselectAll(shownLeads),
               ),
             ),
             col('Business'),
@@ -1190,8 +1329,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                 key: ValueKey(_selection.idOf(lead)),
                 selected: _selection.isSelected(lead),
                 color: WidgetStateProperty.resolveWith((states) {
-                  if (states.contains(WidgetState.selected)) return UiTokens.selectedSurface;
-                  if (states.contains(WidgetState.hovered)) return AppColors.primaryBlue.withValues(alpha: 0.08);
+                  if (states.contains(WidgetState.selected))
+                    return UiTokens.selectedSurface;
+                  if (states.contains(WidgetState.hovered))
+                    return AppColors.primaryBlue.withValues(alpha: 0.08);
                   return Colors.transparent;
                 }),
                 cells: [
@@ -1206,10 +1347,13 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                     waitDuration: const Duration(milliseconds: 600),
                     child: text(leadName(lead), maxLines: 2, maxWidth: 260),
                   )),
-                  DataCell(text('${lead['category'] ?? ''}'.trim(), maxWidth: 180)),
+                  DataCell(
+                      text('${lead['category'] ?? ''}'.trim(), maxWidth: 180)),
                   DataCell(text(leadCityLabel(lead), maxWidth: 200)),
-                  DataCell(text('${lead['phone'] ?? ''}'.trim(), ltr: true, maxWidth: 170)),
-                  DataCell(text('${lead['email'] ?? ''}'.trim(), ltr: true, maxWidth: 220)),
+                  DataCell(text('${lead['phone'] ?? ''}'.trim(),
+                      ltr: true, maxWidth: 170)),
+                  DataCell(text('${lead['email'] ?? ''}'.trim(),
+                      ltr: true, maxWidth: 220)),
                   DataCell(
                     isOpenableWebsite('${lead['website'] ?? ''}')
                         ? LeadWebsiteLink(
@@ -1219,8 +1363,11 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                           )
                         : text(''),
                   ),
-                  if (_crm != null) DataCell(CrmLeadChip(lead: lead, controller: _crm!, compact: true)),
-                  DataCell(LeadActionButtons(lead: lead, actions: _actions, compact: true)),
+                  if (_crm != null)
+                    DataCell(CrmLeadChip(
+                        lead: lead, controller: _crm!, compact: true)),
+                  DataCell(LeadActionButtons(
+                      lead: lead, actions: _actions, compact: true)),
                 ],
               ),
           ],
@@ -1258,12 +1405,16 @@ class _MenuButtonFace extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    color: UiTokens.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600),
               ),
             ),
           ),
           const SizedBox(width: 2),
-          const Icon(Icons.arrow_drop_down_rounded, color: UiTokens.textSecondary),
+          const Icon(Icons.arrow_drop_down_rounded,
+              color: UiTokens.textSecondary),
         ],
       ),
     );
@@ -1316,7 +1467,10 @@ class _SelectShownCheckbox extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(label,
-                      style: const TextStyle(color: UiTokens.accent, fontSize: 14, fontWeight: FontWeight.w600)),
+                      style: const TextStyle(
+                          color: UiTokens.accent,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -1355,7 +1509,9 @@ ButtonStyle _leadActionStyle({bool iconOnly = false}) => TextButton.styleFrom(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ).copyWith(
       side: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.focused) ? const BorderSide(color: UiTokens.accent, width: 2) : null,
+        (states) => states.contains(WidgetState.focused)
+            ? const BorderSide(color: UiTokens.accent, width: 2)
+            : null,
       ),
     );
 
@@ -1370,7 +1526,11 @@ class LeadActionButtons extends StatelessWidget {
   final LeadActions actions;
   final bool compact;
 
-  const LeadActionButtons({super.key, required this.lead, required this.actions, this.compact = false});
+  const LeadActionButtons(
+      {super.key,
+      required this.lead,
+      required this.actions,
+      this.compact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -1382,6 +1542,7 @@ class LeadActionButtons extends StatelessWidget {
     final hasMap = leadMapsUri(lead) != null;
     final canOpenWebsite = isOpenableWebsite(website);
     final site = canOpenWebsite ? displayWebsite(website) : '';
+    final phoneLayout = !compact && MediaQuery.sizeOf(context).width < 600;
 
     Widget action({
       required IconData icon,
@@ -1393,11 +1554,31 @@ class LeadActionButtons extends StatelessWidget {
       if (compact) {
         return IconButton(
           style: IconButton.styleFrom(
-                  foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48), padding: EdgeInsets.zero)
+                  foregroundColor: UiTokens.accent,
+                  minimumSize: const Size(48, 48),
+                  padding: EdgeInsets.zero)
               .copyWith(side: _leadActionStyle().side),
           tooltip: semantics,
           onPressed: onPressed,
           icon: Icon(icon, size: 20),
+        );
+      }
+      if (phoneLayout) {
+        return Tooltip(
+          message: tooltip,
+          excludeFromSemantics: true,
+          child: TextButton(
+            style: _leadActionStyle(iconOnly: true),
+            onPressed: onPressed,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 18),
+              const SizedBox(height: 3),
+              Text(label,
+                  maxLines: 1,
+                  style: const TextStyle(fontSize: 11),
+                  semanticsLabel: semantics),
+            ]),
+          ),
         );
       }
       return Tooltip(
@@ -1449,53 +1630,84 @@ class LeadActionButtons extends StatelessWidget {
       _CopyMenu(
         name: name,
         compact: compact,
+        stacked: phoneLayout,
         items: [
           if (_has(phone)) ('Copy phone', () => actions.copy(phone, 'phone')),
           if (_has(email)) ('Copy email', () => actions.copy(email, 'email')),
-          if (_has(website)) ('Copy website', () => actions.copy(website, 'website')),
-          if (_has(address)) ('Copy address', () => actions.copy(address, 'address')),
+          if (_has(website))
+            ('Copy website', () => actions.copy(website, 'website')),
+          if (_has(address))
+            ('Copy address', () => actions.copy(address, 'address')),
           ('Copy business name', () => actions.copy(name, 'name')),
-          ('Copy all details', () => actions.copy(leadsToClipboardText([lead]), 'details')),
+          (
+            'Copy all details',
+            () => actions.copy(leadsToClipboardText([lead]), 'details')
+          ),
         ],
       ),
     ];
     if (compact) return Row(mainAxisSize: MainAxisSize.min, children: buttons);
+    if (phoneLayout)
+      return Row(
+          children: [for (final button in buttons) Expanded(child: button)]);
     return Wrap(spacing: 2, runSpacing: 0, children: buttons);
   }
 }
 
-String _shorten(String s, [int max = 140]) => s.length <= max ? s : '${s.substring(0, max - 1)}…';
+String _shorten(String s, [int max = 140]) =>
+    s.length <= max ? s : '${s.substring(0, max - 1)}…';
 
 class _CopyMenu extends StatelessWidget {
   final String name;
   final bool compact;
+  final bool stacked;
   final List<(String, VoidCallback)> items;
 
-  const _CopyMenu({required this.name, required this.compact, required this.items});
+  const _CopyMenu(
+      {required this.name,
+      required this.compact,
+      required this.items,
+      this.stacked = false});
 
   @override
   Widget build(BuildContext context) {
     return MenuAnchor(
-      style: const MenuStyle(backgroundColor: WidgetStatePropertyAll(UiTokens.card)),
+      style: const MenuStyle(
+          backgroundColor: WidgetStatePropertyAll(UiTokens.card)),
       menuChildren: [
         for (final (label, onPressed) in items)
           MenuItemButton(
-            style: MenuItemButton.styleFrom(foregroundColor: UiTokens.text, minimumSize: const Size(0, 48)),
+            style: MenuItemButton.styleFrom(
+                foregroundColor: UiTokens.text, minimumSize: const Size(0, 48)),
             onPressed: onPressed,
             child: Text(label),
           ),
       ],
       builder: (context, controller, _) {
-        void toggle() => controller.isOpen ? controller.close() : controller.open();
+        void toggle() =>
+            controller.isOpen ? controller.close() : controller.open();
         final semantics = 'Copy details of $name';
         if (compact) {
           return IconButton(
             style: IconButton.styleFrom(
-                    foregroundColor: UiTokens.textSecondary, minimumSize: const Size(48, 48), padding: EdgeInsets.zero)
+                    foregroundColor: UiTokens.textSecondary,
+                    minimumSize: const Size(48, 48),
+                    padding: EdgeInsets.zero)
                 .copyWith(side: _leadActionStyle().side),
             tooltip: semantics,
             onPressed: toggle,
             icon: const Icon(Icons.content_copy_rounded, size: 18),
+          );
+        }
+        if (stacked) {
+          return TextButton(
+            style: _leadActionStyle(iconOnly: true),
+            onPressed: toggle,
+            child: const Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.content_copy_rounded, size: 18),
+              SizedBox(height: 3),
+              Text('Copy', style: TextStyle(fontSize: 11)),
+            ]),
           );
         }
         return TextButton.icon(
@@ -1542,7 +1754,9 @@ class LeadWebsiteLink extends StatelessWidget {
         decorationColor: UiTokens.accent,
       ),
     );
-    if (maxWidth != null) label = ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth!), child: label);
+    if (maxWidth != null)
+      label = ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth!), child: label);
     return Semantics(
       link: true,
       label: 'Open website $site',
@@ -1554,7 +1768,8 @@ class LeadWebsiteLink extends StatelessWidget {
         waitDuration: const Duration(milliseconds: 500),
         child: TextButton(
           style: _leadActionStyle().copyWith(
-            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 4)),
+            padding: const WidgetStatePropertyAll(
+                EdgeInsets.symmetric(horizontal: 4)),
             alignment: AlignmentDirectional.centerStart,
           ),
           onPressed: () => onOpen(website),
@@ -1562,7 +1777,8 @@ class LeadWebsiteLink extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (showIcon) ...[
-                const Icon(Icons.language_rounded, size: 15, color: UiTokens.textSecondary),
+                const Icon(Icons.language_rounded,
+                    size: 15, color: UiTokens.textSecondary),
                 const SizedBox(width: 6),
               ],
               Flexible(child: label),
@@ -1587,7 +1803,8 @@ class LeadAddressText extends StatefulWidget {
     super.key,
     required this.address,
     this.maxLines = 3,
-    this.style = const TextStyle(color: UiTokens.textSecondary, fontSize: 13.5, height: 1.35),
+    this.style = const TextStyle(
+        color: UiTokens.textSecondary, fontSize: 13.5, height: 1.35),
   });
 
   @override
@@ -1627,8 +1844,10 @@ class _LeadAddressTextState extends State<LeadAddressText> {
               alignment: AlignmentDirectional.centerStart,
               child: TextButton(
                 style: _leadActionStyle().copyWith(
-                  padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 4)),
-                  textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  padding: const WidgetStatePropertyAll(
+                      EdgeInsets.symmetric(horizontal: 4)),
+                  textStyle: const WidgetStatePropertyAll(
+                      TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
                 onPressed: () => setState(() => _expanded = !_expanded),
                 child: Text(_expanded ? 'Show less' : 'Show full address'),
@@ -1670,7 +1889,11 @@ class LeadCard extends StatelessWidget {
     final website = '${lead['website'] ?? ''}'.trim();
     final canOpenWebsite = isOpenableWebsite(website);
     final noContact = !_has(phone) && !_has(email) && !canOpenWebsite;
-    final meta = [if (_has(category)) bidiIsolate(category), if (city.isNotEmpty) bidiIsolate(city)].join(' · ');
+    final mobile = MediaQuery.sizeOf(context).width < 600;
+    final meta = [
+      if (_has(category)) bidiIsolate(category),
+      if (city.isNotEmpty) bidiIsolate(city)
+    ].join(' · ');
 
     Widget line(IconData icon, Widget child) => Padding(
           padding: const EdgeInsets.only(top: 6),
@@ -1679,7 +1902,8 @@ class LeadCard extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 1),
-                child: ExcludeSemantics(child: Icon(icon, size: 16, color: UiTokens.textSecondary)),
+                child: ExcludeSemantics(
+                    child: Icon(icon, size: 16, color: UiTokens.textSecondary)),
               ),
               const SizedBox(width: 9),
               Expanded(child: child),
@@ -1687,7 +1911,9 @@ class LeadCard extends StatelessWidget {
           ),
         );
 
-    Widget plain(String text, {Color color = UiTokens.textSecondary, String? semantics}) => Text(
+    Widget plain(String text,
+            {Color color = UiTokens.textSecondary, String? semantics}) =>
+        Text(
           text,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -1733,7 +1959,10 @@ class LeadCard extends StatelessWidget {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           textDirection: leadTextDirection(name),
-                          style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              color: UiTokens.text,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700),
                         ),
                       ),
                       if (meta.isNotEmpty)
@@ -1744,17 +1973,69 @@ class LeadCard extends StatelessWidget {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             textDirection: leadTextDirection(meta),
-                            style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
+                            style: const TextStyle(
+                                color: UiTokens.textSecondary, fontSize: 13),
                           ),
                         ),
-                      if (_has(phone))
+                      if (mobile && (_has(phone) || canOpenWebsite))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Row(children: [
+                            if (_has(phone))
+                              Expanded(
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onLongPress: () =>
+                                      actions.copy(phone, 'phone'),
+                                  child: Row(children: [
+                                    const Icon(Icons.call_outlined,
+                                        size: 16,
+                                        color: UiTokens.textSecondary),
+                                    const SizedBox(width: 7),
+                                    Expanded(
+                                        child: plain(phone,
+                                            color: UiTokens.text,
+                                            semantics:
+                                                'Phone $phone. Press and hold to copy')),
+                                  ]),
+                                ),
+                              ),
+                            if (_has(phone) && canOpenWebsite)
+                              const SizedBox(width: 8),
+                            if (canOpenWebsite)
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () => actions.website(website),
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: Row(children: [
+                                    const Icon(Icons.language_rounded,
+                                        size: 16,
+                                        color: UiTokens.textSecondary),
+                                    const SizedBox(width: 7),
+                                    Expanded(
+                                        child: Text(displayWebsite(website),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                color: UiTokens.accent,
+                                                fontSize: 13,
+                                                decoration:
+                                                    TextDecoration.underline))),
+                                  ]),
+                                ),
+                              ),
+                          ]),
+                        ),
+                      if (!mobile && _has(phone))
                         line(
                             Icons.call_outlined,
                             GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onLongPress: () => actions.copy(phone, 'phone'),
-                              child:
-                                  plain(phone, color: UiTokens.text, semantics: 'Phone $phone. Press and hold to copy'),
+                              child: plain(phone,
+                                  color: UiTokens.text,
+                                  semantics:
+                                      'Phone $phone. Press and hold to copy'),
                             )),
                       if (_has(email))
                         line(
@@ -1762,9 +2043,11 @@ class LeadCard extends StatelessWidget {
                             GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onLongPress: () => actions.copy(email, 'email'),
-                              child: plain(email, semantics: 'Email $email. Press and hold to copy'),
+                              child: plain(email,
+                                  semantics:
+                                      'Email $email. Press and hold to copy'),
                             )),
-                      if (canOpenWebsite)
+                      if (!mobile && canOpenWebsite)
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Align(
@@ -1773,7 +2056,8 @@ class LeadCard extends StatelessWidget {
                               onTap: () => actions.website(website),
                               borderRadius: BorderRadius.circular(4),
                               child: Row(children: [
-                                const Icon(Icons.language_rounded, size: 16, color: UiTokens.textSecondary),
+                                const Icon(Icons.language_rounded,
+                                    size: 16, color: UiTokens.textSecondary),
                                 const SizedBox(width: 9),
                                 Expanded(
                                     child: Text(displayWebsite(website),
@@ -1782,18 +2066,24 @@ class LeadCard extends StatelessWidget {
                                         style: const TextStyle(
                                             color: UiTokens.accent,
                                             fontSize: 13,
-                                            decoration: TextDecoration.underline))),
+                                            decoration:
+                                                TextDecoration.underline))),
                               ]),
                             ),
                           ),
                         ),
-                      if (_has(address)) line(Icons.place_outlined, LeadAddressText(address: address)),
+                      if (_has(address))
+                        line(Icons.place_outlined,
+                            LeadAddressText(address: address)),
                       if (noContact)
                         const Padding(
                           padding: EdgeInsets.only(top: 4),
                           child: Text(
                             'No phone, email or website listed',
-                            style: TextStyle(color: UiTokens.textSecondary, fontSize: 13, fontStyle: FontStyle.italic),
+                            style: TextStyle(
+                                color: UiTokens.textSecondary,
+                                fontSize: 13,
+                                fontStyle: FontStyle.italic),
                           ),
                         ),
                     ],
@@ -1805,13 +2095,13 @@ class LeadCard extends StatelessWidget {
           const SizedBox(height: 8),
           const Divider(height: 1, color: UiTokens.border),
           Padding(
-            padding: const EdgeInsets.only(left: 44, top: 2),
+            padding: const EdgeInsets.only(top: 2),
             child: LeadActionButtons(lead: lead, actions: actions),
           ),
           if (footer != null)
             Padding(
-              padding: const EdgeInsets.only(left: 44),
-              child: Align(alignment: AlignmentDirectional.centerStart, child: footer!),
+              padding: const EdgeInsets.only(top: 4),
+              child: SizedBox(width: double.infinity, child: footer!),
             ),
         ],
       ),

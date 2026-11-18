@@ -15,7 +15,8 @@ import 'crm_widgets.dart';
 /// retry-safe idempotency keys, the review dialog for possible matches and
 /// the summary snack. Only leads with a saved `lead_id` can be added.
 class CrmResultsController extends ChangeNotifier {
-  CrmResultsController({required this.jobId, required this.api, CrmImporter? importer})
+  CrmResultsController(
+      {required this.jobId, required this.api, CrmImporter? importer})
       : importer = importer ?? CrmImporter(api);
 
   final String jobId;
@@ -74,12 +75,17 @@ class CrmResultsController extends ChangeNotifier {
   /// Marks the outcome locally right away (the state reload follows).
   void _apply(CrmImportResult r) {
     final next = Map<int, CrmLeadStatus>.from(_states);
-    r.created.forEach((id, rec) => next[id] = CrmLeadStatus(CrmLeadState.added, recordId: rec.isEmpty ? null : rec));
-    r.alreadyAdded.forEach((id, rec) => next[id] = CrmLeadStatus(CrmLeadState.added, recordId: rec.isEmpty ? null : rec));
-    r.linked.forEach((id, rec) => next[id] = CrmLeadStatus(CrmLeadState.added, recordId: rec.isEmpty ? null : rec));
+    r.created.forEach((id, rec) => next[id] =
+        CrmLeadStatus(CrmLeadState.added, recordId: rec.isEmpty ? null : rec));
+    r.alreadyAdded.forEach((id, rec) => next[id] =
+        CrmLeadStatus(CrmLeadState.added, recordId: rec.isEmpty ? null : rec));
+    r.linked.forEach((id, rec) => next[id] =
+        CrmLeadStatus(CrmLeadState.added, recordId: rec.isEmpty ? null : rec));
     for (final e in r.possibleMatches.entries) {
-      next[e.key] = CrmLeadStatus(CrmLeadState.possibleMatch,
-          candidateRecordIds: [for (final c in crmList(e.value['candidates'])) crmStr(c['record_id'])]);
+      next[e.key] =
+          CrmLeadStatus(CrmLeadState.possibleMatch, candidateRecordIds: [
+        for (final c in crmList(e.value['candidates'])) crmStr(c['record_id'])
+      ]);
     }
     _states = next;
   }
@@ -106,7 +112,9 @@ class CrmResultsController extends ChangeNotifier {
       crmSnackOn(messenger, result.summary);
       unawaited(loadState());
       // Same reason: open the review from the page, not the (possibly gone) button.
-      final host = context.mounted ? context : (messenger != null && messenger.mounted ? messenger.context : null);
+      final host = context.mounted
+          ? context
+          : (messenger != null && messenger.mounted ? messenger.context : null);
       if (result.possibleMatches.isNotEmpty && host != null && host.mounted) {
         await review(host, result.possibleMatches.values.toList());
       }
@@ -116,7 +124,8 @@ class CrmResultsController extends ChangeNotifier {
       _progress = null;
       _adding.clear();
       _notify();
-      final retry = crmErrorKind(e) == CrmErrorKind.offline || crmErrorKind(e) == CrmErrorKind.other;
+      final retry = crmErrorKind(e) == CrmErrorKind.offline ||
+          crmErrorKind(e) == CrmErrorKind.other;
       crmSnackOn(
         messenger,
         '${crmActionError('Adding to CRM', e)}${retry ? ' Trying again is safe: nothing is added twice.' : ''}',
@@ -135,7 +144,10 @@ class CrmResultsController extends ChangeNotifier {
         _progress = 'Adding leads to CRM…';
         _notify();
         return importer.importAll(jobId, onProgress: (r) {
-          final handled = r.created.length + r.alreadyAdded.length + r.possibleMatches.length + r.rejected.length;
+          final handled = r.created.length +
+              r.alreadyAdded.length +
+              r.possibleMatches.length +
+              r.rejected.length;
           _progress = r.done
               ? null
               : 'Adding leads to CRM… ${formatCount(handled)} done, ${formatCount(r.remaining)} to go';
@@ -144,7 +156,8 @@ class CrmResultsController extends ChangeNotifier {
       });
 
   /// Review possible matches and send the decisions.
-  Future<CrmImportResult?> review(BuildContext context, List<Map<String, dynamic>> matches) async {
+  Future<CrmImportResult?> review(
+      BuildContext context, List<Map<String, dynamic>> matches) async {
     final decisions = await showCrmImportReviewDialog(context, matches);
     if (decisions == null || decisions.isEmpty || !context.mounted) return null;
     return _run(context, () => importer.resolve(jobId, decisions),
@@ -157,8 +170,10 @@ class CrmResultsController extends ChangeNotifier {
 /// Possible matches: Add new / Link to an existing record / Skip per item
 /// (Skip preselected; nothing is merged without a choice). Returns the
 /// decisions or null when cancelled.
-Future<List<Map<String, dynamic>>?> showCrmImportReviewDialog(BuildContext context, List<Map<String, dynamic>> matches) =>
-    showDialog<List<Map<String, dynamic>>>(context: context, builder: (_) => _ReviewDialog(matches: matches));
+Future<List<Map<String, dynamic>>?> showCrmImportReviewDialog(
+        BuildContext context, List<Map<String, dynamic>> matches) =>
+    showDialog<List<Map<String, dynamic>>>(
+        context: context, builder: (_) => _ReviewDialog(matches: matches));
 
 class _ReviewDialog extends StatefulWidget {
   final List<Map<String, dynamic>> matches;
@@ -171,14 +186,18 @@ class _ReviewDialog extends StatefulWidget {
 
 class _ReviewDialogState extends State<_ReviewDialog> {
   /// result id → `skip`, `add_new` or `link:RECORD_ID`.
-  late final Map<int, String> _choice = {for (final m in widget.matches) crmInt(m['result_id']): 'skip'};
+  late final Map<int, String> _choice = {
+    for (final m in widget.matches) crmInt(m['result_id']): 'skip'
+  };
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: UiTokens.card,
       title: Text(
-        widget.matches.length == 1 ? 'Possible match: review' : '${widget.matches.length} possible matches: review',
+        widget.matches.length == 1
+            ? 'Possible match: review'
+            : '${widget.matches.length} possible matches: review',
         style: const TextStyle(color: UiTokens.text),
       ),
       content: SizedBox(
@@ -191,7 +210,8 @@ class _ReviewDialogState extends State<_ReviewDialog> {
               const Text(
                 'These businesses look like records already in your CRM. Choose for each one. '
                 'Linking keeps the existing record as it is and adds this search as a source.',
-                style: TextStyle(color: UiTokens.textSecondary, fontSize: 13.5, height: 1.4),
+                style: TextStyle(
+                    color: UiTokens.textSecondary, fontSize: 13.5, height: 1.4),
               ),
               for (final m in widget.matches) _item(m),
             ],
@@ -200,7 +220,9 @@ class _ReviewDialogState extends State<_ReviewDialog> {
       ),
       actions: [
         TextButton(
-          style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
+          style: TextButton.styleFrom(
+              foregroundColor: UiTokens.accent,
+              minimumSize: const Size(48, 48)),
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Decide later'),
         ),
@@ -210,7 +232,11 @@ class _ReviewDialogState extends State<_ReviewDialog> {
             final out = <Map<String, dynamic>>[];
             _choice.forEach((id, c) {
               if (c.startsWith('link:')) {
-                out.add({'result_id': id, 'action': 'link', 'record_id': c.substring(5)});
+                out.add({
+                  'result_id': id,
+                  'action': 'link',
+                  'record_id': c.substring(5)
+                });
               } else {
                 out.add({'result_id': id, 'action': c});
               }
@@ -224,23 +250,36 @@ class _ReviewDialogState extends State<_ReviewDialog> {
   }
 
   static String? _candidateLine(Map<String, dynamic> c) {
-    final stage = c['stage'] is Map ? crmStr(crmMap(c['stage'])['name']) : crmStr(c['stage']);
-    final reasons = c['reasons'] is List ? [for (final r in c['reasons'] as List) '$r'.replaceAll('_', ' ')] : <String>[];
-    final parts = [if (stage.isNotEmpty) 'Stage: $stage', if (reasons.isNotEmpty) 'Why: ${reasons.join(', ')}'];
+    final stage = c['stage'] is Map
+        ? crmStr(crmMap(c['stage'])['name'])
+        : crmStr(c['stage']);
+    final reasons = c['reasons'] is List
+        ? [for (final r in c['reasons'] as List) '$r'.replaceAll('_', ' ')]
+        : <String>[];
+    final parts = [
+      if (stage.isNotEmpty) 'Stage: $stage',
+      if (reasons.isNotEmpty) 'Why: ${reasons.join(', ')}'
+    ];
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
   Widget _item(Map<String, dynamic> m) {
     final id = crmInt(m['result_id']);
-    final name = crmStr(m['business_name']).isEmpty ? 'Business' : crmStr(m['business_name']);
+    final name = crmStr(m['business_name']).isEmpty
+        ? 'Business'
+        : crmStr(m['business_name']);
     final candidates = crmList(m['candidates']);
-    Widget option(String value, String title, {String? subtitle}) => RadioListTile<String>(
+    Widget option(String value, String title, {String? subtitle}) =>
+        RadioListTile<String>(
           value: value,
           contentPadding: EdgeInsets.zero,
-          title: Text(title, style: const TextStyle(color: UiTokens.text, fontSize: 14)),
+          title: Text(title,
+              style: const TextStyle(color: UiTokens.text, fontSize: 14)),
           subtitle: subtitle == null
               ? null
-              : Text(subtitle, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5)),
+              : Text(subtitle,
+                  style: const TextStyle(
+                      color: UiTokens.textSecondary, fontSize: 12.5)),
         );
     return Container(
       margin: const EdgeInsets.only(top: 12),
@@ -259,7 +298,11 @@ class _ReviewDialogState extends State<_ReviewDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(name, style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w700)),
+              Text(name,
+                  style: const TextStyle(
+                      color: UiTokens.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700)),
               for (final c in candidates)
                 option(
                   'link:${crmStr(c['record_id'])}',
@@ -286,27 +329,35 @@ class CrmLeadChip extends StatelessWidget {
   final CrmResultsController controller;
   final bool compact;
 
-  const CrmLeadChip({super.key, required this.lead, required this.controller, this.compact = false});
+  const CrmLeadChip(
+      {super.key,
+      required this.lead,
+      required this.controller,
+      this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     final id = leadIdOf(lead);
     final name = crmStr(lead['business_name'] ?? lead['name']);
-    final style = TextButton.styleFrom(
+    final style = OutlinedButton.styleFrom(
       foregroundColor: UiTokens.accent,
-      minimumSize: const Size(48, 48),
+      minimumSize: Size(48, compact ? 40 : 44),
       padding: const EdgeInsets.symmetric(horizontal: 10),
       textStyle: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+      side: const BorderSide(color: UiTokens.accent),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
     );
     if (id == null) {
       return Tooltip(
-        message: "This lead isn't saved with an ID yet, so it can't be added to the CRM. Reload the search later.",
-        child: TextButton.icon(
+        message:
+            "This lead isn't saved with an ID yet, so it can't be added to the CRM. Reload the search later.",
+        child: OutlinedButton.icon(
           style: style,
           onPressed: null,
           icon: const Icon(Icons.playlist_add_rounded, size: 18),
           label: Text(compact ? 'Not saved yet' : "Can't add yet (not saved)",
-              semanticsLabel: "Can't add $name to CRM yet: this lead is not saved"),
+              semanticsLabel:
+                  "Can't add $name to CRM yet: this lead is not saved"),
         ),
       );
     }
@@ -314,33 +365,48 @@ class CrmLeadChip extends StatelessWidget {
       return const SizedBox(
         height: 48,
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2)),
           SizedBox(width: 8),
-          Text('Adding…', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+          Text('Adding…',
+              style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
         ]),
       );
     }
     final s = controller.statusOf(lead);
     switch (s.state) {
       case CrmLeadState.added:
-        return TextButton.icon(
-          style: style.copyWith(foregroundColor: const WidgetStatePropertyAll(UiTokens.completedFg)),
-          onPressed: s.recordId == null ? null : () => Navigator.of(context).pushNamed(crmRecordRoute(s.recordId!)),
+        return OutlinedButton.icon(
+          style: style.copyWith(
+              foregroundColor:
+                  const WidgetStatePropertyAll(UiTokens.completedFg)),
+          onPressed: s.recordId == null
+              ? null
+              : () =>
+                  Navigator.of(context).pushNamed(crmRecordRoute(s.recordId!)),
           icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-          label: Text(compact ? 'In CRM' : 'Already in CRM · View', semanticsLabel: '$name is in your CRM. View the record'),
+          label: Text(compact ? 'In CRM' : 'Already in CRM · View',
+              semanticsLabel: '$name is in your CRM. View the record'),
         );
       case CrmLeadState.possibleMatch:
-        return TextButton.icon(
-          style: style.copyWith(foregroundColor: const WidgetStatePropertyAll(UiTokens.partialFg)),
-          onPressed: controller.busy ? null : () => controller.addIds(context, [id]),
+        return OutlinedButton.icon(
+          style: style.copyWith(
+              foregroundColor:
+                  const WidgetStatePropertyAll(UiTokens.partialFg)),
+          onPressed:
+              controller.busy ? null : () => controller.addIds(context, [id]),
           icon: const Icon(Icons.compare_arrows_rounded, size: 18),
           label: Text(compact ? 'Review' : 'Possible match · Review',
-              semanticsLabel: '$name may already be in your CRM. Review the match'),
+              semanticsLabel:
+                  '$name may already be in your CRM. Review the match'),
         );
       case CrmLeadState.notAdded:
-        return TextButton.icon(
+        return OutlinedButton.icon(
           style: style,
-          onPressed: controller.busy ? null : () => controller.addIds(context, [id]),
+          onPressed:
+              controller.busy ? null : () => controller.addIds(context, [id]),
           icon: const Icon(Icons.playlist_add_rounded, size: 18),
           label: Text('Add to CRM', semanticsLabel: 'Add $name to CRM'),
         );
@@ -354,7 +420,8 @@ class CrmResultsStrip extends StatelessWidget {
   final CrmResultsController controller;
   final List<Map<String, dynamic>> leads;
 
-  const CrmResultsStrip({super.key, required this.controller, required this.leads});
+  const CrmResultsStrip(
+      {super.key, required this.controller, required this.leads});
 
   @override
   Widget build(BuildContext context) {
@@ -365,7 +432,8 @@ class CrmResultsStrip extends StatelessWidget {
     final parts = <String>[
       if (added != null) '${formatCount(added)} in CRM',
       if (review > 0) '${formatCount(review)} to review',
-      if (withoutId > 0) "${formatCount(withoutId)} not saved yet (can't be added)",
+      if (withoutId > 0)
+        "${formatCount(withoutId)} not saved yet (can't be added)",
     ];
     final allAdded = added != null && withId > 0 && added >= withId;
     return SearchCard(
@@ -378,23 +446,37 @@ class CrmResultsStrip extends StatelessWidget {
             runSpacing: 6,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              const ExcludeSemantics(child: Icon(Icons.view_kanban_outlined, size: 18, color: UiTokens.accent)),
-              const Text('CRM', style: TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700)),
+              const ExcludeSemantics(
+                  child: Icon(Icons.view_kanban_outlined,
+                      size: 18, color: UiTokens.accent)),
+              const Text('CRM',
+                  style: TextStyle(
+                      color: UiTokens.text, fontWeight: FontWeight.w700)),
               if (parts.isNotEmpty)
                 Semantics(
                   liveRegion: true,
-                  child: Text(parts.join(' · '), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13.5)),
+                  child: Text(parts.join(' · '),
+                      style: const TextStyle(
+                          color: UiTokens.textSecondary, fontSize: 13.5)),
                 ),
               OutlinedButton.icon(
                 style: searchSecondaryButtonStyle(),
-                onPressed: controller.busy || withId == 0 || allAdded ? null : () => controller.addAll(context),
+                onPressed: controller.busy || withId == 0 || allAdded
+                    ? null
+                    : () => controller.addAll(context),
                 icon: const Icon(Icons.playlist_add_check_rounded, size: 18),
-                label: Text(allAdded ? 'All leads are in CRM' : 'Add all to CRM',
-                    semanticsLabel: allAdded ? 'All saved leads are in your CRM' : 'Add all saved leads of this search to CRM'),
+                label: Text(
+                    allAdded ? 'All leads are in CRM' : 'Add all to CRM',
+                    semanticsLabel: allAdded
+                        ? 'All saved leads are in your CRM'
+                        : 'Add all saved leads of this search to CRM'),
               ),
               TextButton(
-                style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
-                onPressed: () => AppNav.go(context, crmSearchRoute(controller.jobId)),
+                style: TextButton.styleFrom(
+                    foregroundColor: UiTokens.accent,
+                    minimumSize: const Size(48, 48)),
+                onPressed: () =>
+                    AppNav.go(context, crmSearchRoute(controller.jobId)),
                 child: const Text('View this search in CRM'),
               ),
             ],
@@ -403,7 +485,9 @@ class CrmResultsStrip extends StatelessWidget {
             const SizedBox(height: 6),
             Semantics(
               liveRegion: true,
-              child: Text(controller.progress!, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+              child: Text(controller.progress!,
+                  style: const TextStyle(
+                      color: UiTokens.textSecondary, fontSize: 13)),
             ),
             const SizedBox(height: 4),
             const LinearProgressIndicator(minHeight: 4),
@@ -421,15 +505,20 @@ class CrmRunningSearchCard extends StatefulWidget {
   final CrmApi api;
   final int savedLeads;
 
-  const CrmRunningSearchCard({super.key, required this.jobId, required this.api, required this.savedLeads});
+  const CrmRunningSearchCard(
+      {super.key,
+      required this.jobId,
+      required this.api,
+      required this.savedLeads});
 
   @override
   State<CrmRunningSearchCard> createState() => _CrmRunningSearchCardState();
 }
 
 class _CrmRunningSearchCardState extends State<CrmRunningSearchCard> {
-  late final CrmResultsController _c = CrmResultsController(jobId: widget.jobId, api: widget.api)
-    ..addListener(_changed);
+  late final CrmResultsController _c =
+      CrmResultsController(jobId: widget.jobId, api: widget.api)
+        ..addListener(_changed);
 
   void _changed() {
     if (mounted) setState(() {});
@@ -448,23 +537,33 @@ class _CrmRunningSearchCardState extends State<CrmRunningSearchCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('CRM', style: TextStyle(color: UiTokens.text, fontSize: 17, fontWeight: FontWeight.w700)),
+          const Text('CRM',
+              style: TextStyle(
+                  color: UiTokens.text,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
           const Text(
             'You can add the leads saved so far to your CRM now. Adding does not change the search; '
             'add again later for the rest.',
-            style: TextStyle(color: UiTokens.textSecondary, fontSize: 14, height: 1.4),
+            style: TextStyle(
+                color: UiTokens.textSecondary, fontSize: 14, height: 1.4),
           ),
           const SizedBox(height: 10),
           Wrap(spacing: 8, runSpacing: 8, children: [
             OutlinedButton.icon(
               style: searchSecondaryButtonStyle(),
-              onPressed: _c.busy || widget.savedLeads == 0 ? null : () => _c.addAll(context),
+              onPressed: _c.busy || widget.savedLeads == 0
+                  ? null
+                  : () => _c.addAll(context),
               icon: const Icon(Icons.playlist_add_rounded, size: 18),
-              label: Text('Add ${plural(widget.savedLeads, 'saved lead', 'saved leads')} to CRM'),
+              label: Text(
+                  'Add ${plural(widget.savedLeads, 'saved lead', 'saved leads')} to CRM'),
             ),
             TextButton(
-              style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
+              style: TextButton.styleFrom(
+                  foregroundColor: UiTokens.accent,
+                  minimumSize: const Size(48, 48)),
               onPressed: () => AppNav.go(context, crmSearchRoute(widget.jobId)),
               child: const Text('View this search in CRM'),
             ),
@@ -472,7 +571,9 @@ class _CrmRunningSearchCardState extends State<CrmRunningSearchCard> {
           if (_c.progress != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(_c.progress!, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+              child: Text(_c.progress!,
+                  style: const TextStyle(
+                      color: UiTokens.textSecondary, fontSize: 13)),
             ),
         ],
       ),

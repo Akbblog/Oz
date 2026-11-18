@@ -10,8 +10,14 @@ import '../app_shell.dart';
 import '../search_actions.dart';
 
 export '../search_actions.dart'
-    show SearchCard, SearchNotice, showSearchSnack, searchPrimaryButtonStyle, searchSecondaryButtonStyle,
-        searchDangerTextButtonStyle, copyWithSnack;
+    show
+        SearchCard,
+        SearchNotice,
+        showSearchSnack,
+        searchPrimaryButtonStyle,
+        searchSecondaryButtonStyle,
+        searchDangerTextButtonStyle,
+        copyWithSnack;
 
 /// The CRM API of the app (from [CrmProvider]), or a fresh client.
 CrmApi crmApiOf(BuildContext context, [CrmApi? override]) =>
@@ -22,7 +28,8 @@ CrmApi crmApiOf(BuildContext context, [CrmApi? override]) =>
 void crmReplaceUrl(String route) {
   if (!kIsWeb) return;
   try {
-    SystemNavigator.routeInformationUpdated(uri: Uri.parse(route), replace: true);
+    SystemNavigator.routeInformationUpdated(
+        uri: Uri.parse(route), replace: true);
   } catch (_) {}
 }
 
@@ -36,7 +43,8 @@ void crmSnack(BuildContext context, String message, {bool error = false}) {
 /// [crmSnack] on a messenger captured before an async action, for actions
 /// whose triggering widget may be gone when they finish (e.g. a button that
 /// is swapped for a progress indicator while the action runs).
-void crmSnackOn(ScaffoldMessengerState? messenger, String message, {bool error = false}) {
+void crmSnackOn(ScaffoldMessengerState? messenger, String message,
+    {bool error = false}) {
   if (messenger == null || !messenger.mounted) return;
   messenger.hideCurrentSnackBar();
   messenger.showSnackBar(SnackBar(
@@ -47,7 +55,8 @@ void crmSnackOn(ScaffoldMessengerState? messenger, String message, {bool error =
 }
 
 /// Whether animations should be skipped (reduced motion).
-bool crmReduceMotion(BuildContext context) => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+bool crmReduceMotion(BuildContext context) =>
+    MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
 // ------------------------------------------------------------------ frame
 
@@ -96,7 +105,8 @@ class CrmSubNav extends StatelessWidget {
   Widget build(BuildContext context) {
     final due = context.watch<CrmProvider?>()?.dueCount ?? 0;
     return Container(
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: UiTokens.border))),
+      decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: UiTokens.border))),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
@@ -121,7 +131,11 @@ class _SubNavItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _SubNavItem({required this.label, required this.selected, required this.onTap, this.badge});
+  const _SubNavItem(
+      {required this.label,
+      required this.selected,
+      required this.onTap,
+      this.badge});
 
   @override
   Widget build(BuildContext context) {
@@ -137,7 +151,9 @@ class _SubNavItem extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
             border: Border(
-              bottom: BorderSide(color: selected ? UiTokens.accent : Colors.transparent, width: 3),
+              bottom: BorderSide(
+                  color: selected ? UiTokens.accent : Colors.transparent,
+                  width: 3),
             ),
           ),
           child: Row(
@@ -153,7 +169,10 @@ class _SubNavItem extends StatelessWidget {
               ),
               if (badge != null) ...[
                 const SizedBox(width: 6),
-                CrmBadge(label: badge!, fg: UiTokens.partialFg, bg: UiTokens.partialBg),
+                CrmBadge(
+                    label: badge!,
+                    fg: UiTokens.partialFg,
+                    bg: UiTokens.partialBg),
               ],
             ],
           ),
@@ -185,7 +204,8 @@ class CrmPageBody extends StatelessWidget {
 }
 
 /// Horizontal padding of CRM page content.
-EdgeInsets crmPagePadding(double width) => EdgeInsets.symmetric(horizontal: width < 600 ? 16 : 24, vertical: 16);
+EdgeInsets crmPagePadding(double width) =>
+    EdgeInsets.symmetric(horizontal: width < 600 ? 16 : 24, vertical: 16);
 
 /// Centered max-width column.
 class CrmContent extends StatelessWidget {
@@ -195,8 +215,9 @@ class CrmContent extends StatelessWidget {
   const CrmContent({super.key, required this.child, this.maxWidth = 1200});
 
   @override
-  Widget build(BuildContext context) =>
-      Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: child));
+  Widget build(BuildContext context) => Center(
+      child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth), child: child));
 }
 
 // ----------------------------------------------------------------- states
@@ -216,10 +237,17 @@ class CrmDisabledView extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text("CRM isn't available on your account yet",
-                    style: TextStyle(color: UiTokens.text, fontSize: 18, fontWeight: FontWeight.w700)),
+                    style: TextStyle(
+                        color: UiTokens.text,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
-                const Text('Your searches and leads are unaffected. CRM appears in the menu once it is turned on.',
-                    style: TextStyle(color: UiTokens.textSecondary, fontSize: 14, height: 1.4)),
+                const Text(
+                    'Your searches and leads are unaffected. CRM appears in the menu once it is turned on.',
+                    style: TextStyle(
+                        color: UiTokens.textSecondary,
+                        fontSize: 14,
+                        height: 1.4)),
                 const SizedBox(height: 14),
                 OutlinedButton(
                   style: searchSecondaryButtonStyle(),
@@ -307,7 +335,8 @@ class CrmErrorView extends StatelessWidget {
         return const CrmDisabledView();
       case CrmErrorKind.notFound:
         title = notFoundTitle ?? 'Not found';
-        body = notFoundBody ?? 'It may have been removed, or the link is not for your account.';
+        body = notFoundBody ??
+            'It may have been removed, or the link is not for your account.';
         retry = false;
         extra = OutlinedButton(
           style: searchSecondaryButtonStyle(),
@@ -331,13 +360,22 @@ class CrmErrorView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(color: UiTokens.text, fontSize: 16, fontWeight: FontWeight.w700)),
+            Text(title,
+                style: const TextStyle(
+                    color: UiTokens.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            Text(body, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 14, height: 1.4)),
+            Text(body,
+                style: const TextStyle(
+                    color: UiTokens.textSecondary, fontSize: 14, height: 1.4)),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
               if (retry && onRetry != null)
-                OutlinedButton(style: searchSecondaryButtonStyle(), onPressed: onRetry, child: const Text('Try again')),
+                OutlinedButton(
+                    style: searchSecondaryButtonStyle(),
+                    onPressed: onRetry,
+                    child: const Text('Try again')),
               if (extra != null) extra,
             ]),
           ],
@@ -370,10 +408,16 @@ class CrmEmptyView extends StatelessWidget {
         children: [
           ExcludeSemantics(child: Icon(icon, color: UiTokens.accent, size: 28)),
           const SizedBox(height: 8),
-          Text(title, style: const TextStyle(color: UiTokens.text, fontSize: 17, fontWeight: FontWeight.w700)),
+          Text(title,
+              style: const TextStyle(
+                  color: UiTokens.text,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700)),
           if (body != null) ...[
             const SizedBox(height: 6),
-            Text(body!, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 14, height: 1.4)),
+            Text(body!,
+                style: const TextStyle(
+                    color: UiTokens.textSecondary, fontSize: 14, height: 1.4)),
           ],
           if (actions.isNotEmpty) ...[
             const SizedBox(height: 14),
@@ -407,7 +451,8 @@ class CrmBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget pill = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      constraints: const BoxConstraints(minHeight: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(999),
@@ -425,7 +470,8 @@ class CrmBadge extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  color: fg, fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -445,7 +491,9 @@ class CrmOutcomeBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = crmOutcomeStyle(record['outcome'], archived: record['archived'] == true || crmStr(record['archived_at']).isNotEmpty);
+    final s = crmOutcomeStyle(record['outcome'],
+        archived: record['archived'] == true ||
+            crmStr(record['archived_at']).isNotEmpty);
     return CrmBadge(label: s.label, icon: s.icon, fg: s.fg, bg: s.bg);
   }
 }
@@ -461,7 +509,9 @@ class CrmDueBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final kind = crmDueKind(activity);
     final s = crmDueStyle(kind);
-    final due = crmWhen(kind == CrmDueKind.done ? (activity['completed_at'] ?? activity['due_at']) : activity['due_at']);
+    final due = crmWhen(kind == CrmDueKind.done
+        ? (activity['completed_at'] ?? activity['due_at'])
+        : activity['due_at']);
     final label = showTime && due != '—' ? '${s.label} · $due' : s.label;
     final parsed = DateTime.tryParse(crmStr(activity['due_at']));
     return CrmBadge(
@@ -490,7 +540,11 @@ class CrmSectionTitle extends StatelessWidget {
           Expanded(
             child: Semantics(
               header: true,
-              child: Text(title, style: const TextStyle(color: UiTokens.text, fontSize: 16, fontWeight: FontWeight.w700)),
+              child: Text(title,
+                  style: const TextStyle(
+                      color: UiTokens.text,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)),
             ),
           ),
           if (trailing != null) trailing!,
@@ -529,7 +583,9 @@ class CrmMenu<T> extends StatelessWidget {
       initialValue: value,
       onSelected: onSelected,
       itemBuilder: (_) => [
-        for (final v in values) CheckedPopupMenuItem<T>(value: v, checked: v == value, child: Text(labelOf(v))),
+        for (final v in values)
+          CheckedPopupMenuItem<T>(
+              value: v, checked: v == value, child: Text(labelOf(v))),
       ],
       child: Container(
         constraints: const BoxConstraints(minHeight: 48),
@@ -550,10 +606,14 @@ class CrmMenu<T> extends StatelessWidget {
                 child: Text(label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(
+                        color: UiTokens.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600)),
               ),
             ),
-            const Icon(Icons.arrow_drop_down_rounded, color: UiTokens.textSecondary),
+            const Icon(Icons.arrow_drop_down_rounded,
+                color: UiTokens.textSecondary),
           ],
         ),
       ),
@@ -561,7 +621,12 @@ class CrmMenu<T> extends StatelessWidget {
   }
 }
 
-InputDecoration crmInputDecoration(String label, {String? hint, String? helper, Widget? prefix, Widget? suffix, String? error}) =>
+InputDecoration crmInputDecoration(String label,
+        {String? hint,
+        String? helper,
+        Widget? prefix,
+        Widget? suffix,
+        String? error}) =>
     InputDecoration(
       isDense: true,
       labelText: label,
@@ -578,15 +643,20 @@ InputDecoration crmInputDecoration(String label, {String? hint, String? helper, 
       filled: true,
       fillColor: UiTokens.background,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
-      enabledBorder:
-          OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
-      focusedBorder:
-          OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.accent, width: 2)),
+      border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: UiTokens.border)),
+      enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: UiTokens.border)),
+      focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: UiTokens.accent, width: 2)),
     );
 
 /// Dark dialog with consistent buttons.
-Future<T?> showCrmDialog<T>(BuildContext context, {required WidgetBuilder builder}) =>
+Future<T?> showCrmDialog<T>(BuildContext context,
+        {required WidgetBuilder builder}) =>
     showDialog<T>(context: context, builder: builder);
 
 /// Simple confirm dialog.
@@ -603,17 +673,22 @@ Future<bool> crmConfirm(
     builder: (dialogContext) => AlertDialog(
       backgroundColor: UiTokens.card,
       title: Text(title, style: const TextStyle(color: UiTokens.text)),
-      content: Text(body, style: const TextStyle(color: UiTokens.textSecondary, height: 1.4)),
+      content: Text(body,
+          style: const TextStyle(color: UiTokens.textSecondary, height: 1.4)),
       actions: [
         TextButton(
-          style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48)),
+          style: TextButton.styleFrom(
+              foregroundColor: UiTokens.accent,
+              minimumSize: const Size(48, 48)),
           onPressed: () => Navigator.of(dialogContext).pop(false),
           child: Text(cancelLabel),
         ),
         FilledButton(
           style: danger
               ? FilledButton.styleFrom(
-                  backgroundColor: UiTokens.failedFg, foregroundColor: Colors.black, minimumSize: const Size(48, 48))
+                  backgroundColor: UiTokens.failedFg,
+                  foregroundColor: Colors.black,
+                  minimumSize: const Size(48, 48))
               : searchPrimaryButtonStyle(),
           onPressed: () => Navigator.of(dialogContext).pop(true),
           child: Text(confirmLabel),
