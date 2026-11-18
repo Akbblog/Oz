@@ -120,6 +120,20 @@ void main() {
       expect(r.calls, ['call:+974 4400 005', 'email:hi@biz5.qa', 'maps:Biz 5']);
     });
 
+    testWidgets('pressing and holding a phone or email copies that exact value', (tester) async {
+      final r = _Recorder();
+      await _pump(
+        tester,
+        Scaffold(body: LeadCard(lead: _lead(5, extra: {'email': 'hi@biz5.qa'}), selected: false,
+          onSelected: (_) {}, actions: r.actions)),
+      );
+      await tester.longPress(find.text('+974 4400 005'));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('hi@biz5.qa'));
+      await tester.pumpAndSettle();
+      expect(r.calls, ['copy:phone:+974 4400 005', 'copy:email:hi@biz5.qa']);
+    });
+
     testWidgets('absent contacts are not shown as dead buttons', (tester) async {
       final r = _Recorder();
       await _pump(

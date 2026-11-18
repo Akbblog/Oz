@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
@@ -173,9 +174,7 @@ class _SidebarItem extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               // Selection is shown by shape too (left bar), not colour alone.
-              border: selected
-                  ? const Border(left: BorderSide(color: UiTokens.accent, width: 3))
-                  : null,
+              border: selected ? const Border(left: BorderSide(color: UiTokens.accent, width: 3)) : null,
             ),
             child: Row(
               children: [
@@ -331,9 +330,7 @@ class _RailItem extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
-              border: selected
-                  ? const Border(left: BorderSide(color: UiTokens.accent, width: 3))
-                  : null,
+              border: selected ? const Border(left: BorderSide(color: UiTokens.accent, width: 3)) : null,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -391,13 +388,12 @@ class PhoneBottomBar extends StatelessWidget {
       for (final d in ShellDestinations.phoneFor(crmEnabled: crm.enabled)) {
         final isCrm = d.section == ShellSection.crm;
         items.add(_BottomItem(
-          icon: d.section == section ? d.selectedIcon : d.icon,
+          iconAsset: 'assets/nav/${d.section.name}.svg',
           label: d.phoneLabel,
           selected: d.section == section,
           emphasised: d.section == ShellSection.find,
-          badge: d.section == ShellSection.searches && live > 0
-              ? '$live'
-              : (isCrm && crm.due > 0 ? '${crm.due}' : null),
+          badge:
+              d.section == ShellSection.searches && live > 0 ? '$live' : (isCrm && crm.due > 0 ? '${crm.due}' : null),
           badgeColor: isCrm ? UiTokens.partialFg : UiTokens.searchingFg,
           semanticsSuffix: d.section == ShellSection.searches && live > 0
               ? '$live live'
@@ -408,14 +404,14 @@ class PhoneBottomBar extends StatelessWidget {
     } else {
       const d = ShellDestinations.find;
       items.add(_BottomItem(
-        icon: d.icon,
+        iconAsset: 'assets/nav/find.svg',
         label: d.phoneLabel,
         selected: section == ShellSection.find,
         emphasised: true,
         onTap: () => AppNav.go(context, d.route),
       ));
       items.add(_BottomItem(
-        icon: Icons.login_rounded,
+        iconAsset: 'assets/nav/account.svg',
         label: 'Sign in',
         selected: false,
         onTap: () => AppNav.signIn(context),
@@ -441,7 +437,7 @@ class PhoneBottomBar extends StatelessWidget {
 }
 
 class _BottomItem extends StatelessWidget {
-  final IconData icon;
+  final String iconAsset;
   final String label;
   final bool selected;
   final bool emphasised;
@@ -451,7 +447,7 @@ class _BottomItem extends StatelessWidget {
   final VoidCallback onTap;
 
   const _BottomItem({
-    required this.icon,
+    required this.iconAsset,
     required this.label,
     required this.selected,
     required this.onTap,
@@ -464,7 +460,12 @@ class _BottomItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fg = selected ? Colors.white : UiTokens.textSecondary;
-    Widget iconWidget = Icon(icon, size: 22, color: emphasised ? Colors.white : fg);
+    Widget iconWidget = SvgPicture.asset(
+      iconAsset,
+      width: 22,
+      height: 22,
+      colorFilter: ColorFilter.mode(emphasised ? Colors.white : fg, BlendMode.srcIn),
+    );
     if (emphasised) {
       iconWidget = Container(
         width: 40,

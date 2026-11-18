@@ -96,7 +96,8 @@ String leadsToClipboardText(Iterable<Map<String, dynamic>> leads) {
     final lines = <String>[
       leadName(l),
       if (_has(l['category']) || leadCityLabel(l).isNotEmpty)
-        [if (_has(l['category'])) '${l['category']}'.trim(), if (leadCityLabel(l).isNotEmpty) leadCityLabel(l)].join(' · '),
+        [if (_has(l['category'])) '${l['category']}'.trim(), if (leadCityLabel(l).isNotEmpty) leadCityLabel(l)]
+            .join(' · '),
       if (_has(l['phone'])) 'Phone: ${'${l['phone']}'.trim()}',
       if (_has(l['email'])) 'Email: ${'${l['email']}'.trim()}',
       if (_has(l['website'])) 'Website: ${'${l['website']}'.trim()}',
@@ -467,7 +468,9 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
 
   Future<void> _exportJson(List<Map<String, dynamic>> leads, String suffix) async {
     if (leads.isEmpty) return;
-    final clean = leads.map((l) => {for (final c in leadCsvColumns) c: l[c] ?? (c == 'business_name' ? l['name'] : null)}).toList();
+    final clean = leads
+        .map((l) => {for (final c in leadCsvColumns) c: l[c] ?? (c == 'business_name' ? l['name'] : null)})
+        .toList();
     await saveJson(jsonEncode(clean), '${_fileBase}_${suffix}_${fileTimestamp()}', context: context);
   }
 
@@ -806,8 +809,10 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
         filled: true,
         fillColor: UiTokens.background,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: UiTokens.border)),
       ),
     );
 
@@ -942,7 +947,8 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
                       minimumSize: const Size(48, 48),
                     ),
                     segments: const [
-                      ButtonSegment(value: false, icon: Icon(Icons.view_agenda_outlined, size: 18), label: Text('Cards')),
+                      ButtonSegment(
+                          value: false, icon: Icon(Icons.view_agenda_outlined, size: 18), label: Text('Cards')),
                       ButtonSegment(value: true, icon: Icon(Icons.table_rows_outlined, size: 18), label: Text('Table')),
                     ],
                     selected: {_table},
@@ -1029,26 +1035,30 @@ class _ResultsScreenState extends State<ResultsScreen> with AutomaticKeepAliveCl
             children: [
               Semantics(
                 liveRegion: true,
-                child: Text(summary, style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
+                child: Text(summary,
+                    style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w700, fontSize: 14)),
               ),
               if (_crm != null) ..._crmSelectionActions(selected, compact),
               OutlinedButton.icon(
                 style: buttonStyle,
                 onPressed: () => _exportCsv(_selectedLeads(), 'selected'),
                 icon: const Icon(Icons.download_rounded, size: 18),
-                label: Text('Export CSV', semanticsLabel: 'Export ${plural(selected, 'selected lead', 'selected leads')} as CSV'),
+                label: Text('Export CSV',
+                    semanticsLabel: 'Export ${plural(selected, 'selected lead', 'selected leads')} as CSV'),
               ),
               OutlinedButton.icon(
                 style: buttonStyle,
                 onPressed: () => _exportJson(_selectedLeads(), 'selected'),
                 icon: const Icon(Icons.data_object_rounded, size: 18),
-                label: Text('Export JSON', semanticsLabel: 'Export ${plural(selected, 'selected lead', 'selected leads')} as JSON'),
+                label: Text('Export JSON',
+                    semanticsLabel: 'Export ${plural(selected, 'selected lead', 'selected leads')} as JSON'),
               ),
               OutlinedButton.icon(
                 style: buttonStyle,
                 onPressed: () => _copyLeads(_selectedLeads()),
                 icon: const Icon(Icons.content_copy_rounded, size: 18),
-                label: Text('Copy', semanticsLabel: 'Copy details of ${plural(selected, 'selected lead', 'selected leads')}'),
+                label: Text('Copy',
+                    semanticsLabel: 'Copy details of ${plural(selected, 'selected lead', 'selected leads')}'),
               ),
               if (shownSelected < visibleLeads.length)
                 TextButton(
@@ -1278,7 +1288,9 @@ class _SelectShownCheckbox extends StatelessWidget {
   Widget build(BuildContext context) {
     // Tapping a partly selected box selects all shown (not none).
     void change() => onChanged(state != true);
-    final label = state == true ? 'Deselect ${plural(count, 'shown lead', 'shown leads')}' : 'Select ${plural(count, 'shown lead', 'shown leads')}';
+    final label = state == true
+        ? 'Deselect ${plural(count, 'shown lead', 'shown leads')}'
+        : 'Select ${plural(count, 'shown lead', 'shown leads')}';
     final box = Checkbox(
       tristate: true,
       value: state,
@@ -1303,7 +1315,8 @@ class _SelectShownCheckbox extends StatelessWidget {
               Flexible(
                 child: Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: Text(label, style: const TextStyle(color: UiTokens.accent, fontSize: 14, fontWeight: FontWeight.w600)),
+                  child: Text(label,
+                      style: const TextStyle(color: UiTokens.accent, fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -1379,7 +1392,8 @@ class LeadActionButtons extends StatelessWidget {
     }) {
       if (compact) {
         return IconButton(
-          style: IconButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48), padding: EdgeInsets.zero)
+          style: IconButton.styleFrom(
+                  foregroundColor: UiTokens.accent, minimumSize: const Size(48, 48), padding: EdgeInsets.zero)
               .copyWith(side: _leadActionStyle().side),
           tooltip: semantics,
           onPressed: onPressed,
@@ -1476,7 +1490,8 @@ class _CopyMenu extends StatelessWidget {
         final semantics = 'Copy details of $name';
         if (compact) {
           return IconButton(
-            style: IconButton.styleFrom(foregroundColor: UiTokens.textSecondary, minimumSize: const Size(48, 48), padding: EdgeInsets.zero)
+            style: IconButton.styleFrom(
+                    foregroundColor: UiTokens.textSecondary, minimumSize: const Size(48, 48), padding: EdgeInsets.zero)
                 .copyWith(side: _leadActionStyle().side),
             tooltip: semantics,
             onPressed: toggle,
@@ -1658,15 +1673,15 @@ class LeadCard extends StatelessWidget {
     final meta = [if (_has(category)) bidiIsolate(category), if (city.isNotEmpty) bidiIsolate(city)].join(' · ');
 
     Widget line(IconData icon, Widget child) => Padding(
-          padding: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.only(top: 6),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: ExcludeSemantics(child: Icon(icon, size: 15, color: UiTokens.textSecondary)),
+                padding: const EdgeInsets.only(top: 1),
+                child: ExcludeSemantics(child: Icon(icon, size: 16, color: UiTokens.textSecondary)),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 9),
               Expanded(child: child),
             ],
           ),
@@ -1678,7 +1693,7 @@ class LeadCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           textDirection: TextDirection.ltr,
           semanticsLabel: semantics,
-          style: TextStyle(color: color, fontSize: 13.5),
+          style: TextStyle(color: color, fontSize: 13, height: 1.25),
         );
 
     return Container(
@@ -1687,7 +1702,7 @@ class LeadCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(UiTokens.radius),
         border: Border.all(color: selected ? UiTokens.accent : UiTokens.border),
       ),
-      padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+      padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1705,7 +1720,7 @@ class LeadCard extends StatelessWidget {
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.only(top: 4),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1733,14 +1748,43 @@ class LeadCard extends StatelessWidget {
                           ),
                         ),
                       if (_has(phone))
-                        line(Icons.call_outlined, plain(phone, color: UiTokens.text, semantics: 'Phone $phone')),
-                      if (_has(email)) line(Icons.email_outlined, plain(email, semantics: 'Email $email')),
+                        line(
+                            Icons.call_outlined,
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onLongPress: () => actions.copy(phone, 'phone'),
+                              child:
+                                  plain(phone, color: UiTokens.text, semantics: 'Phone $phone. Press and hold to copy'),
+                            )),
+                      if (_has(email))
+                        line(
+                            Icons.email_outlined,
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onLongPress: () => actions.copy(email, 'email'),
+                              child: plain(email, semantics: 'Email $email. Press and hold to copy'),
+                            )),
                       if (canOpenWebsite)
                         Padding(
-                          padding: const EdgeInsets.only(top: 2),
+                          padding: const EdgeInsets.only(top: 6),
                           child: Align(
                             alignment: AlignmentDirectional.centerStart,
-                            child: LeadWebsiteLink(website: website, onOpen: actions.website, showIcon: true),
+                            child: InkWell(
+                              onTap: () => actions.website(website),
+                              borderRadius: BorderRadius.circular(4),
+                              child: Row(children: [
+                                const Icon(Icons.language_rounded, size: 16, color: UiTokens.textSecondary),
+                                const SizedBox(width: 9),
+                                Expanded(
+                                    child: Text(displayWebsite(website),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            color: UiTokens.accent,
+                                            fontSize: 13,
+                                            decoration: TextDecoration.underline))),
+                              ]),
+                            ),
                           ),
                         ),
                       if (_has(address)) line(Icons.place_outlined, LeadAddressText(address: address)),
@@ -1758,13 +1802,15 @@ class LeadCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          const Divider(height: 1, color: UiTokens.border),
           Padding(
-            padding: const EdgeInsets.only(left: 4, top: 2),
+            padding: const EdgeInsets.only(left: 44, top: 2),
             child: LeadActionButtons(lead: lead, actions: actions),
           ),
           if (footer != null)
             Padding(
-              padding: const EdgeInsets.only(left: 4),
+              padding: const EdgeInsets.only(left: 44),
               child: Align(alignment: AlignmentDirectional.centerStart, child: footer!),
             ),
         ],

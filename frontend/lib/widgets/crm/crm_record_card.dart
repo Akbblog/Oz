@@ -94,7 +94,8 @@ class CrmRecordCard extends StatelessWidget {
       if (showStage && stage.isNotEmpty) 'stage $stage',
       if (outcome == 'won' || outcome == 'lost' || archived) crmOutcomeStyle(outcome, archived: archived).label,
       if (place.isNotEmpty) place,
-      if (next != null) '${crmDueStyle(crmDueKind(next)).label}: ${crmStr(next['subject'])}, ${crmWhen(next['due_at'])}',
+      if (next != null)
+        '${crmDueStyle(crmDueKind(next)).label}: ${crmStr(next['subject'])}, ${crmWhen(next['due_at'])}',
       if (next == null) 'No next activity',
       if (value.isNotEmpty) value,
     ].join(', ');
@@ -121,17 +122,25 @@ class CrmRecordCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(UiTokens.radius),
                     onTap: onOpen,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                      padding: const EdgeInsets.fromLTRB(14, 12, 4, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: UiTokens.text, fontSize: 14.5, fontWeight: FontWeight.w700)),
+                          Row(children: [
+                            Expanded(
+                                child: Text(title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: UiTokens.text,
+                                        fontSize: 15.5,
+                                        height: 1.25,
+                                        fontWeight: FontWeight.w700))),
+                            const Icon(Icons.chevron_right_rounded, size: 18, color: UiTokens.textSecondary),
+                          ]),
                           if (place.isNotEmpty || (showStage && stage.isNotEmpty))
                             Padding(
-                              padding: const EdgeInsets.only(top: 2),
+                              padding: const EdgeInsets.only(top: 4),
                               child: Text(
                                 [if (showStage && stage.isNotEmpty) stage, if (place.isNotEmpty) place].join(' · '),
                                 maxLines: 1,
@@ -144,12 +153,16 @@ class CrmRecordCard extends StatelessWidget {
                               padding: const EdgeInsets.only(top: 6),
                               child: Wrap(spacing: 4, runSpacing: 4, children: [
                                 if (outcome == 'won' || outcome == 'lost' || archived) CrmOutcomeBadge(record: record),
-                                for (final t in tags.take(2)) CrmBadge(label: crmStr(t['name']), icon: Icons.sell_outlined),
+                                for (final t in tags.take(2))
+                                  CrmBadge(label: crmStr(t['name']), icon: Icons.sell_outlined),
                                 if (tags.length > 2) CrmBadge(label: '+${tags.length - 2}'),
                                 if (sources > 1) CrmBadge(label: 'Found in $sources searches'),
                               ]),
                             ),
-                          const SizedBox(height: 6),
+                          const Padding(
+                            padding: EdgeInsets.only(top: 10, bottom: 8),
+                            child: Divider(height: 1, color: UiTokens.border),
+                          ),
                           if (next != null)
                             Wrap(
                               spacing: 6,
@@ -174,7 +187,7 @@ class CrmRecordCard extends StatelessWidget {
                             ]),
                           if (hint != null || value.isNotEmpty)
                             Padding(
-                              padding: const EdgeInsets.only(top: 6),
+                              padding: const EdgeInsets.only(top: 7),
                               child: Row(
                                 children: [
                                   if (hint != null) ...[
@@ -207,7 +220,8 @@ class CrmRecordCard extends StatelessWidget {
                     ? const SizedBox(
                         width: 48,
                         height: 48,
-                        child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+                        child: Center(
+                            child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
                       )
                     : CrmMoveToStageMenu(record: record, stages: stages, onMove: onMove!),
             ],

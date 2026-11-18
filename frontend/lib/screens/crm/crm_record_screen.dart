@@ -46,7 +46,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
   // Business ("your details") form.
   bool _editBusiness = false;
   final Map<String, TextEditingController> _biz = {
-    for (final k in ['title', 'phone', 'email', 'website', 'address', 'city', 'region', 'country']) k: TextEditingController(),
+    for (final k in ['title', 'phone', 'email', 'website', 'address', 'city', 'region', 'country'])
+      k: TextEditingController(),
   };
   final Map<String, String?> _bizErrors = {};
 
@@ -275,7 +276,9 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         _id,
         {
           'title': _biz['title']!.text.trim(),
-          'company': {for (final k in ['phone', 'email', 'website', 'address', 'city', 'region', 'country']) k: v(k)},
+          'company': {
+            for (final k in ['phone', 'email', 'website', 'address', 'city', 'region', 'country']) k: v(k)
+          },
         },
         version: _version,
       ),
@@ -383,7 +386,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
     if (input == null || !mounted) return;
     await _run(
       'Scheduling',
-      () => _api.scheduleActivity(_id, type: input.type, subject: input.subject, dueAtUtc: input.dueAtUtc, notes: input.notes),
+      () => _api.scheduleActivity(_id,
+          type: input.type, subject: input.subject, dueAtUtc: input.dueAtUtc, notes: input.notes),
       done: 'Activity scheduled.',
     );
   }
@@ -393,7 +397,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
     if (input == null || !mounted) return;
     await _run(
       'Rescheduling',
-      () => _api.updateActivity(crmStr(a['id']), {'subject': input.subject, 'due_at': input.dueAtUtc, 'notes': input.notes}),
+      () => _api
+          .updateActivity(crmStr(a['id']), {'subject': input.subject, 'due_at': input.dueAtUtc, 'notes': input.notes}),
       done: 'Activity rescheduled.',
     );
   }
@@ -429,10 +434,13 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
     if (_loadingEvents) return;
     setState(() => _loadingEvents = true);
     try {
-      final cursor = _eventsCursor ?? (crmStr(_r['events_next_cursor']).isEmpty ? null : crmStr(_r['events_next_cursor']));
+      final cursor =
+          _eventsCursor ?? (crmStr(_r['events_next_cursor']).isEmpty ? null : crmStr(_r['events_next_cursor']));
       final page = await _api.getEvents(_id, cursor: cursor);
       if (!mounted) return;
-      final seen = {for (final e in [...crmList(_r['events']), ..._olderEvents]) crmStr(e['id'])};
+      final seen = {
+        for (final e in [...crmList(_r['events']), ..._olderEvents]) crmStr(e['id'])
+      };
       final fresh = page.items.where((e) => !seen.contains(crmStr(e['id']))).toList();
       setState(() {
         _olderEvents = [..._olderEvents, ...fresh];
@@ -553,7 +561,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
           children: [
             Expanded(
               flex: 3,
-              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [activities, gap, notes, gap, history]),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch, children: [activities, gap, notes, gap, history]),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -594,6 +603,7 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
     final stageId = crmStr(crmMap(_r['stage'])['id']);
     final isLead = crmStr(_r['type']) != 'opportunity';
     final busy = _busy != null;
+    final narrow = MediaQuery.sizeOf(context).width < 600;
 
     final stageSelector = _open && !_archived && openStages.isNotEmpty
         ? Container(
@@ -641,7 +651,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         ),
       if (_open && !_archived)
         OutlinedButton.icon(
-          style: searchSecondaryButtonStyle().copyWith(foregroundColor: const WidgetStatePropertyAll(UiTokens.failedFg)),
+          style:
+              searchSecondaryButtonStyle().copyWith(foregroundColor: const WidgetStatePropertyAll(UiTokens.failedFg)),
           onPressed: busy ? null : _lost,
           icon: const Icon(Icons.do_not_disturb_on_outlined, size: 18),
           label: const Text('Mark lost…'),
@@ -667,7 +678,9 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
           enabled: !busy,
           onSelected: (v) {
             if (v == 'archive') _archive();
-            if (v == 'copy') copyWithSnack(context, Uri.base.resolve(crmRecordRoute(_id)).toString(), message: 'Link copied');
+            if (v == 'copy') {
+              copyWithSnack(context, Uri.base.resolve(crmRecordRoute(_id)).toString(), message: 'Link copied');
+            }
           },
           itemBuilder: (_) => const [
             PopupMenuItem(value: 'copy', child: Text('Copy link')),
@@ -691,8 +704,11 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         children: [
           Wrap(spacing: 6, runSpacing: 6, children: [
             CrmOutcomeBadge(record: _r),
-            CrmBadge(label: crmTypeName(_r['type']), icon: isLead ? Icons.person_search_outlined : Icons.trending_up_rounded),
-            if (crmStageName(_r).isNotEmpty) CrmBadge(label: crmStageName(_r), icon: Icons.view_column_outlined),
+            CrmBadge(
+                label: crmTypeName(_r['type']),
+                icon: isLead ? Icons.person_search_outlined : Icons.trending_up_rounded),
+            if (stageSelector == null && crmStageName(_r).isNotEmpty)
+              CrmBadge(label: crmStageName(_r), icon: Icons.view_column_outlined),
           ]),
           const SizedBox(height: 10),
           Semantics(
@@ -731,10 +747,27 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
           if (!_open && !_archived)
             const Padding(
               padding: EdgeInsets.only(top: 4),
-              child: Text('Reopen it to change the stage.', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+              child:
+                  Text('Reopen it to change the stage.', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
             ),
-          const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+          const SizedBox(height: 14),
+          if (narrow && _open && !_archived)
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (stageSelector != null) stageSelector,
+              if (isLead) ...[
+                const SizedBox(height: 8),
+                actions[stageSelector == null ? 0 : 1],
+              ],
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: actions[(stageSelector == null ? 0 : 1) + (isLead ? 1 : 0)]),
+                const SizedBox(width: 8),
+                Expanded(child: actions[(stageSelector == null ? 0 : 1) + (isLead ? 2 : 1)]),
+              ]),
+              Align(alignment: AlignmentDirectional.centerEnd, child: actions.last),
+            ])
+          else
+            Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
           if (_busy != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -771,8 +804,14 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         children: [
           const CrmSectionTitle('Next action'),
           if (next == null) ...[
-            const Text('No next activity is planned.', style: TextStyle(color: UiTokens.textSecondary, fontSize: 14)),
-            const SizedBox(height: 10),
+            const Row(children: [
+              Icon(Icons.event_available_outlined, size: 17, color: UiTokens.textSecondary),
+              SizedBox(width: 8),
+              Expanded(
+                  child: Text('No next activity is planned.',
+                      style: TextStyle(color: UiTokens.textSecondary, fontSize: 13.5))),
+            ]),
+            const SizedBox(height: 8),
             FilledButton.icon(
               style: searchPrimaryButtonStyle(),
               onPressed: _busy == null ? _schedule : null,
@@ -800,7 +839,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 2, right: 8),
-                child: ExcludeSemantics(child: Icon(crmActivityIcon(a['type']), size: 18, color: UiTokens.textSecondary)),
+                child:
+                    ExcludeSemantics(child: Icon(crmActivityIcon(a['type']), size: 18, color: UiTokens.textSecondary)),
               ),
               Expanded(
                 child: Column(
@@ -819,7 +859,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                     if (crmStr(a['notes']).isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
-                        child: Text(crmStr(a['notes']), style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+                        child: Text(crmStr(a['notes']),
+                            style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
                       ),
                     if (done && crmStr(a['outcome']).isNotEmpty)
                       Padding(
@@ -960,7 +1001,10 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                 },
                 child: const Text('Cancel'),
               ),
-              FilledButton(style: searchPrimaryButtonStyle(), onPressed: _busy == null ? _saveNoteEdit : null, child: const Text('Save')),
+              FilledButton(
+                  style: searchPrimaryButtonStyle(),
+                  onPressed: _busy == null ? _saveNoteEdit : null,
+                  child: const Text('Save')),
             ]),
           ] else
             SelectableText(crmStr(n['body']), style: const TextStyle(color: UiTokens.text, fontSize: 14, height: 1.4)),
@@ -997,28 +1041,50 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
     );
   }
 
-  Widget _row(String label, String value, {Widget? action}) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 96,
-              child: Text(label, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
-            ),
-            Expanded(
-              child: Text(value.isEmpty ? 'Not set' : value,
-                  style: TextStyle(color: value.isEmpty ? UiTokens.textMuted : UiTokens.text, fontSize: 13.5)),
-            ),
+  Widget _row(String label, String value, {Widget? action}) {
+    final text = Text(value.isEmpty ? 'Not set' : value,
+        style: TextStyle(color: value.isEmpty ? UiTokens.textMuted : UiTokens.text, fontSize: 13.5, height: 1.3));
+    final copyable = value.isNotEmpty && (label == 'Phone' || label == 'Email');
+    final content = copyable
+        ? GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onLongPress: () => copyWithSnack(context, value, message: '$label copied'),
+            child: Semantics(hint: 'Press and hold to copy $label', child: text),
+          )
+        : text;
+    final narrow = MediaQuery.sizeOf(context).width < 600;
+    if (narrow && (label == 'Email' || label == 'Website' || label == 'Address')) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Expanded(child: Text(label, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12))),
             if (action != null) action,
-          ],
-        ),
+          ]),
+          const SizedBox(height: 2),
+          content,
+        ]),
       );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+            width: narrow ? 70 : 96,
+            child: Text(label, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13))),
+        Expanded(child: content),
+        if (action != null) action,
+      ]),
+    );
+  }
 
   Widget _openButton(String label, Uri? uri, String what) => uri == null
       ? const SizedBox.shrink()
       : TextButton(
-          style: TextButton.styleFrom(foregroundColor: UiTokens.accent, minimumSize: const Size(48, 36), padding: const EdgeInsets.symmetric(horizontal: 8)),
+          style: TextButton.styleFrom(
+              foregroundColor: UiTokens.accent,
+              minimumSize: const Size(48, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 8)),
           onPressed: () => _launch(uri, what),
           child: Text(label, semanticsLabel: '$label $what'),
         );
@@ -1077,14 +1143,22 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                 onPressed: () => setState(() => _editBusiness = false),
                 child: const Text('Cancel'),
               ),
-              FilledButton(style: searchPrimaryButtonStyle(), onPressed: busy ? null : _saveBusiness, child: const Text('Save details')),
+              FilledButton(
+                  style: searchPrimaryButtonStyle(),
+                  onPressed: busy ? null : _saveBusiness,
+                  child: const Text('Save details')),
             ]),
           ] else ...[
-            const Text('Your details', style: TextStyle(color: UiTokens.text, fontSize: 13.5, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
+            const Text('Your details',
+                style: TextStyle(color: UiTokens.text, fontSize: 13.5, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
             _row('Name', crmStr(c['name'])),
-            _row('Phone', phone, action: phone.isEmpty ? null : _openButton('Call', Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[^\d+]'), '')), phone)),
-            _row('Email', email, action: email.isEmpty ? null : _openButton('Email', Uri(scheme: 'mailto', path: email), email)),
+            _row('Phone', phone,
+                action: phone.isEmpty
+                    ? null
+                    : _openButton('Call', Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[^\d+]'), '')), phone)),
+            _row('Email', email,
+                action: email.isEmpty ? null : _openButton('Email', Uri(scheme: 'mailto', path: email), email)),
             _row('Website', site, action: _openButton('Open', _web(site), 'website')),
             _row('Address', crmStr(c['address']), action: _openButton('Map', _web(maps), 'in Google Maps')),
             _row('Place', crmPlace(c)),
@@ -1095,7 +1169,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
               const Icon(Icons.travel_explore_rounded, size: 16, color: UiTokens.textSecondary),
               const SizedBox(width: 6),
               const Expanded(
-                child: Text('Found online', style: TextStyle(color: UiTokens.text, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                child: Text('Found online',
+                    style: TextStyle(color: UiTokens.text, fontSize: 13.5, fontWeight: FontWeight.w700)),
               ),
             ]),
             const Padding(
@@ -1189,7 +1264,10 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                 onPressed: () => setState(() => _editDeal = false),
                 child: const Text('Cancel'),
               ),
-              FilledButton(style: searchPrimaryButtonStyle(), onPressed: busy ? null : _saveDeal, child: const Text('Save deal')),
+              FilledButton(
+                  style: searchPrimaryButtonStyle(),
+                  onPressed: busy ? null : _saveDeal,
+                  child: const Text('Save deal')),
             ]),
           ] else ...[
             _row('Value', value),
@@ -1240,11 +1318,15 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                            Text(crmStr(p['name']), style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w600)),
-                            if (p['is_primary'] == true) const CrmBadge(label: 'Primary', icon: Icons.star_outline_rounded),
+                            Text(crmStr(p['name']),
+                                style: const TextStyle(color: UiTokens.text, fontWeight: FontWeight.w600)),
+                            if (p['is_primary'] == true)
+                              const CrmBadge(label: 'Primary', icon: Icons.star_outline_rounded),
                           ]),
                           Text(
-                            [crmStr(p['role']), crmStr(p['phone']), crmStr(p['email'])].where((s) => s.isNotEmpty).join(' · '),
+                            [crmStr(p['role']), crmStr(p['phone']), crmStr(p['email'])]
+                                .where((s) => s.isNotEmpty)
+                                .join(' · '),
                             style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13),
                           ),
                         ],
@@ -1318,7 +1400,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
                     ].where((x) => x.isNotEmpty).join(' · '),
                     style: const TextStyle(color: UiTokens.text, fontSize: 13.5, fontWeight: FontWeight.w600),
                   ),
-                  Text('Added ${crmWhen(s['imported_at'])}', style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5)),
+                  Text('Added ${crmWhen(s['imported_at'])}',
+                      style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5)),
                   if (s['available'] == false || crmStr(s['job_id']).isEmpty)
                     const Padding(
                       padding: EdgeInsets.only(top: 2),
@@ -1350,7 +1433,8 @@ class _CrmRecordScreenState extends State<CrmRecordScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const CrmSectionTitle('History'),
-          if (events.isEmpty) const Text('No history yet.', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13.5)),
+          if (events.isEmpty)
+            const Text('No history yet.', style: TextStyle(color: UiTokens.textSecondary, fontSize: 13.5)),
           for (final e in events)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
