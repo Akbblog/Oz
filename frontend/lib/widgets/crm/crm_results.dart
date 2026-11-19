@@ -131,7 +131,7 @@ class CrmResultsController extends ChangeNotifier {
           crmErrorKind(e) == CrmErrorKind.other;
       crmSnackOn(
         messenger,
-        '${crmActionError('Adding to CRM', e)}${retry ? ' Try again to continue; leads already added will not be duplicated.' : ''}',
+        '${crmActionError('Adding to CRM', e)}${retry ? ' Trying again is safe: leads already added will not be duplicated.' : ''}',
         error: true,
       );
       return null;
