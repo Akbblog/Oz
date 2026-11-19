@@ -31,14 +31,16 @@ class CrmMoveToStageMenu extends StatelessWidget {
       enabled: enabled && stages.isNotEmpty,
       color: UiTokens.card,
       onSelected: (id) {
-        final stage = stages.firstWhere((s) => crmStr(s['id']) == id, orElse: () => const {});
+        final stage = stages.firstWhere((s) => crmStr(s['id']) == id,
+            orElse: () => const {});
         if (stage.isNotEmpty) onMove(stage);
       },
       itemBuilder: (_) => [
         PopupMenuItem<String>(
           enabled: false,
           height: 36,
-          child: Text('Move to stage', style: TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+          child: Text('Move to stage',
+              style: TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
         ),
         for (final s in stages)
           CheckedPopupMenuItem<String>(
@@ -51,7 +53,8 @@ class CrmMoveToStageMenu extends StatelessWidget {
       child: Container(
         constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
         alignment: Alignment.center,
-        child: const Icon(Icons.drive_file_move_outlined, size: 20, color: UiTokens.accent),
+        child: const Icon(Icons.drive_file_move_outlined,
+            size: 20, color: UiTokens.accent),
       ),
     );
   }
@@ -63,6 +66,7 @@ class CrmRecordCard extends StatelessWidget {
   final List<Map<String, dynamic>> stages;
   final VoidCallback onOpen;
   final ValueChanged<Map<String, dynamic>>? onMove;
+  final VoidCallback? onDelete;
   final bool busy;
   final bool showStage;
 
@@ -72,6 +76,7 @@ class CrmRecordCard extends StatelessWidget {
     required this.stages,
     required this.onOpen,
     this.onMove,
+    this.onDelete,
     this.busy = false,
     this.showStage = false,
   });
@@ -83,17 +88,24 @@ class CrmRecordCard extends StatelessWidget {
     if (context.mounted) crmSnack(context, "Couldn't open $label", error: true);
   }
 
-  Widget _contactAction(BuildContext context, IconData icon, String label, VoidCallback action) =>
-      TextButton.icon(
+  Widget _contactAction(IconData icon, String label, VoidCallback action) =>
+      TextButton(
         style: TextButton.styleFrom(
           foregroundColor: UiTokens.accent,
-          minimumSize: const Size(48, 40),
-          padding: const EdgeInsets.symmetric(horizontal: 7),
+          minimumSize: const Size(0, 52),
+          padding: EdgeInsets.zero,
           tapTargetSize: MaterialTapTargetSize.padded,
         ),
         onPressed: action,
-        icon: Icon(icon, size: 16),
-        label: Text(label, style: const TextStyle(fontSize: 12.5)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 17),
+          const SizedBox(height: 3),
+          Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600)),
+        ]),
       );
 
   @override
@@ -102,7 +114,8 @@ class CrmRecordCard extends StatelessWidget {
     final company = crmMap(record['company']);
     final place = crmPlace(company);
     final tags = crmList(record['tags']);
-    final next = record['next_activity'] is Map ? crmMap(record['next_activity']) : null;
+    final next =
+        record['next_activity'] is Map ? crmMap(record['next_activity']) : null;
     final hint = crmContactHint(company);
     final phone = crmStr(company['phone']);
     final email = crmStr(company['email']);
@@ -118,7 +131,8 @@ class CrmRecordCard extends StatelessWidget {
     final summary = [
       title,
       if (showStage && stage.isNotEmpty) 'stage $stage',
-      if (outcome == 'won' || outcome == 'lost' || archived) crmOutcomeStyle(outcome, archived: archived).label,
+      if (outcome == 'won' || outcome == 'lost' || archived)
+        crmOutcomeStyle(outcome, archived: archived).label,
       if (place.isNotEmpty) place,
       if (next != null)
         '${crmDueStyle(crmDueKind(next)).label}: ${crmStr(next['subject'])}, ${crmWhen(next['due_at'])}',
@@ -162,27 +176,45 @@ class CrmRecordCard extends StatelessWidget {
                                         fontSize: 15.5,
                                         height: 1.25,
                                         fontWeight: FontWeight.w700))),
-                            const Icon(Icons.chevron_right_rounded, size: 18, color: UiTokens.textSecondary),
+                            const Icon(Icons.chevron_right_rounded,
+                                size: 18, color: UiTokens.textSecondary),
                           ]),
-                          if (place.isNotEmpty || (showStage && stage.isNotEmpty))
+                          if (place.isNotEmpty ||
+                              (showStage && stage.isNotEmpty))
                             Padding(
                               padding: const EdgeInsets.only(top: 4),
                               child: Text(
-                                [if (showStage && stage.isNotEmpty) stage, if (place.isNotEmpty) place].join(' · '),
+                                [
+                                  if (showStage && stage.isNotEmpty) stage,
+                                  if (place.isNotEmpty) place
+                                ].join(' · '),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5),
+                                style: const TextStyle(
+                                    color: UiTokens.textSecondary,
+                                    fontSize: 12.5),
                               ),
                             ),
-                          if (outcome == 'won' || outcome == 'lost' || archived || tags.isNotEmpty || sources > 1)
+                          if (outcome == 'won' ||
+                              outcome == 'lost' ||
+                              archived ||
+                              tags.isNotEmpty ||
+                              sources > 1)
                             Padding(
                               padding: const EdgeInsets.only(top: 6),
                               child: Wrap(spacing: 4, runSpacing: 4, children: [
-                                if (outcome == 'won' || outcome == 'lost' || archived) CrmOutcomeBadge(record: record),
+                                if (outcome == 'won' ||
+                                    outcome == 'lost' ||
+                                    archived)
+                                  CrmOutcomeBadge(record: record),
                                 for (final t in tags.take(2))
-                                  CrmBadge(label: crmStr(t['name']), icon: Icons.sell_outlined),
-                                if (tags.length > 2) CrmBadge(label: '+${tags.length - 2}'),
-                                if (sources > 1) CrmBadge(label: 'Found in $sources searches'),
+                                  CrmBadge(
+                                      label: crmStr(t['name']),
+                                      icon: Icons.sell_outlined),
+                                if (tags.length > 2)
+                                  CrmBadge(label: '+${tags.length - 2}'),
+                                if (sources > 1)
+                                  CrmBadge(label: 'Found in $sources searches'),
                               ]),
                             ),
                           const Padding(
@@ -199,16 +231,20 @@ class CrmRecordCard extends StatelessWidget {
                                 Text(crmStr(next['subject']),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: UiTokens.text, fontSize: 12.5)),
+                                    style: const TextStyle(
+                                        color: UiTokens.text, fontSize: 12.5)),
                               ],
                             )
                           else
                             const Row(children: [
-                              Icon(Icons.event_busy_outlined, size: 14, color: UiTokens.textMuted),
+                              Icon(Icons.event_busy_outlined,
+                                  size: 14, color: UiTokens.textMuted),
                               SizedBox(width: 4),
                               Flexible(
                                 child: Text('No next activity',
-                                    style: TextStyle(color: UiTokens.textSecondary, fontSize: 12.5)),
+                                    style: TextStyle(
+                                        color: UiTokens.textSecondary,
+                                        fontSize: 12.5)),
                               ),
                             ]),
                           if (hint != null || value.isNotEmpty)
@@ -217,55 +253,91 @@ class CrmRecordCard extends StatelessWidget {
                               child: Row(
                                 children: [
                                   if (hint != null) ...[
-                                    Icon(hint.icon, size: 14, color: UiTokens.textSecondary),
+                                    Icon(hint.icon,
+                                        size: 14,
+                                        color: UiTokens.textSecondary),
                                     const SizedBox(width: 4),
                                     Expanded(
                                       child: Text(hint.text,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           textDirection: TextDirection.ltr,
-                                          style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5)),
+                                          style: const TextStyle(
+                                              color: UiTokens.textSecondary,
+                                              fontSize: 12.5)),
                                     ),
                                   ] else
                                     const Spacer(),
                                   if (value.isNotEmpty)
                                     Text(value,
                                         style: const TextStyle(
-                                            color: UiTokens.text, fontSize: 12.5, fontWeight: FontWeight.w700)),
+                                            color: UiTokens.text,
+                                            fontSize: 12.5,
+                                            fontWeight: FontWeight.w700)),
                                 ],
                               ),
                             ),
-                          if (phone.isNotEmpty || email.isNotEmpty || website.isNotEmpty || mapsUrl.isNotEmpty || address.isNotEmpty) ...[
+                          if (phone.isNotEmpty ||
+                              email.isNotEmpty ||
+                              website.isNotEmpty ||
+                              mapsUrl.isNotEmpty ||
+                              address.isNotEmpty) ...[
                             const SizedBox(height: 8),
-                            Wrap(spacing: 2, runSpacing: 0, children: [
-                              if (phone.isNotEmpty) _contactAction(context, Icons.call_outlined, 'Call', () =>
-                                  _openLink(context, Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[^0-9+]'), '')), 'phone')),
-                              if (email.isNotEmpty) _contactAction(context, Icons.email_outlined, 'Email', () =>
-                                  _openLink(context, Uri(scheme: 'mailto', path: email), 'email')),
-                              if (website.isNotEmpty) _contactAction(context, Icons.language_rounded, 'Website', () {
-                                final url = website.startsWith(RegExp(r'https?://', caseSensitive: false)) ? website : 'https://$website';
-                                final uri = Uri.tryParse(url);
-                                if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) _openLink(context, uri, 'website');
-                              }),
-                              if (mapsUrl.isNotEmpty || address.isNotEmpty) _contactAction(context, Icons.map_outlined, 'Map', () {
-                                final uri = mapsUrl.isNotEmpty ? Uri.tryParse(mapsUrl) : Uri.https('www.google.com', '/maps/search/', {'api': '1', 'query': address});
-                                if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) _openLink(context, uri, 'map');
-                              }),
-                              PopupMenuButton<String>(
-                                tooltip: 'Copy contact details',
-                                icon: const Icon(Icons.copy_outlined, size: 18, color: UiTokens.accent),
-                                onSelected: (value) {
-                                  final label = value == 'phone' ? 'Phone' : value == 'email' ? 'Email' : value == 'website' ? 'Website' : 'Address';
-                                  final text = value == 'phone' ? phone : value == 'email' ? email : value == 'website' ? website : address;
-                                  copyWithSnack(context, text, message: '$label copied');
-                                },
-                                itemBuilder: (_) => [
-                                  if (phone.isNotEmpty) const PopupMenuItem(value: 'phone', child: Text('Copy phone')),
-                                  if (email.isNotEmpty) const PopupMenuItem(value: 'email', child: Text('Copy email')),
-                                  if (website.isNotEmpty) const PopupMenuItem(value: 'website', child: Text('Copy website')),
-                                  if (address.isNotEmpty) const PopupMenuItem(value: 'address', child: Text('Copy address')),
-                                ],
-                              ),
+                            Row(children: [
+                              if (phone.isNotEmpty)
+                                Expanded(
+                                  child: _contactAction(
+                                      Icons.call_outlined,
+                                      'Call',
+                                      () => _openLink(
+                                          context,
+                                          Uri(
+                                              scheme: 'tel',
+                                              path: phone.replaceAll(
+                                                  RegExp(r'[^0-9+]'), '')),
+                                          'phone')),
+                                ),
+                              if (email.isNotEmpty)
+                                Expanded(
+                                    child: _contactAction(
+                                        Icons.email_outlined,
+                                        'Email',
+                                        () => _openLink(
+                                            context,
+                                            Uri(scheme: 'mailto', path: email),
+                                            'email'))),
+                              if (website.isNotEmpty)
+                                Expanded(
+                                    child: _contactAction(
+                                        Icons.language_rounded, 'Website', () {
+                                  final url = website.startsWith(RegExp(
+                                          r'https?://',
+                                          caseSensitive: false))
+                                      ? website
+                                      : 'https://$website';
+                                  final uri = Uri.tryParse(url);
+                                  if (uri != null &&
+                                      (uri.scheme == 'https' ||
+                                          uri.scheme == 'http')) {
+                                    _openLink(context, uri, 'website');
+                                  }
+                                })),
+                              if (mapsUrl.isNotEmpty || address.isNotEmpty)
+                                Expanded(
+                                    child: _contactAction(
+                                        Icons.map_outlined, 'Map', () {
+                                  final uri = mapsUrl.isNotEmpty
+                                      ? Uri.tryParse(mapsUrl)
+                                      : Uri.https(
+                                          'www.google.com',
+                                          '/maps/search/',
+                                          {'api': '1', 'query': address});
+                                  if (uri != null &&
+                                      (uri.scheme == 'https' ||
+                                          uri.scheme == 'http')) {
+                                    _openLink(context, uri, 'map');
+                                  }
+                                })),
                             ]),
                           ],
                         ],
@@ -274,15 +346,50 @@ class CrmRecordCard extends StatelessWidget {
                   ),
                 ),
               ),
-              if (onMove != null)
-                busy
-                    ? const SizedBox(
-                        width: 48,
-                        height: 48,
-                        child: Center(
-                            child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
-                      )
-                    : CrmMoveToStageMenu(record: record, stages: stages, onMove: onMove!),
+              if (onMove != null || onDelete != null ||
+                  phone.isNotEmpty || email.isNotEmpty ||
+                  website.isNotEmpty || address.isNotEmpty)
+                SizedBox(
+                  width: 48,
+                  child: Column(children: [
+                    if (busy)
+                      const SizedBox(width: 48, height: 48,
+                        child: Center(child: SizedBox(width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))))
+                    else ...[
+                      if (onMove != null)
+                        CrmMoveToStageMenu(record: record, stages: stages, onMove: onMove!),
+                      if (phone.isNotEmpty || email.isNotEmpty ||
+                          website.isNotEmpty || address.isNotEmpty)
+                        PopupMenuButton<String>(
+                          tooltip: 'Copy contact details',
+                          icon: const Icon(Icons.copy_outlined, size: 19, color: UiTokens.accent),
+                          onSelected: (value) {
+                            final label = value == 'phone' ? 'Phone'
+                                : value == 'email' ? 'Email'
+                                : value == 'website' ? 'Website' : 'Address';
+                            final text = value == 'phone' ? phone
+                                : value == 'email' ? email
+                                : value == 'website' ? website : address;
+                            copyWithSnack(context, text, message: '$label copied');
+                          },
+                          itemBuilder: (_) => [
+                            if (phone.isNotEmpty) const PopupMenuItem(value: 'phone', child: Text('Copy phone')),
+                            if (email.isNotEmpty) const PopupMenuItem(value: 'email', child: Text('Copy email')),
+                            if (website.isNotEmpty) const PopupMenuItem(value: 'website', child: Text('Copy website')),
+                            if (address.isNotEmpty) const PopupMenuItem(value: 'address', child: Text('Copy address')),
+                          ],
+                        ),
+                      if (onDelete != null)
+                        IconButton(
+                          tooltip: 'Delete ${crmRecordTitle(record)} from CRM',
+                          onPressed: onDelete,
+                          icon: const Icon(Icons.close_rounded, size: 19),
+                          color: UiTokens.failedFg,
+                        ),
+                    ],
+                  ]),
+                ),
             ],
           ),
         ),

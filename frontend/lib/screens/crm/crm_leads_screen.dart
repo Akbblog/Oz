@@ -44,6 +44,7 @@ class _CrmLeadsScreenState extends State<CrmLeadsScreen> {
   int _total = 0;
   int _generation = 0;
   String? _exporting;
+  final Set<String> _deleting = {};
 
   @override
   void initState() {
@@ -126,6 +127,33 @@ class _CrmLeadsScreenState extends State<CrmLeadsScreen> {
     if (!mounted) return;
     crmReplaceUrl(_filters.toRoute());
     unawaited(_load());
+  }
+
+  Future<void> _deleteRecord(Map<String, dynamic> record) async {
+    final id = crmStr(record['id']);
+    if (id.isEmpty || _deleting.contains(id)) return;
+    final title = crmRecordTitle(record);
+    final ok = await crmConfirm(context,
+      title: 'Delete $title from CRM?',
+      body: 'This permanently removes the CRM record, its notes and activities. '
+          'The original search result stays available and can be added again.',
+      confirmLabel: 'Delete record', danger: true);
+    if (!ok || !mounted || _deleting.contains(id)) return;
+    setState(() => _deleting.add(id));
+    try {
+      await _api.deleteRecord(id, version: crmIntOrNull(record['version']));
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      unawaited(context.read<CrmProvider?>()?.refreshCounts());
+      crmSnack(context, '$title removed from CRM.');
+    } catch (e) {
+      if (!mounted) return;
+      crmSnack(context, crmActionError('Deleting $title', e), error: true);
+      if (crmErrorKind(e) == CrmErrorKind.conflict) unawaited(_load());
+    } finally {
+      if (mounted) setState(() => _deleting.remove(id));
+    }
   }
 
   Future<void> _newLead() async {
@@ -409,7 +437,9 @@ class _CrmLeadsScreenState extends State<CrmLeadsScreen> {
           padding: EdgeInsets.only(bottom: wide ? 0 : 8),
           child: wide
               ? _TableRow(record: r, onOpen: () => _open(r))
-              : CrmRecordCard(record: r, stages: const [], showStage: true, onOpen: () => _open(r)),
+              : CrmRecordCard(record: r, stages: const [], showStage: true,
+                  busy: _deleting.contains(crmStr(r['id'])),
+                  onOpen: () => _open(r), onDelete: () => _deleteRecord(r)),
         ),
       if (_cursor != null)
         Padding(

@@ -296,6 +296,33 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
     }
   }
 
+  Future<void> _deleteRecord(Map<String, dynamic> record) async {
+    final id = crmStr(record['id']);
+    if (id.isEmpty || _busy.contains(id)) return;
+    final title = crmRecordTitle(record);
+    final ok = await crmConfirm(context,
+      title: 'Delete $title from CRM?',
+      body: 'This permanently removes the CRM record, its notes and activities. '
+          'The original search result stays available and can be added again.',
+      confirmLabel: 'Delete record', danger: true);
+    if (!ok || !mounted || _busy.contains(id)) return;
+    setState(() => _busy.add(id));
+    try {
+      await _api.deleteRecord(id, version: crmIntOrNull(record['version']));
+      if (!mounted) return;
+      await _load(silent: true);
+      if (!mounted) return;
+      unawaited(context.read<CrmProvider?>()?.refreshCounts());
+      crmSnack(context, '$title removed from CRM.');
+    } catch (e) {
+      if (!mounted) return;
+      crmSnack(context, crmActionError('Deleting $title', e), error: true);
+      if (crmErrorKind(e) == CrmErrorKind.conflict) unawaited(_load(silent: true));
+    } finally {
+      if (mounted) setState(() => _busy.remove(id));
+    }
+  }
+
   Future<void> _loadMore(CrmPipelineColumn column) async {
     if (column.loadingMore || column.cursor == null) return;
     setState(() => column.loadingMore = true);
@@ -604,6 +631,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
         showStage: showStage,
         onOpen: () => _open(r),
         onMove: (s) => _move(r, s),
+        onDelete: () => _deleteRecord(r),
       );
 
   Widget _buildBoard() {

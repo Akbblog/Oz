@@ -17,6 +17,7 @@ import 'package:business_scraper_app/services/api_service.dart';
 import 'package:business_scraper_app/services/crm_api.dart';
 import 'package:business_scraper_app/widgets/app_shell.dart';
 import 'package:business_scraper_app/widgets/crm/crm_widgets.dart';
+import 'package:business_scraper_app/widgets/crm/crm_record_card.dart';
 import 'package:business_scraper_app/widgets/sidebar_navigation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -143,6 +144,43 @@ void main() {
     expect(tester.getSize(find.byType(CrmBadge).last).width, lessThan(100));
   });
 
+  testWidgets('pipeline contact actions fit one row in a narrow column', (tester) async {
+    _size(tester, const Size(390, 700));
+    final record = crmTestRecord();
+    record['company'] = {
+      ...record['company'] as Map,
+      'email': 'hello@acme.example',
+      'address': '1 Rue X',
+    };
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 320,
+          child: CrmRecordCard(
+            record: record,
+            stages: crmTestStages(),
+            onOpen: () {},
+            onMove: (_) {},
+            onDelete: () {},
+          ),
+        ),
+      ),
+    ));
+
+    final labels = ['Call', 'Email', 'Website', 'Map'];
+    final top = tester.getTopLeft(find.text(labels.first)).dy;
+    for (final label in labels) {
+      expect(tester.getTopLeft(find.text(label)).dy, closeTo(top, 1));
+    }
+    expect(find.byTooltip('Copy contact details'), findsOneWidget);
+    expect(find.byTooltip('Delete Acme Plumbing from CRM'), findsOneWidget);
+    final move = tester.getCenter(find.byIcon(Icons.drive_file_move_outlined));
+    final copy = tester.getCenter(find.byIcon(Icons.copy_outlined));
+    expect(copy.dx, closeTo(move.dx, 1));
+    expect(copy.dy, greaterThan(move.dy));
+    expect(tester.takeException(), isNull);
+  });
+
   group('nav gating', () {
     testWidgets('CRM is hidden until the server enables it (sidebar)', (tester) async {
       _size(tester, const Size(1440, 900));
@@ -254,6 +292,24 @@ void main() {
       expect(find.descendant(of: qualCol, matching: find.text('Acme Plumbing')), findsNothing);
       expect(find.textContaining("couldn't be moved to Qualified: That stage is not available."), findsOneWidget);
       expect(find.textContaining('It is back in New.'), findsOneWidget);
+    });
+
+    testWidgets('card delete asks for confirmation and sends record version', (tester) async {
+      _size(tester, const Size(1440, 900));
+      final api = FakeCrmApi()..pipeline = _pipeline();
+      await tester.pumpWidget(_host(_crm(api), CrmPipelineScreen(api: api)));
+      await _settle(tester);
+      await tester.tap(find.byTooltip('Delete Acme Plumbing from CRM'));
+      await _settle(tester);
+      expect(api.callsOf('delete'), isEmpty);
+      await tester.tap(find.text('Cancel').last);
+      await _settle(tester);
+      expect(api.callsOf('delete'), isEmpty);
+      await tester.tap(find.byTooltip('Delete Acme Plumbing from CRM'));
+      await _settle(tester);
+      await tester.tap(find.text('Delete record').last);
+      await _settle(tester);
+      expect(api.callsOf('delete').single.args, {'id': 'rec-1', 'version': 3});
     });
 
     testWidgets('empty pipeline offers "Add from a search" and "Create manually"', (tester) async {
