@@ -184,6 +184,30 @@ void main() {
   });
 
   group('pipeline', () {
+    testWidgets('stage download exports the selected stage with board filters, not loaded cards', (tester) async {
+      _size(tester, const Size(1440, 900));
+      final data = _pipeline();
+      final stages = data['stages'] as List;
+      (stages[2] as Map<String, dynamic>)['count'] = 5;
+      final api = FakeCrmApi()..pipeline = data;
+      await tester.pumpWidget(_host(
+        _crm(api),
+        CrmPipelineScreen(api: api, initialQuery: const {'q': 'cafe', 'source': 'job-7'}),
+      ));
+      await _settle(tester);
+
+      await tester.tap(find.byTooltip('Download Qualified leads'));
+      await _settle(tester);
+      expect(api.callsOf('export').single.args, {
+        'format': 'xlsx',
+        'stage_id': 's-qual',
+        'outcome': 'open',
+        'archived': 'false',
+        'q': 'cafe',
+        'source_job_id': 'job-7',
+      });
+    });
+
     testWidgets('renders stages with counts and separate currency totals; move via menu', (tester) async {
       _size(tester, const Size(1440, 900));
       final api = FakeCrmApi()..pipeline = _pipeline();
@@ -259,6 +283,26 @@ void main() {
       await _settle(tester);
       expect(find.text('Acme Plumbing'), findsNothing);
       expect(find.text('Nothing in Contacted yet'), findsOneWidget);
+    });
+
+    testWidgets('phone: selected Won stage can be downloaded', (tester) async {
+      _size(tester, const Size(390, 844));
+      final data = _pipeline();
+      final stages = data['stages'] as List;
+      (stages[4] as Map<String, dynamic>)['count'] = 3;
+      final api = FakeCrmApi()..pipeline = data;
+      await tester.pumpWidget(_host(_crm(api), CrmPipelineScreen(api: api)));
+      await _settle(tester);
+      await tester.tap(find.byType(ChoiceChip).last);
+      await _settle(tester);
+      await tester.tap(find.byTooltip('Download Won leads'));
+      await _settle(tester);
+      expect(api.callsOf('export').single.args, {
+        'format': 'xlsx',
+        'stage_id': 's-won',
+        'outcome': 'won',
+        'archived': 'false',
+      });
     });
   });
 

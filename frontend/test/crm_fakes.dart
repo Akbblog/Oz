@@ -204,6 +204,12 @@ class FakeCrmApi extends CrmApi {
   }
 
   @override
+  Future<Map<String, dynamic>> exportRecords({required String format, Map<String, String> filters = const {}}) async {
+    calls.add(CrmCall('export', {'format': format, ...filters}));
+    throw CrmException('Test export stopped before saving the file.', statusCode: 503);
+  }
+
+  @override
   Future<Map<String, dynamic>> getRecord(String id) async {
     calls.add(CrmCall('record', {'id': id}));
     final f = failNext;

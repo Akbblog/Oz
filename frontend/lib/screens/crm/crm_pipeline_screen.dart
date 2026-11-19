@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/crm/crm_filters.dart';
 import '../../core/crm/crm_format.dart';
+import '../../core/download_helper.dart';
 import '../../core/theme/app_breakpoints.dart';
 import '../../providers/crm_provider.dart';
 import '../../services/crm_api.dart';
@@ -95,6 +96,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
   List<CrmPipelineColumn> _columns = const [];
   Map<String, dynamic> _summary = const {};
   final Set<String> _busy = {};
+  String? _exportingStage;
   String? _dragOver;
   int _generation = 0;
 
@@ -186,6 +188,41 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
     if (!mounted) return;
     _load();
   }
+
+  Future<void> _downloadStage(CrmPipelineColumn column) async {
+    if (_exportingStage != null || column.count == 0) return;
+    setState(() => _exportingStage = column.id);
+    try {
+      final data = await _api.exportRecords(format: 'xlsx', filters: {
+        'stage_id': column.id,
+        'outcome': column.isWon ? 'won' : 'open',
+        'archived': 'false',
+        if (_filters.q != null) 'q': _filters.q!,
+        if (_filters.tagId != null) 'tag_id': _filters.tagId!,
+        if (_filters.sourceJobId != null) 'source_job_id': _filters.sourceJobId!,
+      });
+      if (!mounted) return;
+      final stageName = column.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]+'), '_');
+      await saveExcel(crmStr(data['content']), 'CRM_${stageName}_${fileTimestamp()}.xlsx', context: context);
+    } catch (e) {
+      if (mounted) crmSnack(context, crmActionError('Downloading ${column.name} leads', e), error: true);
+    } finally {
+      if (mounted) setState(() => _exportingStage = null);
+    }
+  }
+
+  Widget _stageDownloadButton(CrmPipelineColumn column) => IconButton(
+        key: ValueKey('crm-download-stage-${column.id}'),
+        tooltip: 'Download ${column.name} leads',
+        onPressed: _exportingStage != null || column.count == 0 ? null : () => _downloadStage(column),
+        icon: _exportingStage == column.id
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.file_download_outlined, size: 19),
+        color: UiTokens.accent,
+        disabledColor: UiTokens.textMuted,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+      );
 
   CrmPipelineColumn? _columnOf(String recordId) {
     for (final c in _columns) {
@@ -512,7 +549,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
     return Semantics(
       header: true,
       label: '${c.name}, ${plural(c.count, 'record', 'records')}${totals.isEmpty ? '' : ', $totals'}',
-      excludeSemantics: true,
+      explicitChildNodes: true,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
         child: Column(
@@ -530,6 +567,7 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: UiTokens.text, fontSize: 15, fontWeight: FontWeight.w700)),
                 ),
+                _stageDownloadButton(c),
                 CrmBadge(label: formatCount(c.count)),
               ],
             ),
@@ -707,6 +745,18 @@ class _CrmPipelineScreenState extends State<CrmPipelineScreen> {
                   ),
               ],
             ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text('Download ${selected.name} leads',
+                    style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13)),
+              ),
+              _stageDownloadButton(selected),
+            ],
           ),
         ),
         if (crmCurrencyTotals(selected.values).isNotEmpty)
