@@ -34,7 +34,7 @@ def get_spending_series(user_id: int, months: int = 6) -> List[Dict[str, Any]]:
                 """
                 SELECT COALESCE(SUM(amount_cents), 0)
                 FROM payment_transactions
-                WHERE user_id = ? AND status = 'completed'
+                WHERE user_id = ? AND status = 'completed' AND COALESCE(provider_environment, 'production') <> 'sandbox'
                   AND datetime(created_at) >= datetime(?)
                   AND datetime(created_at) < datetime(?)
                 """,
@@ -47,7 +47,7 @@ def get_spending_series(user_id: int, months: int = 6) -> List[Dict[str, Any]]:
                 """
                 SELECT COALESCE(SUM(amount_cents), 0)
                 FROM payment_transactions
-                WHERE user_id = ? AND status = 'completed'
+                WHERE user_id = ? AND status = 'completed' AND COALESCE(provider_environment, 'production') <> 'sandbox'
                   AND created_at >= ?
                   AND created_at < ?
                 """,

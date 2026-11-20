@@ -484,3 +484,18 @@ def _txn_status(tid):
 
     return execute_query("SELECT status FROM payment_transactions WHERE transaction_id = ?", (tid,),
                          fetch_one=True, commit=False)[0]
+
+
+def test_sandbox_payments_are_not_counted_as_revenue(safepay, buyer, pack):
+    from analytics.revenue_analytics import revenue_between_cents
+    from db.base import execute_query
+    from payments import safepay_checkout
+
+    start = _start(buyer, pack)
+    safepay.set_state(start["provider_transaction_id"], "TRACKER_ENDED")
+    safepay_checkout.reconcile(start["transaction_id"], source="test")
+    window = (datetime.now(timezone.utc) - timedelta(days=1), datetime.now(timezone.utc) + timedelta(days=1))
+    assert revenue_between_cents(*window) == 0
+    execute_query("UPDATE payment_transactions SET provider_environment = 'production' WHERE transaction_id = ?",
+                  (start["transaction_id"],))
+    assert revenue_between_cents(*window) == 2500

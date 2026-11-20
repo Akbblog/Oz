@@ -319,6 +319,7 @@ def _fulfill_once(transaction_id: str, *, tracker: str, source: str, provider_st
         "credit_balance": balance,
         "invoice_id": invoice_id,
         "invoice_number": invoice_number,
+        "environment": env,
     }
 
 
@@ -379,6 +380,8 @@ def _after_fulfilment(result: Dict[str, Any]) -> None:
             )
         except Exception:
             logger.exception("Failed recording promo usage")
+    if result.get("environment") != "production":
+        return  # sandbox payments never trigger referral rewards (real credits for a test payment)
     try:
         from promotions.referral_service import ReferralService
 

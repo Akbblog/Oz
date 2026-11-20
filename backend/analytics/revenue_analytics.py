@@ -29,7 +29,7 @@ def revenue_between_cents(start: datetime, end: datetime) -> int:
             """
             SELECT COALESCE(SUM(amount_cents), 0)
             FROM payment_transactions
-            WHERE status = 'completed'
+            WHERE status = 'completed' AND COALESCE(provider_environment, 'production') <> 'sandbox'
               AND datetime(created_at) >= datetime(?)
               AND datetime(created_at) < datetime(?)
             """,
@@ -42,7 +42,7 @@ def revenue_between_cents(start: datetime, end: datetime) -> int:
             """
             SELECT COALESCE(SUM(amount_cents), 0)
             FROM payment_transactions
-            WHERE status = 'completed'
+            WHERE status = 'completed' AND COALESCE(provider_environment, 'production') <> 'sandbox'
               AND created_at >= ?
               AND created_at < ?
             """,
@@ -146,7 +146,7 @@ def get_conversion_funnel() -> Dict[str, int]:
     total_users = execute_query("SELECT COUNT(*) FROM users", fetch_one=True, commit=False)
     approved = execute_query("SELECT COUNT(*) FROM users WHERE is_approved = 1", fetch_one=True, commit=False)
     purchasers = execute_query(
-        "SELECT COUNT(DISTINCT user_id) FROM payment_transactions WHERE status = 'completed'",
+        "SELECT COUNT(DISTINCT user_id) FROM payment_transactions WHERE status = 'completed' AND COALESCE(provider_environment, 'production') <> 'sandbox'",
         fetch_one=True,
         commit=False,
     )

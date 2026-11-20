@@ -68,6 +68,7 @@ class PricingEngine:
             FROM payment_transactions
             WHERE user_id = ?
               AND status = 'completed'
+              AND COALESCE(provider_environment, 'production') <> 'sandbox'
               AND created_at >= ?
             """,
             (user_id, cutoff),
