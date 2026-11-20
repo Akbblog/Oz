@@ -147,7 +147,8 @@ class AppRouter {
       case '/privacy':
         return _page(settings, const PrivacyPolicyScreen());
       case '/pricing':
-        return _page(settings, const PricingScreen());
+        // Packages and checkout need the signed-in user; wait for the saved session first.
+        return _page(settings, const ProtectedRoute(child: PricingScreen()));
       case '/wallet-coming-soon':
         return _page(settings, const ProtectedRoute(child: WalletComingSoonScreen()));
       case '/wallet-request-credits':
