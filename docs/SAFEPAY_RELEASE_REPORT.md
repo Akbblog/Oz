@@ -78,3 +78,93 @@ Hosts (fixed in `backend/payments/safepay_service.py`):
   `~/infinity-leads`, run with `sudo docker compose --env-file backend/.env -f docker-compose.worker.yml up -d`.
   Cloudflare tunnel → `https://server.progresslms.io`. The DB is MariaDB 11.8.9 on Hostinger.
 - **Frontend:** Vercel project `frontend` (`infinity-leads.vercel.app`). `/api/*` is rewritten to `server.progresslms.io`.
+
+## Test results (2026-11-21)
+
+**Automated:** `pytest tests` run on the branch: **245 passed, 1 failed**. 19 of the passes are new Safepay tests.
+The failure, `test_admin_role_safety.py::test_admin_still_manages_lower_ranks`, fails the same way on the base
+branch: it tries to send an email over SMTP. `flutter analyze` on the changed files shows no new warnings.
+
+**Migration rehearsal:** today's live dump was restored into a throwaway MariaDB 11.8 and the new image's
+migrations ran on it. 018 applied. All 24 historical Stripe/Coinbase rows and the 5 packs were unchanged, and
+`payment_methods_enabled` became `safepay`. Production then applied 018 cleanly on deploy.
+
+**Local full stack:** the release web build plus the branch backend, against the real Safepay sandbox.
+Every scenario was reconciled against the DB transaction, the ledger rows for the tracker, and the balance shown on
+the Credits page:
+
+| Scenario | Viewport | Result |
+|---|---|---|
+| Purchase Starter (test card 4456 5300 0000 1005) | desktop | ✅ +500 credits, txn `completed` US$25.00, 1 ledger row, displayed = DB |
+| Purchase Growth | mobile (Pixel 7) | ✅ +2,500, Safepay page showed $100.00, displayed = DB |
+| Cancel on Safepay page | desktop + mobile | ✅ lands on `/payment/cancelled/{id}`, "Payment cancelled", `failed/cancelled`, +0 |
+| Declined card (…1013) | desktop + mobile | ✅ Safepay shows its decline message; `payment.failed` webhook → "Payment failed", +0 |
+| Checkout abandoned past expiry | desktop | ✅ reconciler `expired: 1` → "Checkout expired", +0 |
+| Duplicate webhooks after a real payment | desktop | ✅ +500 once; resend of the same event → `duplicate`; new event id → `credited: false` |
+| Delayed webhook (backend could not reach Safepay) | desktop | ✅ "Confirming payment" → "Still confirming" with balance unchanged; late webhook credited +500 once → "Payment confirmed" |
+
+The failure, duplicate and delayed webhooks above were signed locally with a stand-in secret, because Safepay
+cannot reach a local machine and the dashboard endpoint does not exist yet.
+
+**Deployed (production backend, `SAFEPAY_ENV=sandbox`, tester only):**
+- `/api/health` is OK.
+- `POST /api/webhooks/safepay` returns 401 when unsigned or badly signed. It answers the same way through the Vercel proxy.
+- **API + real Safepay page:** US$25.00 paid; Safepay redirected to `infinity-leads.vercel.app/payment/return/{id}`;
+  the server confirmed it with Safepay (`TRACKER_ENDED`), invoice issued, balance 100 → 600. Revenue for the day
+  stayed at 0, so sandbox is excluded.
+- **Live web app:** a full purchase on desktop (balance 1,100 → 1,600) and on mobile (600 → 1,100). In both, the
+  Credits page showed the same balance as the API.
+- **Reconciliation:** 3 completed Safepay transactions = 3 ledger rows = +1,500 credits. 2 abandoned checkouts will
+  be expired by the reconciler.
+- **Allowlist:** a user who is not on the allowlist gets "Card payments are launching soon" and a 403.
+
+## Current status
+
+**Sandbox only.** Production runs the new code with `SAFEPAY_ENV=sandbox`. Checkout is limited to the tester account
+`safepay-sandbox-tester@example.com`, created for this test. Coinbase is closed for new checkouts, so **other users
+cannot buy credits until the live switch.** They see "Card payments are launching soon".
+
+## Remaining blockers (external — owner action)
+
+1. **Sandbox webhook endpoint.**
+   - In the Safepay sandbox dashboard (Developers → Endpoints), add `https://server.progresslms.io/api/webhooks/safepay`.
+   - Send the endpoint's shared secret. It goes into `SAFEPAY_SANDBOX_WEBHOOK_SECRET` on the server.
+   - Until then, Safepay webhooks are rejected with 401. Payments still complete through the server-side tracker
+     check and the 2-minute reconciler, but an end-to-end webhook from Safepay itself has not been verified.
+2. **Approved live Safepay account.** Provide:
+   - the live merchant API key (`sec_…`), set as `SAFEPAY_LIVE_API_KEY`
+   - the live secret key, set as `SAFEPAY_LIVE_SECRET_KEY`
+   - the shared secret of a live endpoint for the same webhook URL, set as `SAFEPAY_LIVE_WEBHOOK_SECRET`
+   - Safepay's confirmation that the live account accepts **USD** card payments.
+
+### Live cutover, once the above exist
+
+1. Add the `SAFEPAY_LIVE_*` values to `backend/.env` on the VM. Keep the sandbox values; they are never read in production.
+2. Set `SAFEPAY_ENV=production` and keep `SAFEPAY_CHECKOUT_ALLOWLIST` limited to an owner account.
+3. Recreate the backend: `sudo docker compose --env-file backend/.env -f docker-compose.worker.yml up -d backend`.
+4. Make one small real payment. The smallest pack is Starter, US$25.
+5. Verify the payment in the Safepay dashboard, the `payment_transactions` row (`completed`, `production`), the
+   ledger row, the invoice and the displayed balance. Confirm that the webhook arrived (`webhook_events`, provider `safepay`).
+6. Clear `SAFEPAY_CHECKOUT_ALLOWLIST`. An empty list means everyone in production. Recreate the backend again.
+
+## Rollback
+
+- **Backend (VM `~/infinity-leads`):**
+  - `sudo docker tag infinity-leads-backend:pre-safepay-20261120-222642 infinity-leads-backend:latest`
+  - `git checkout fix/mobile-ui-polish`
+  - `sudo docker compose --env-file backend/.env -f docker-compose.worker.yml up -d --no-build backend`
+  - Migration 018 is additive, and the old code runs with it. On startup the old code switches
+    `payment_methods_enabled` back to `coinbase`.
+  - The previous `.env` is `backend/.env.bak-20261120-224815`, though the extra `SAFEPAY_*` lines are harmless.
+- **Frontend:** `vercel promote https://frontend-3k2fkp9sx-akbs-projects-69c135c0.vercel.app` (the previous production
+  deployment, dpl_486ctWmL8DK6X8mUMkPTBVj64o2N), or use Promote in the Vercel dashboard.
+- **Database:** no rollback is needed for 018. A full restore from `~/db-backups/pre-safepay-20261120-222339.sql.gz`
+  is a last resort; it would discard everything written since.
+
+## Notes
+
+- The production frontend deploy also shipped the owner's pushed pricing-page polish (de135d3). That commit had
+  only been on a preview before.
+- The first sandbox invoice took number INV-2026-00001, so the first real invoice will be INV-2026-00002.
+- The Coinbase webhook handler now also accepts Coinbase's real `{"event": …}` envelope. Before this, in-flight
+  charges could never complete through it.
