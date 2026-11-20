@@ -7,6 +7,8 @@ class CreditPackageCard extends StatelessWidget {
   final Map<String, dynamic> package;
   final bool isSelected;
   final bool isFeatured;
+  final int? savingsPercent;
+  final String comparisonName;
   final VoidCallback? onTap;
 
   const CreditPackageCard({
@@ -14,199 +16,127 @@ class CreditPackageCard extends StatelessWidget {
     required this.package,
     this.isSelected = false,
     this.isFeatured = false,
+    this.savingsPercent,
+    this.comparisonName = 'Starter',
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final name = package['name'] ?? 'Package';
-    final credits = package['credits'] ?? 0;
-    final priceCents = package['display_price_cents'] ?? package['base_price_cents'] ?? 0;
-    final price = (priceCents / 100).toStringAsFixed(2);
-    final pricePerCredit = credits > 0
-        ? (priceCents / credits / 100).toStringAsFixed(3)
-        : '0.000';
-    final discount = package['discount_percentage'] ?? 0;
-    final features = package['features'] as List? ?? [];
+    final name = '${package['name'] ?? 'Package'}';
+    final credits = (package['credits'] as num?)?.toInt() ?? 0;
+    final cents = (package['display_price_cents'] as num?)?.toInt() ??
+        (package['base_price_cents'] as num?)?.toInt() ??
+        0;
+    final price = (cents / 100).toStringAsFixed(2);
+    final unitPrice =
+        credits > 0 ? (cents / credits / 100).toStringAsFixed(3) : '0.000';
+    final features = package['features'] as List? ?? const [];
 
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: AppSpacing.durationMedium,
-        curve: Curves.easeOutCubic,
-        padding: AppSpacing.paddingLg,
-        decoration: BoxDecoration(
-          color: isSelected
-              ? _CardColors.primary.withValues(alpha: 0.12)
-              : _CardColors.surface.withValues(alpha: 0.4),
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label:
+          '$name, $credits credits for $price dollars, ${isSelected ? 'selected' : 'select package'}',
+      child: Material(
+        color: isSelected ? AppColors.selectedDark : AppColors.surfaceDark,
+        shape: RoundedRectangleBorder(
           borderRadius: AppSpacing.borderRadiusLg,
-          border: Border.all(
-            color: isSelected
-                ? _CardColors.primary
-                : isFeatured
-                    ? _CardColors.primary.withValues(alpha: 0.4)
-                    : Colors.white.withValues(alpha: 0.08),
+          side: BorderSide(
+            color:
+                isSelected ? AppColors.primaryBlueLight : AppColors.borderDark,
             width: isSelected ? 2 : 1,
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: AppSpacing.paddingLg,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: Text(
-                    name,
-                    style: AppTypography.titleMedium.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(name, style: AppTypography.titleMediumDark),
                     ),
+                    if (isFeatured)
+                      _badge('POPULAR', AppColors.primaryBlueLight),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  '$credits credits',
+                  style: AppTypography.headlineSmallDark.copyWith(
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                if (isFeatured)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.xs,
-                      vertical: AppSpacing.xxs,
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  '\$$price one-time  ·  \$$unitPrice per credit',
+                  style: AppTypography.bodySmallDark,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                if (savingsPercent != null && savingsPercent! > 0)
+                  _badge(
+                    '$savingsPercent% less per credit than $comparisonName',
+                    AppColors.successGreen,
+                  )
+                else
+                  Text(
+                    'Credits never expire',
+                    style: AppTypography.bodySmallDark,
+                  ),
+                if (features.isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  ...features.take(3).map(
+                        (feature) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text('• $feature',
+                              style: AppTypography.bodySmallDark),
+                        ),
+                      ),
+                ],
+                const SizedBox(height: AppSpacing.lg),
+                Row(
+                  children: [
+                    Icon(
+                      isSelected
+                          ? Icons.check_circle_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      color: isSelected
+                          ? AppColors.successGreen
+                          : AppColors.textSecondaryDark,
+                      size: 20,
                     ),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryBlue,
-                      borderRadius: AppSpacing.borderRadiusRound,
-                    ),
-                    child: Text(
-                      'POPULAR',
-                      style: AppTypography.labelSmall.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 10,
+                    const SizedBox(width: AppSpacing.xs),
+                    Text(
+                      isSelected ? 'Selected package' : 'Select package',
+                      style: AppTypography.labelLargeDark.copyWith(
+                        color: isSelected
+                            ? AppColors.successGreen
+                            : AppColors.textPrimaryDark,
                       ),
                     ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  '\$$price',
-                  style: AppTypography.headlineLarge.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.xxs),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    'one-time',
-                    style: AppTypography.bodySmall.copyWith(
-                      color: Colors.white54,
-                    ),
-                  ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.xs),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.xs,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _CardColors.emerald.withValues(alpha: 0.15),
-                    borderRadius: AppSpacing.borderRadiusSm,
-                  ),
-                  child: Text(
-                    '$credits credits',
-                    style: AppTypography.labelMedium.copyWith(
-                      color: _CardColors.emerald,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                Text(
-                  '\$$pricePerCredit/credit',
-                  style: AppTypography.bodySmall.copyWith(
-                    color: Colors.white38,
-                  ),
-                ),
-              ],
-            ),
-            if (discount > 0) ...[
-              const SizedBox(height: AppSpacing.xs),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.xs,
-                  vertical: 2,
-                ),
-                decoration: BoxDecoration(
-                  color: _CardColors.amber.withValues(alpha: 0.15),
-                  borderRadius: AppSpacing.borderRadiusSm,
-                ),
-                child: Text(
-                  'Save ${discount.toStringAsFixed(0)}%',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: _CardColors.amber,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-            if (features.isNotEmpty) ...[
-              const SizedBox(height: AppSpacing.md),
-              ...features.take(3).map((f) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(
-                      children: [
-                        Icon(Icons.check_circle,
-                            color: _CardColors.emerald, size: 14),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            f.toString(),
-                            style: AppTypography.bodySmall.copyWith(
-                              color: Colors.white70,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )),
-            ],
-            if (isSelected) ...[
-              const SizedBox(height: AppSpacing.md),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryBlue,
-                  borderRadius: AppSpacing.borderRadiusMd,
-                ),
-                child: Text(
-                  'Selected',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.labelLarge.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
   }
-}
 
-class _CardColors {
-  static const Color primary = AppColors.primaryBlue;
-  static const Color surface = AppColors.elevatedCardDark;
-  static const Color emerald = AppColors.successGreen;
-  static const Color amber = AppColors.warningYellow;
+  Widget _badge(String text, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: AppSpacing.borderRadiusSm,
+        ),
+        child:
+            Text(text, style: AppTypography.labelSmall.copyWith(color: color)),
+      );
 }

@@ -5,6 +5,7 @@ import '../core/theme/app_typography.dart';
 import '../core/theme/app_breakpoints.dart';
 import '../core/utils/responsive_utils.dart';
 import '../services/api_service.dart';
+import '../providers/credit_provider.dart';
 import '../widgets/credit_package_card.dart';
 import '../widgets/subscription_plan_card.dart';
 import 'checkout_screen.dart';
@@ -27,13 +28,23 @@ class _PricingScreenState extends State<PricingScreen>
   List<Map<String, dynamic>> _plans = [];
   int? _selectedPackageId;
   int? _selectedPlanId;
+  int _exampleCities = 1;
+  int _exampleLeads = 10;
+  int? _exampleCost;
+  bool _exampleLoading = false;
+  int _exampleRequest = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabController =
-        TabController(length: _showSubscriptionOptions ? 2 : 1, vsync: this);
+    _tabController = TabController(
+      length: _showSubscriptionOptions ? 2 : 1,
+      vsync: this,
+    );
     _loadData();
+    CreditProvider.instance.refresh();
+    CreditProvider.instance.loadConfig();
+    _loadExampleCost();
   }
 
   @override
@@ -82,6 +93,29 @@ class _PricingScreenState extends State<PricingScreen>
     }
   }
 
+  Future<void> _loadExampleCost() async {
+    final request = ++_exampleRequest;
+    setState(() {
+      _exampleLoading = true;
+      _exampleCost = null;
+    });
+    try {
+      final estimate = await _apiService.estimateJobCost(
+        numCities: _exampleCities,
+        maxResultsPerCity: _exampleLeads,
+      );
+      if (!mounted || request != _exampleRequest) return;
+      final value = estimate['estimated_cost'];
+      setState(() {
+        _exampleCost = value is num ? value.toInt() : int.tryParse('$value');
+        _exampleLoading = false;
+      });
+    } catch (_) {
+      if (!mounted || request != _exampleRequest) return;
+      setState(() => _exampleLoading = false);
+    }
+  }
+
   void _proceedToCheckout() {
     final isPackage = !_showSubscriptionOptions || _tabController.index == 0;
     final selectedId = isPackage ? _selectedPackageId : _selectedPlanId;
@@ -89,7 +123,9 @@ class _PricingScreenState extends State<PricingScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            isPackage ? 'Select a credit package' : 'Select a subscription plan',
+            isPackage
+                ? 'Select a credit package'
+                : 'Select a subscription plan',
           ),
           backgroundColor: AppColors.dangerRed,
           behavior: SnackBarBehavior.floating,
@@ -104,18 +140,17 @@ class _PricingScreenState extends State<PricingScreen>
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => CheckoutScreen(
-          item: item,
-          isSubscription: !isPackage,
-        ),
+        builder: (context) =>
+            CheckoutScreen(item: item, isSubscription: !isPackage),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final layoutType =
-        AppBreakpoints.getLayoutType(MediaQuery.of(context).size.width);
+    final layoutType = AppBreakpoints.getLayoutType(
+      MediaQuery.of(context).size.width,
+    );
 
     return Scaffold(
       backgroundColor: _PricingColors.background,
@@ -152,13 +187,14 @@ class _PricingScreenState extends State<PricingScreen>
                                         _buildPackagesTab(layoutType),
                                         _buildPlansTab(layoutType),
                                       ]
-                                    : [
-                                        _buildPackagesTab(layoutType),
-                                      ],
+                                    : [_buildPackagesTab(layoutType)],
                               ),
                             ),
                 ),
-                if (!_isLoading && _error == null) _buildBottomBar(),
+                if (!_isLoading &&
+                    _error == null &&
+                    layoutType == LayoutType.mobile)
+                  _buildBottomBar(),
               ],
             ),
           ],
@@ -243,7 +279,9 @@ class _PricingScreenState extends State<PricingScreen>
         dividerColor: Colors.transparent,
         labelColor: Colors.white,
         unselectedLabelColor: Colors.white54,
-        labelStyle: AppTypography.labelLarge.copyWith(fontWeight: FontWeight.w700),
+        labelStyle: AppTypography.labelLarge.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
         unselectedLabelStyle: AppTypography.labelLarge,
         tabs: const [
           Tab(text: 'Credit Packages'),
@@ -266,26 +304,7 @@ class _PricingScreenState extends State<PricingScreen>
             style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
           ),
           const SizedBox(height: AppSpacing.md),
-          GestureDetector(
-            onTap: _loadData,
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg,
-                vertical: AppSpacing.sm,
-              ),
-              decoration: BoxDecoration(
-                color: AppColors.primaryBlue,
-                borderRadius: AppSpacing.borderRadiusMd,
-              ),
-              child: Text(
-                'Retry',
-                style: AppTypography.labelLarge.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
+          FilledButton(onPressed: _loadData, child: const Text('Retry')),
         ],
       ),
     );
@@ -301,55 +320,94 @@ class _PricingScreenState extends State<PricingScreen>
       );
     }
 
-    final padding = ResponsiveUtils.getScreenPadding(layoutType);
-    final crossAxisCount = layoutType == LayoutType.mobile
-        ? 1
-        : layoutType == LayoutType.tablet
-            ? 2
-            : 3;
-
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.all(padding),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Buy Credits',
-            style: AppTypography.headlineSmall.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xxs),
-          Text(
-            'One-time purchase. Credits never expire.',
-            style: AppTypography.bodySmall.copyWith(color: Colors.white54),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: crossAxisCount,
-              crossAxisSpacing: AppSpacing.md,
-              mainAxisSpacing: AppSpacing.md,
-              childAspectRatio: crossAxisCount == 1 ? 2.2 : 1.1,
-            ),
-            itemCount: _packages.length,
-            itemBuilder: (context, index) {
-              final pkg = _packages[index];
-              return CreditPackageCard(
-                package: pkg,
-                isSelected: _selectedPackageId == pkg['id'],
-                isFeatured: pkg['is_featured'] == true,
-                onTap: () {
-                  setState(() => _selectedPackageId = pkg['id']);
-                },
+      padding: EdgeInsets.all(ResponsiveUtils.getScreenPadding(layoutType)),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 850
+                  ? 3
+                  : constraints.maxWidth >= 580
+                      ? 2
+                      : 1;
+              final cardWidth =
+                  (constraints.maxWidth - (columns - 1) * AppSpacing.md) /
+                      columns;
+              final starter = _packages.first;
+              final starterCredits =
+                  (starter['credits'] as num?)?.toDouble() ?? 0;
+              final starterCents =
+                  (starter['display_price_cents'] as num?)?.toDouble() ?? 0;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Buy credits', style: AppTypography.headlineSmallDark),
+                  const SizedBox(height: AppSpacing.xxs),
+                  Text(
+                    'One-time purchase. Credits never expire.',
+                    style: AppTypography.bodyMediumDark.copyWith(
+                      color: AppColors.textSecondaryDark,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  AnimatedBuilder(
+                    animation: CreditProvider.instance,
+                    builder: (context, _) {
+                      final credit = CreditProvider.instance;
+                      return Text(
+                        credit.hasValue
+                            ? 'Current balance: ${credit.balance} credits'
+                            : 'Current balance unavailable',
+                        style: AppTypography.bodySmallDark,
+                      );
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  Wrap(
+                    spacing: AppSpacing.md,
+                    runSpacing: AppSpacing.md,
+                    children: _packages.map((pkg) {
+                      final credits = (pkg['credits'] as num?)?.toDouble() ?? 0;
+                      final cents =
+                          (pkg['display_price_cents'] as num?)?.toDouble() ?? 0;
+                      final saving =
+                          starterCredits > 0 && starterCents > 0 && credits > 0
+                              ? ((1 -
+                                          (cents / credits) /
+                                              (starterCents / starterCredits)) *
+                                      100)
+                                  .round()
+                              : null;
+                      return SizedBox(
+                        width: cardWidth,
+                        child: CreditPackageCard(
+                          package: pkg,
+                          isSelected: _selectedPackageId == pkg['id'],
+                          isFeatured: pkg['is_featured'] == true,
+                          savingsPercent: saving,
+                          comparisonName: '${starter['name'] ?? 'Starter'}',
+                          onTap: () =>
+                              setState(() => _selectedPackageId = pkg['id']),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  if (layoutType != LayoutType.mobile) ...[
+                    const SizedBox(height: AppSpacing.lg),
+                    _buildCheckoutAction(),
+                  ],
+                  const SizedBox(height: AppSpacing.xxl),
+                  _buildCostExample(),
+                  const SizedBox(height: AppSpacing.xl),
+                  _buildCreditNotes(),
+                ],
               );
             },
           ),
-        ],
+        ),
       ),
     );
   }
@@ -411,67 +469,175 @@ class _PricingScreenState extends State<PricingScreen>
               );
             },
           ),
+          if (layoutType != LayoutType.mobile) ...[
+            const SizedBox(height: AppSpacing.lg),
+            _buildCheckoutAction(),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildBottomBar() {
-    final isPackage = !_showSubscriptionOptions || _tabController.index == 0;
-    final hasSelection = isPackage
-        ? _selectedPackageId != null
-        : _selectedPlanId != null;
+  Widget _buildCostExample() {
+    final selected = _packages.where((p) => p['id'] == _selectedPackageId);
+    final selectedCredits =
+        selected.isEmpty ? null : (selected.first['credits'] as num?)?.toInt();
+    final cost = _exampleCost;
+    return Container(
+      width: double.infinity,
+      padding: AppSpacing.paddingLg,
+      decoration: BoxDecoration(
+        color: AppColors.surfaceDark,
+        borderRadius: AppSpacing.borderRadiusLg,
+        border: Border.all(color: AppColors.borderDark),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('What can credits cover?', style: AppTypography.titleMediumDark),
+          const SizedBox(height: AppSpacing.xxs),
+          Text(
+            'Example search. Your exact maximum cost appears before you start.',
+            style: AppTypography.bodySmallDark,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: AppSpacing.md,
+            runSpacing: AppSpacing.xs,
+            children: [
+              _exampleDropdown('Cities', _exampleCities, const [1, 5, 10, 30], (
+                value,
+              ) {
+                setState(() => _exampleCities = value);
+                _loadExampleCost();
+              }),
+              _exampleDropdown(
+                'Leads per city',
+                _exampleLeads,
+                const [10, 25, 50, 100],
+                (value) {
+                  setState(() => _exampleLeads = value);
+                  _loadExampleCost();
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          if (_exampleLoading)
+            const LinearProgressIndicator(minHeight: 2)
+          else if (cost == null)
+            Text(
+              'Cost example unavailable. Check the exact cost when setting up a search.',
+              style: AppTypography.bodySmallDark,
+            )
+          else ...[
+            Text(
+              '$cost credits reserved to start this search',
+              style: AppTypography.titleMediumDark,
+            ),
+            if (selectedCredits != null) ...[
+              const SizedBox(height: AppSpacing.xxs),
+              Text(
+                selectedCredits >= cost
+                    ? 'The selected pack can start this example search.'
+                    : 'The selected pack alone is below this example’s starting cost.',
+                style: AppTypography.bodySmallDark,
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
 
+  Widget _exampleDropdown(
+    String label,
+    int value,
+    List<int> choices,
+    ValueChanged<int> onChanged,
+  ) {
+    return SizedBox(
+      width: 170,
+      child: DropdownButtonFormField<int>(
+        initialValue: value,
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          isDense: true,
+        ),
+        items: choices
+            .map((n) => DropdownMenuItem(value: n, child: Text('$n')))
+            .toList(),
+        onChanged: (n) {
+          if (n != null) onChanged(n);
+        },
+      ),
+    );
+  }
+
+  Widget _buildCreditNotes() {
     return AnimatedBuilder(
-      animation: _tabController.animation!,
-      builder: (context, child) {
-        return Container(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md,
-            AppSpacing.md,
-            AppSpacing.md,
-            AppSpacing.lg,
-          ),
-          decoration: BoxDecoration(
-            color: _PricingColors.background,
-            border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+      animation: CreditProvider.instance,
+      builder: (context, _) {
+        final refund = CreditProvider.instance.refundPolicySentence;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('How credits work', style: AppTypography.titleMediumDark),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Credits are a one-time purchase and do not expire.',
+              style: AppTypography.bodyMediumDark,
             ),
-          ),
-          child: GestureDetector(
-            onTap: hasSelection ? _proceedToCheckout : null,
-            child: AnimatedContainer(
-              duration: AppSpacing.durationMedium,
-              width: double.infinity,
-              height: 56,
-              decoration: BoxDecoration(
-                color: hasSelection
-                    ? AppColors.primaryBlue
-                    : AppColors.disabledDark,
-                borderRadius: AppSpacing.borderRadiusMd,
-                boxShadow: hasSelection
-                    ? [
-                        BoxShadow(
-                          color: AppColors.primaryBlue.withValues(alpha: 0.4),
-                          blurRadius: 15,
-                          offset: const Offset(0, 8),
-                        ),
-                      ]
-                    : null,
-              ),
-              child: Center(
-                child: Text(
-                  'Continue to Checkout',
-                  style: AppTypography.labelLarge.copyWith(
-                    color: hasSelection ? Colors.white : Colors.white38,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
-          ),
+            if (refund != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(refund, style: AppTypography.bodyMediumDark),
+            ],
+          ],
         );
       },
+    );
+  }
+
+  Widget _buildCheckoutAction({bool fullWidth = false}) {
+    final isPackage = !_showSubscriptionOptions || _tabController.index == 0;
+    final items = isPackage ? _packages : _plans;
+    final selectedId = isPackage ? _selectedPackageId : _selectedPlanId;
+    final selected = items.where((p) => p['id'] == selectedId);
+    final item = selected.isEmpty ? null : selected.first;
+    final cents = item == null
+        ? null
+        : (item['display_price_cents'] as num?)?.toInt() ??
+            (item['base_price_cents'] as num?)?.toInt();
+    final label = item == null
+        ? 'Select a ${isPackage ? 'package' : 'plan'} to continue'
+        : 'Continue with ${item['name']} · \$${((cents ?? 0) / 100).toStringAsFixed(2)}';
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SizedBox(
+        width: fullWidth ? double.infinity : null,
+        child: FilledButton.icon(
+          onPressed: item == null ? null : _proceedToCheckout,
+          icon: const Icon(Icons.arrow_forward_rounded),
+          label: Text(label),
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.primaryBlue,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomBar() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: const BoxDecoration(
+        color: _PricingColors.background,
+        border: Border(top: BorderSide(color: AppColors.borderDark)),
+      ),
+      child: _buildCheckoutAction(fullWidth: true),
     );
   }
 }
