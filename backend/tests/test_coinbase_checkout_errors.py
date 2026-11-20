@@ -1,70 +1,23 @@
 from fastapi.testclient import TestClient
 
 
-def test_purchase_endpoint_returns_503_for_coinbase_outage(test_db, monkeypatch):
+def test_purchase_endpoint_refuses_new_coinbase_checkouts(test_db):
+    """Coinbase is closed for NEW checkouts (Safepay only); see tests/test_safepay.py."""
     from main import app, purchase_credits
-    from payments.coinbase_service import CoinbaseProviderUnavailableError
 
     async def fake_current_user():
         return {"id": 123, "username": "tester"}
 
-    def fake_purchase(**kwargs):
-        raise CoinbaseProviderUnavailableError(
-            "Coinbase Commerce is temporarily unavailable. Please try again shortly."
-        )
-
-    monkeypatch.setattr("main._payment_processor.initiate_coinbase_package_purchase", fake_purchase)
     app.dependency_overrides.clear()
     app.dependency_overrides[purchase_credits.__globals__["get_current_user"]] = fake_current_user
-
     try:
-        client = TestClient(app)
-        response = client.post(
+        response = TestClient(app).post(
             "/api/payments/purchase",
-            json={
-                "package_id": 1,
-                "quantity": 1,
-                "idempotency_key": "outage-test-key",
-                "provider": "coinbase",
-            },
+            json={"package_id": 1, "quantity": 1, "idempotency_key": "cb-key", "provider": "coinbase"},
         )
     finally:
         app.dependency_overrides.clear()
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Coinbase Commerce is temporarily unavailable. Please try again shortly."
-
-
-def test_purchase_endpoint_returns_502_for_coinbase_provider_error(test_db, monkeypatch):
-    from main import app, purchase_credits
-    from payments.coinbase_service import CoinbaseServiceError
-
-    async def fake_current_user():
-        return {"id": 123, "username": "tester"}
-
-    def fake_purchase(**kwargs):
-        raise CoinbaseServiceError("upstream failure")
-
-    monkeypatch.setattr("main._payment_processor.initiate_coinbase_package_purchase", fake_purchase)
-    app.dependency_overrides.clear()
-    app.dependency_overrides[purchase_credits.__globals__["get_current_user"]] = fake_current_user
-
-    try:
-        client = TestClient(app)
-        response = client.post(
-            "/api/payments/purchase",
-            json={
-                "package_id": 1,
-                "quantity": 1,
-                "idempotency_key": "provider-error-key",
-                "provider": "coinbase",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 502
-    assert response.json()["detail"] == "Coinbase Commerce request failed. Please try again."
+    assert response.status_code == 410
 
 
 def test_coinbase_purchase_marks_transaction_failed_on_charge_error(

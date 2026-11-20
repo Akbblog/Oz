@@ -121,6 +121,38 @@ GOOGLE_PAY_ENVIRONMENT = os.getenv("GOOGLE_PAY_ENVIRONMENT", "TEST").strip().upp
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY", "your_coinbase_api_key")
 COINBASE_WEBHOOK_SECRET = os.getenv("COINBASE_WEBHOOK_SECRET", "your_coinbase_webhook_secret")
 
+# Safepay (Payments 2.0 Express Checkout) - the only provider for NEW credit purchases.
+# SAFEPAY_ENV selects exactly one environment; hosts are fixed in payments/safepay_service.py
+# and each environment reads ONLY its own credentials, so sandbox keys can never be sent
+# to the production host (or the reverse). Defaults to sandbox.
+SAFEPAY_ENV = os.getenv("SAFEPAY_ENV", "sandbox").strip().lower()
+# Sandbox credentials. SAFEPAY_API_KEY / SAFEPAY_API_SECRET are accepted as legacy
+# names for the SANDBOX pair only (never for production).
+SAFEPAY_SANDBOX_API_KEY = (os.getenv("SAFEPAY_SANDBOX_API_KEY") or os.getenv("SAFEPAY_API_KEY") or "").strip()
+SAFEPAY_SANDBOX_SECRET_KEY = (os.getenv("SAFEPAY_SANDBOX_SECRET_KEY") or os.getenv("SAFEPAY_API_SECRET") or "").strip()
+SAFEPAY_SANDBOX_WEBHOOK_SECRET = os.getenv("SAFEPAY_SANDBOX_WEBHOOK_SECRET", "").strip()
+# Production (live) credentials.
+SAFEPAY_LIVE_API_KEY = os.getenv("SAFEPAY_LIVE_API_KEY", "").strip()
+SAFEPAY_LIVE_SECRET_KEY = os.getenv("SAFEPAY_LIVE_SECRET_KEY", "").strip()
+SAFEPAY_LIVE_WEBHOOK_SECRET = os.getenv("SAFEPAY_LIVE_WEBHOOK_SECRET", "").strip()
+# Customer-facing charge currency. Credit packs are priced in USD and are charged in USD
+# at exactly the pack price; Safepay settles to the merchant in PKR at its own rate
+# (stored per transaction for reconciliation). Only USD is supported by the code.
+SAFEPAY_CHARGE_CURRENCY = "USD"
+# Who may start a Safepay checkout. Comma-separated user ids and/or emails.
+# In sandbox, checkout is restricted to this list unless SAFEPAY_SANDBOX_OPEN_TO_ALL=true
+# (only for isolated local/staging stacks) - otherwise anyone on the live site could buy
+# real credits with a sandbox test card.
+SAFEPAY_CHECKOUT_ALLOWLIST = [
+    v.strip().lower() for v in os.getenv("SAFEPAY_CHECKOUT_ALLOWLIST", "").split(",") if v.strip()
+]
+SAFEPAY_SANDBOX_OPEN_TO_ALL = os.getenv("SAFEPAY_SANDBOX_OPEN_TO_ALL", "false").strip().lower() in ("1", "true", "yes")
+# Pending checkouts are expired (never credited unless Safepay later confirms payment)
+# after this many minutes. Safepay's checkout token is valid for 60 minutes.
+SAFEPAY_CHECKOUT_EXPIRY_MINUTES = int(os.getenv("SAFEPAY_CHECKOUT_EXPIRY_MINUTES", "75"))
+# Background reconciliation of pending Safepay transactions (seconds; 0 disables).
+SAFEPAY_RECONCILE_INTERVAL_SECONDS = int(os.getenv("SAFEPAY_RECONCILE_INTERVAL_SECONDS", "120"))
+
 # SMTP Email Settings
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

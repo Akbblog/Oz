@@ -90,8 +90,11 @@ class WebhookHandler:
         if not self._coinbase.verify_webhook(raw_body, signature):
             raise ValueError("Invalid Coinbase webhook signature")
 
-        event = json.loads(raw_body.decode("utf-8"))
-        webhook_id = str(event.get("id") or "")
+        body = json.loads(raw_body.decode("utf-8"))
+        # Coinbase Commerce delivers {"id", "scheduled_for", "event": {"id", "type", "data"}};
+        # older code read the fields at the top level. Accept both shapes.
+        event = body.get("event") if isinstance(body.get("event"), dict) else body
+        webhook_id = str(event.get("id") or body.get("id") or "")
         event_type = str(event.get("type") or "")
         webhook_db_id, already_processed = begin_webhook_event(
             webhook_id=webhook_id,

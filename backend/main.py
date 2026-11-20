@@ -25,6 +25,8 @@ import base64
 from io import BytesIO
 import config
 
+from payments import safepay_checkout
+from payments.safepay_service import SafepayError, SafepayNotConfigured, SafepayUnavailable
 from payments.coinbase_service import (
     CoinbaseCommerceService,
     CoinbaseProviderUnavailableError,
@@ -163,8 +165,8 @@ def ensure_default_admin_settings() -> None:
     defaults: List[Tuple[str, str]] = [
         # When false, users see Payments Coming Soon instead of live payment screens.
         ("enable_live_payments", "false"),
-        # Coinbase-only rollout: keep method surface aligned across backend/frontend.
-        ("payment_methods_enabled", "coinbase"),
+        # Safepay is the only provider for new purchases (Coinbase kept for in-flight webhooks only).
+        ("payment_methods_enabled", "safepay"),
     ]
     for key, value in defaults:
         if not admin_setting_exists(key):
@@ -172,11 +174,11 @@ def ensure_default_admin_settings() -> None:
             # users FK and crashed startup on a fresh DB with no admin yet.)
             set_admin_setting(key, value, admin_id=None)
 
-    # Enforce Coinbase-only payment methods for existing databases.
-    current = get_admin_setting("payment_methods_enabled", "coinbase")
+    # Enforce Safepay-only payment methods for existing databases.
+    current = get_admin_setting("payment_methods_enabled", "safepay")
     methods = [m.strip().lower() for m in str(current).split(",") if m.strip()]
-    if methods != ["coinbase"]:
-        set_admin_setting("payment_methods_enabled", "coinbase", admin_id=None)
+    if methods != ["safepay"]:
+        set_admin_setting("payment_methods_enabled", "safepay", admin_id=None)
 
 
 def get_all_admin_settings() -> dict:
@@ -446,6 +448,26 @@ app.add_middleware(AuditMiddleware)
 # `python job_worker.py` process run scraping instead of the API process.
 
 
+async def _safepay_reconcile_loop() -> None:
+    interval = int(config.SAFEPAY_RECONCILE_INTERVAL_SECONDS)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            counts = await asyncio.to_thread(safepay_checkout.reconcile_open_transactions)
+            if counts.get("completed") or counts.get("expired") or counts.get("errors"):
+                logging.getLogger(__name__).info("Safepay reconcile: %s", counts)
+        except Exception:
+            logging.getLogger(__name__).exception("Safepay reconcile loop error")
+
+
+@app.on_event("startup")
+async def _startup_safepay_reconciler():
+    if os.getenv("SKIP_DB_INIT", "").strip().lower() in ("1", "true", "t", "yes", "y"):
+        return
+    if int(config.SAFEPAY_RECONCILE_INTERVAL_SECONDS) > 0:
+        asyncio.create_task(_safepay_reconcile_loop())
+
+
 @app.on_event("startup")
 async def _startup_job_runner():
     global _job_runner
@@ -613,7 +635,7 @@ class PurchaseRequest(BaseModel):
     quantity: int = 1
     promo_code: Optional[str] = None
     # Flutter/web clients historically send `payment_provider`; keep both for compatibility.
-    provider: str = "coinbase"  # Coinbase-only
+    provider: str = "safepay"  # Safepay-only for new checkouts
     payment_provider: Optional[str] = None
     idempotency_key: str
 
@@ -2401,9 +2423,8 @@ async def get_feature_flags(current_user: dict = Depends(get_current_user)):
     enabled_raw = get_admin_setting("enable_live_payments", "false")
     enable_live_payments = str(enabled_raw).strip().lower() == "true"
 
-    get_admin_setting("payment_methods_enabled", "coinbase")
-    # Coinbase-only: return a single method even if legacy settings contain others.
-    methods = ["coinbase"]
+    # Safepay-only: return a single method even if legacy settings contain others.
+    methods = ["safepay"]
 
     return {
         "enable_live_payments": enable_live_payments,
@@ -4606,41 +4627,70 @@ async def calculate_price(req: PriceCalcRequest, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/api/payments/checkout-config")
+async def get_checkout_config(current_user: dict = Depends(get_current_user)):
+    """What the checkout screen may offer this user (no secrets)."""
+    available, reason, env = safepay_checkout.checkout_availability(current_user)
+    return {
+        "provider": "safepay",
+        "environment": env,
+        "currency": config.SAFEPAY_CHARGE_CURRENCY,
+        "checkout_available": available,
+        "unavailable_reason": reason,
+    }
+
+
 @app.post("/api/payments/purchase")
 async def purchase_credits(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
-    """Initiate a Coinbase charge for a credit package."""
-    if req.quantity <= 0:
-        raise HTTPException(status_code=400, detail="quantity must be > 0")
+    """Start a Safepay hosted checkout for a credit package.
 
+    Credits are NOT granted here or on the browser return; only a verified Safepay
+    webhook or a server-to-server tracker lookup completes the purchase.
+    """
+    provider = (req.payment_provider or req.provider or "safepay").strip().lower()
+    if provider != "safepay":
+        raise HTTPException(status_code=410, detail="This payment method is no longer available. Please pay by card.")
+    if req.quantity != 1:
+        raise HTTPException(status_code=400, detail="quantity must be 1")
     try:
-        result = _payment_processor.initiate_coinbase_package_purchase(
-            user_id=current_user["id"],
-            package_id=req.package_id,
-            quantity=req.quantity,
-            promo_code=req.promo_code,
-            idempotency_key=req.idempotency_key,
-            currency=config.PAYMENT_CONFIG.get("currency", "USD"),
+        return await asyncio.to_thread(
+            lambda: safepay_checkout.start_package_checkout(
+                user=current_user,
+                package_id=req.package_id,
+                quantity=req.quantity,
+                promo_code=req.promo_code,
+                idempotency_key=req.idempotency_key,
+            )
         )
-        return {
-            "transaction_id": result.transaction_id,
-            "payment_provider": result.provider,
-            "amount_cents": result.amount_cents,
-            "currency": result.currency,
-            "credits_purchased": result.credits,
-            "bonus_credits": result.bonus_credits,
-            "provider_transaction_id": result.provider_transaction_id,
-            "hosted_url": result.hosted_url,
-        }
-
+    except safepay_checkout.CheckoutUnavailable as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except SafepayUnavailable:
+        raise HTTPException(status_code=503, detail="Card payments are temporarily unavailable. Please try again in a few minutes.")
+    except SafepayNotConfigured:
+        raise HTTPException(status_code=503, detail="Card payments are not configured yet.")
+    except SafepayError:
+        logging.exception("Safepay checkout creation failed")
+        raise HTTPException(status_code=502, detail="Could not start the card checkout. Please try again.")
     except ValueError as e:
-        # Idempotency conflict etc
-        raise HTTPException(status_code=409, detail=str(e))
-    except CoinbaseProviderUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except CoinbaseServiceError:
-        raise HTTPException(status_code=502, detail="Coinbase Commerce request failed. Please try again.")
-    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/payments/safepay/{transaction_id}/status")
+async def safepay_payment_status(transaction_id: str, current_user: dict = Depends(get_current_user)):
+    """Status for the return page. May ask Safepay server-to-server; never trusts the browser."""
+    try:
+        return await asyncio.to_thread(safepay_checkout.status_for_user, transaction_id, int(current_user["id"]))
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+
+@app.post("/api/payments/safepay/{transaction_id}/cancel")
+async def safepay_payment_cancelled(transaction_id: str, current_user: dict = Depends(get_current_user)):
+    """The shopper returned through Safepay's cancel link. A tracker that was actually paid still credits."""
+    try:
+        return await asyncio.to_thread(safepay_checkout.cancel_by_user, transaction_id, int(current_user["id"]))
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
 
 class PayPalCaptureRequest(BaseModel):
@@ -4729,151 +4779,14 @@ async def simple_purchase(
     request: SimplePurchaseRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Simple credit purchase via Coinbase Commerce: $0.10 per credit (flat rate)."""
-    if request.credits < 100:
-        raise HTTPException(status_code=400, detail="Minimum purchase is 100 credits")
-
-    # Calculate price in cents
-    base_cents = request.credits * 10  # $0.10 = 10 cents per credit
-    discount_cents = 0
-    promo_name = ""
-    bonus_credits = 0
-    promo_code_id: Optional[int] = None
-
-    # Apply promo code if provided
-    if request.promo_code:
-        try:
-            normalized_code = str(request.promo_code).strip().upper()
-            promo_effect = _promo_service.validate_and_calculate(
-                user_id=current_user["id"],
-                code=normalized_code,
-                subtotal_cents=int(base_cents),
-                applies_to="all",
-            )
-            if promo_effect:
-                discount_cents = int(promo_effect.discount_cents or 0)
-                bonus_credits = int(promo_effect.bonus_credits or 0)
-                promo_name = str(promo_effect.code or normalized_code)
-                promo_code_id = int(promo_effect.promo_code_id)
-                logging.info(
-                    "Applied promo on simple-purchase user_id=%s code=%s discount_cents=%s bonus_credits=%s",
-                    current_user["id"],
-                    promo_name,
-                    discount_cents,
-                    bonus_credits,
-                )
-        except Exception as e:
-            logging.warning(f"Promo code validation failed: {e}")
-
-    total_cents = max(0, base_cents - discount_cents)
-
-    # Create Coinbase charge + tracked transaction so webhook completion can grant credits.
-    transaction_id: Optional[str] = None
-    try:
-        from db.base import execute_query
-        from db.payment_crud import create_payment_transaction
-
-        transaction_id = str(uuid.uuid4())
-        idempotency_key = f"simple-{current_user['id']}-{uuid.uuid4()}"
-
-        create_payment_transaction(
-            transaction_id=transaction_id,
-            user_id=int(current_user["id"]),
-            payment_provider="coinbase",
-            amount_cents=int(total_cents),
-            currency="USD",
-            credits_purchased=int(request.credits),
-            idempotency_key=idempotency_key,
-            status="pending",
-            promo_code_id=promo_code_id,
-        )
-
-        charge = _coinbase_service.create_charge(
-            name=f"{request.credits} Credits",
-            description="Simple credit purchase",
-            amount=f"{total_cents / 100.0:.2f}",
-            currency="USD",
-            metadata={
-                "user_id": int(current_user["id"]),
-                "transaction_id": transaction_id,
-                "credits": int(request.credits),
-                "promo_code": (promo_name or (request.promo_code or "")).strip(),
-            },
-        )
-
-        charge_id = str(charge.get("id") or "")
-        hosted_url = str(charge.get("hosted_url") or "")
-        if not hosted_url:
-            raise ValueError("Coinbase charge did not return a hosted_url")
-
-        execute_query(
-            """
-            UPDATE payment_transactions
-            SET provider_transaction_id = ?, status = 'processing', updated_at = ?
-            WHERE transaction_id = ?
-            """,
-            (charge_id, datetime.now().isoformat(), transaction_id),
-        )
-
-        return {
-            "checkout_url": hosted_url,
-            "hosted_url": hosted_url,
-            "charge_id": charge_id,
-            "transaction_id": transaction_id,
-            "payment_provider": "coinbase",
-            "credits": request.credits,
-            "subtotal_cents": base_cents,
-            "discount_cents": discount_cents,
-            "total_cents": total_cents,
-            "bonus_credits": bonus_credits,
-            "promo_applied": promo_name if promo_name else None,
-        }
-    except CoinbaseProviderUnavailableError as e:
-        if transaction_id:
-            try:
-                from db.base import execute_query
-                execute_query(
-                    "UPDATE payment_transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?",
-                    (datetime.now().isoformat(), transaction_id),
-                )
-            except Exception:
-                pass
-        logging.error(f"Coinbase charge creation temporarily unavailable: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
-    except CoinbaseServiceError:
-        if transaction_id:
-            try:
-                from db.base import execute_query
-                execute_query(
-                    "UPDATE payment_transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?",
-                    (datetime.now().isoformat(), transaction_id),
-                )
-            except Exception:
-                pass
-        logging.error("Coinbase charge creation failed due to provider error")
-        raise HTTPException(status_code=502, detail="Failed to create Coinbase checkout")
-    except Exception as e:
-        if transaction_id:
-            try:
-                from db.base import execute_query
-                execute_query(
-                    "UPDATE payment_transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?",
-                    (datetime.now().isoformat(), transaction_id),
-                )
-            except Exception:
-                pass
-        logging.error(f"Coinbase charge creation failed: {e}")
-        raise HTTPException(status_code=400, detail="Failed to create Coinbase checkout")
+    """Retired: the Coinbase flat-rate checkout. New purchases use credit packs via Safepay."""
+    raise HTTPException(status_code=410, detail="Please choose a credit pack to buy credits.")
 
 
 @app.post("/api/payments/crypto/create-charge")
 async def create_crypto_charge(req: PurchaseRequest, current_user: dict = Depends(get_current_user)):
-    """
-    Back-compat alias for initiating a Coinbase Commerce purchase.
-    Prefer POST /api/payments/purchase with provider='coinbase'.
-    """
-    req.provider = "coinbase"
-    return await purchase_credits(req, current_user=current_user)
+    """Retired: Coinbase checkouts are closed for new purchases (existing ones still settle via webhook)."""
+    raise HTTPException(status_code=410, detail="Crypto payments are no longer available. Please pay by card.")
 
 
 @app.get("/api/payments/methods")
@@ -5103,6 +5016,23 @@ async def coinbase_webhook(request: Request):
         return _webhook_handler.handle_coinbase_webhook(payload, sig)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/webhooks/safepay")
+async def safepay_webhook(request: Request):
+    """Safepay Payments 2.0 webhook (X-SFPY-SIGNATURE = hex HMAC-SHA512 of the body)."""
+    payload = await request.body()
+    sig = request.headers.get("x-sfpy-signature") or ""
+    if not sig:
+        raise HTTPException(status_code=401, detail="Missing Safepay signature")
+    try:
+        return await asyncio.to_thread(safepay_checkout.handle_webhook, payload, sig)
+    except safepay_checkout.WebhookRejected as e:
+        logging.warning("Safepay webhook rejected: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    except Exception:
+        logging.exception("Safepay webhook processing failed")
+        raise HTTPException(status_code=500, detail="Webhook processing failed")
 
 
 @app.get("/api/subscriptions/plans")
