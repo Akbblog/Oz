@@ -3,8 +3,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_spacing.dart';
 import '../core/theme/app_typography.dart';
+import '../core/error_handler.dart';
 import '../services/api_service.dart';
-import '../widgets/crypto_payment_widget.dart';
 import '../widgets/promo_code_input.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -26,14 +26,29 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String? _paymentError;
   Map<String, dynamic>? _promo;
   Map<String, dynamic>? _priceBreakdown;
-  bool _isCoinbaseLoading = false;
-  Map<String, dynamic>? _coinbaseCharge;
+  bool _isStarting = false;
+  Map<String, dynamic>? _checkoutConfig;
+  bool _configLoading = true;
 
   @override
   void initState() {
     super.initState();
     if (!widget.isSubscription) {
       _calculatePrice();
+      _loadCheckoutConfig();
+    }
+  }
+
+  Future<void> _loadCheckoutConfig() async {
+    try {
+      final cfg = await _apiService.getCheckoutConfig();
+      if (mounted) setState(() => _checkoutConfig = cfg);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _paymentError = ErrorHandler.getUserFriendlyMessage(e));
+      }
+    } finally {
+      if (mounted) setState(() => _configLoading = false);
     }
   }
 
@@ -46,73 +61,56 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       if (mounted) {
         setState(() => _priceBreakdown = result);
       }
-    } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        setState(() => _paymentError = ErrorHandler.getUserFriendlyMessage(e));
+      }
+    }
   }
 
-  Future<void> _initiateCoinbaseCheckout() async {
-    if (widget.isSubscription) {
-      setState(() {
-        _paymentError =
-            'Subscription checkout via Coinbase is not enabled yet.';
-      });
-      return;
-    }
-
+  /// Starts a Safepay hosted checkout and sends the browser there (same tab),
+  /// so Safepay can redirect back to `/payment/return/{id}` afterwards.
+  /// Credits are only added after the server confirms the payment.
+  Future<void> _startCardCheckout() async {
+    if (widget.isSubscription) return;
     final packageId = (widget.item['id'] as num?)?.toInt();
     if (packageId == null || packageId <= 0) {
-      setState(() {
-        _paymentError = 'Invalid package selected.';
-      });
+      setState(() => _paymentError = 'Invalid package selected.');
       return;
     }
 
     setState(() {
-      _isCoinbaseLoading = true;
+      _isStarting = true;
       _paymentError = null;
     });
 
     try {
-      final idempotencyKey = DateTime.now().millisecondsSinceEpoch.toString();
+      final idempotencyKey =
+          '${DateTime.now().microsecondsSinceEpoch}-${identityHashCode(this)}';
       final result = await _apiService.purchaseCredits(
         packageId: packageId,
-        paymentProvider: 'coinbase',
+        paymentProvider: 'safepay',
         promoCode: _promo?['code'],
         idempotencyKey: idempotencyKey,
       );
-
-      final hostedUrl =
-          (result['hosted_url'] ?? result['checkout_url'] ?? '').toString();
-      if (hostedUrl.isEmpty) {
-        throw Exception('Coinbase checkout link was not returned');
+      final checkoutUrl =
+          (result['checkout_url'] ?? result['hosted_url'] ?? '').toString();
+      final uri = Uri.tryParse(checkoutUrl);
+      if (uri == null || !uri.hasScheme || !uri.host.endsWith('getsafepay.com')) {
+        throw Exception('The card checkout link was not returned. Please try again.');
       }
-
-      final uri = Uri.tryParse(hostedUrl);
-      if (uri == null) {
-        throw Exception('Invalid Coinbase checkout link');
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _coinbaseCharge = {
-          ...result,
-          'status': result['status'] ?? 'processing',
-          'hosted_url': hostedUrl,
-        };
-        _isCoinbaseLoading = false;
-      });
-
-      final launched =
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final launched = await launchUrl(uri, webOnlyWindowName: '_self');
       if (!launched && mounted) {
         setState(() {
-          _paymentError = 'Could not open Coinbase checkout.';
+          _paymentError = 'Could not open the card checkout.';
+          _isStarting = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _paymentError = e.toString().replaceFirst('Exception: ', '');
-          _isCoinbaseLoading = false;
+          _paymentError = ErrorHandler.getUserFriendlyMessage(e);
+          _isStarting = false;
         });
       }
     }
@@ -152,17 +150,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           _buildPriceBreakdown(),
                           const SizedBox(height: AppSpacing.lg),
                         ],
-                        // Coinbase checkout only
+                        // Safepay card checkout only
                         const SizedBox(height: AppSpacing.lg),
                         if (widget.isSubscription)
                           _buildSubscriptionUnsupportedCard()
                         else
-                          CryptoPaymentWidget(
-                            chargeData: _coinbaseCharge,
-                            isLoading: _isCoinbaseLoading,
-                            onCreateCharge: _initiateCoinbaseCheckout,
-                            error: _paymentError,
-                          ),
+                          _buildCardPayment(),
                         const SizedBox(height: AppSpacing.xl),
                       ],
                     ),
@@ -379,6 +372,87 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  Widget _buildCardPayment() {
+    final cfg = _checkoutConfig;
+    final available = cfg?['checkout_available'] == true;
+    final unavailableReason = (cfg?['unavailable_reason'] ?? '').toString();
+    final isSandbox = (cfg?['environment'] ?? '') == 'sandbox';
+    final totalCents = _priceBreakdown?['total_cents'] ??
+        widget.item['display_price_cents'] ??
+        widget.item['base_price_cents'] ??
+        0;
+    final total = ((totalCents as num) / 100).toStringAsFixed(2);
+    final canPay = available && !_isStarting && !_configLoading && _priceBreakdown != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Pay by card',
+          style: AppTypography.titleMedium.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Secure checkout by Safepay (Visa, Mastercard). You will be charged US\$$total. '
+          'If your card is in another currency, your bank converts the amount.',
+          style: AppTypography.bodySmall.copyWith(color: Colors.white60),
+        ),
+        if (isSandbox) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Sandbox mode: test cards only, no real money moves.',
+            style: AppTypography.labelSmall.copyWith(color: const Color(0xFFF59E0B)),
+          ),
+        ],
+        const SizedBox(height: AppSpacing.md),
+        if (!_configLoading && cfg != null && !available)
+          _notice(unavailableReason.isEmpty
+              ? 'Card payments are not available right now.'
+              : unavailableReason),
+        if (_paymentError != null) _notice(_paymentError!, danger: true),
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: FilledButton.icon(
+            key: const ValueKey('safepay-pay-button'),
+            onPressed: canPay ? _startCardCheckout : null,
+            icon: _isStarting
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.lock_rounded, size: 18),
+            label: Text(_isStarting ? 'Opening secure checkout...' : 'Pay US\$$total by card'),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Credits are added once Safepay confirms the payment.',
+          style: AppTypography.labelSmall.copyWith(color: Colors.white38),
+        ),
+      ],
+    );
+  }
+
+  Widget _notice(String text, {bool danger = false}) {
+    final color = danger ? AppColors.dangerRed : const Color(0xFFF59E0B);
+    return Container(
+      width: double.infinity,
+      padding: AppSpacing.paddingSm,
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: AppSpacing.borderRadiusSm,
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(text, style: AppTypography.bodySmall.copyWith(color: color)),
+    );
+  }
+
   Widget _buildSubscriptionUnsupportedCard() {
     return Container(
       width: double.infinity,
@@ -389,7 +463,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: Text(
-        'Subscription checkout is not available in Coinbase-only mode yet.',
+        'Subscriptions are not available yet. Please choose a credit pack.',
         style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
       ),
     );

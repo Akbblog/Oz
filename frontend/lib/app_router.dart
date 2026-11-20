@@ -24,6 +24,7 @@ import 'screens/live_payments_gate_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/my_searches_screen.dart';
 import 'screens/payment_methods_screen.dart';
+import 'screens/payment_return_screen.dart';
 import 'screens/pricing_screen.dart';
 import 'screens/privacy_policy_screen.dart';
 import 'screens/profile_screen.dart';
@@ -179,6 +180,24 @@ class AppRouter {
       case '/admin/promos':
         return _page(settings,
             const ProtectedRoute(requireAdmin: true, child: AdminPromoManagementScreen()));
+    }
+
+    // Safepay hosted checkout returns here (redirect_url / cancel_url).
+    for (final prefix in const ['/payment/return/', '/payment/cancelled/']) {
+      if (path.startsWith(prefix)) {
+        final txn = Uri.decodeComponent(path.substring(prefix.length));
+        if (txn.isNotEmpty && !txn.contains('/')) {
+          return _page(
+            settings,
+            ProtectedRoute(
+              child: PaymentReturnScreen(
+                transactionId: txn,
+                cancelled: prefix == '/payment/cancelled/',
+              ),
+            ),
+          );
+        }
+      }
     }
 
     if (path.startsWith('/searches/')) {

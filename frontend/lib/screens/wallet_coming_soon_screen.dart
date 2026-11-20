@@ -478,14 +478,14 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
     final rawMethods = flags['payment_methods_enabled'];
     final methods = rawMethods is List
         ? rawMethods.map((m) => m.toString().trim().toLowerCase()).toList()
-        : <String>['coinbase'];
+        : <String>['safepay'];
 
     if (!mounted) return;
     setState(() {
       _creditBalance = creditBalance;
       _enableLivePayments = enabled;
-      final filtered = methods.where((m) => m == 'coinbase').toSet().toList();
-      _methods = filtered.isEmpty ? const ['coinbase'] : filtered;
+      final filtered = methods.where((m) => m == 'safepay').toSet().toList();
+      _methods = filtered.isEmpty ? const ['safepay'] : filtered;
       _loading = false;
     });
   }
@@ -741,7 +741,7 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
   }
 
   Widget _buildPaymentMethodsSection(LayoutType layoutType) {
-    final methods = _methods.isEmpty ? const <String>['coinbase'] : _methods;
+    final methods = _methods.isEmpty ? const <String>['safepay'] : _methods;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -807,6 +807,13 @@ class _WalletComingSoonScreenState extends State<WalletComingSoonScreen> {
           description: 'PayPal account',
           icon: Icons.account_balance_wallet_rounded,
           color: Color(0xFF4DA6E8),
+        );
+      case 'safepay':
+        return const _MethodSpec(
+          name: 'Card (Safepay)',
+          description: 'Visa & Mastercard',
+          icon: Icons.credit_card_rounded,
+          color: Color(0xFF9B8FFF),
         );
       case 'coinbase':
         return const _MethodSpec(

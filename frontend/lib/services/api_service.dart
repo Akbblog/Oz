@@ -1468,6 +1468,52 @@ class ApiService {
     }
   }
 
+  /// What the checkout may offer this user (provider, environment, currency, availability).
+  Future<Map<String, dynamic>> getCheckoutConfig() async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(Uri.parse('$baseUrl/api/payments/checkout-config'), headers: headers)
+        .timeout(timeout);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    ErrorHandler.handleHttpError(response, context: 'Checkout');
+    throw ApiException('Could not load checkout options');
+  }
+
+  /// Server-confirmed status of a Safepay payment. The server may check with
+  /// Safepay itself; the browser return never grants credits.
+  Future<Map<String, dynamic>> getSafepayPaymentStatus(String transactionId) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/payments/safepay/${Uri.encodeComponent(transactionId)}/status'),
+          headers: headers,
+        )
+        .timeout(timeout);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    ErrorHandler.handleHttpError(response, context: 'Payment status');
+    throw ApiException('Could not check the payment status');
+  }
+
+  /// The shopper came back through Safepay's cancel link.
+  Future<Map<String, dynamic>> cancelSafepayPayment(String transactionId) async {
+    final headers = await _getHeaders();
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/api/payments/safepay/${Uri.encodeComponent(transactionId)}/cancel'),
+          headers: headers,
+        )
+        .timeout(timeout);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    ErrorHandler.handleHttpError(response, context: 'Payment status');
+    throw ApiException('Could not update the payment');
+  }
+
   Future<Map<String, dynamic>> simplePurchaseCredits({
     required int credits,
     String? promoCode,
