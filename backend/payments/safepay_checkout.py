@@ -506,21 +506,35 @@ def handle_webhook(raw_body: bytes, signature: str) -> Dict[str, Any]:
 
     env = active_environment()
     svc = SafepayService(env)
-    if not svc.webhook_configured():
-        raise WebhookRejected("Safepay webhook secret is not configured for this environment")
-    if not svc.verify_webhook_signature(raw_body, signature):
-        raise WebhookRejected("Invalid Safepay webhook signature")
     try:
         event = json.loads(raw_body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise WebhookRejected("Malformed webhook body") from exc
+    except (ValueError, UnicodeDecodeError):
+        event = None
     if not isinstance(event, dict):
+        logger.warning("Safepay webhook: malformed body (%d bytes)", len(raw_body))
         raise WebhookRejected("Malformed webhook body")
+
+    raw_type = str(event.get("type") or event.get("event") or "")
+    version = str(event.get("version") or "")
+    scheme = svc.signature_scheme(raw_body, signature) if svc.webhook_configured() else None
+    # Delivery diagnostics only: no secrets, keys or payment details.
+    logger.info("Safepay webhook received: env=%s type=%s version=%s token=%s scheme=%s bytes=%d",
+                env, raw_type[:40] or "?", version[:10] or "-", str(event.get("token") or "")[:12] or "-",
+                scheme or ("unverified" if svc.webhook_configured() else "no-secret"), len(raw_body))
+    if not svc.webhook_configured():
+        raise WebhookRejected("Safepay webhook secret is not configured for this environment")
+    if scheme is None:
+        raise WebhookRejected("Invalid Safepay webhook signature")
     merchant_key = event.get("merchant_api_key")
     if merchant_key and str(merchant_key) != svc.creds.api_key:
         raise WebhookRejected("Webhook belongs to a different Safepay merchant/environment")
+    if scheme != "v2" or version != "2.0.0":
+        # Legacy (v1) notifications such as payment:created are acknowledged so Safepay stops
+        # retrying, but they never change a payment or grant credits.
+        logger.info("Safepay webhook: legacy/non-2.0 event %s acknowledged and ignored", raw_type[:40] or "?")
+        return {"received": True, "ignored": "legacy event"}
 
-    event_type = str(event.get("type") or "")
+    event_type = raw_type.strip().lower()
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     tracker = str(data.get("tracker") or "")
     meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}

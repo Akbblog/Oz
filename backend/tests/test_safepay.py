@@ -499,3 +499,55 @@ def test_sandbox_payments_are_not_counted_as_revenue(safepay, buyer, pack):
     execute_query("UPDATE payment_transactions SET provider_environment = 'production' WHERE transaction_id = ?",
                   (start["transaction_id"],))
     assert revenue_between_cents(*window) == 2500
+
+
+def _legacy_sign(body: dict, secret=SANDBOX_WH):
+    data = json.dumps(body["data"], separators=(",", ":")).encode()
+    return hmac.new(secret.encode(), data, hashlib.sha512).hexdigest()
+
+
+def test_legacy_and_non_v2_events_are_acknowledged_but_never_credit(safepay, buyer, pack):
+    start = _start(buyer, pack)
+    app, client = _client(buyer)
+    try:
+        # Legacy v1 notification (signature covers only "data"), e.g. payment:created.
+        legacy = {"token": "legacy-1", "type": "payment:created",
+                  "data": {"tracker": start["provider_transaction_id"], "amount": 2500, "currency": "USD",
+                           "state": "TRACKER_ENDED", "metadata": {"order_id": start["transaction_id"]}}}
+        raw = json.dumps(legacy).encode()
+        r = client.post("/api/webhooks/safepay", content=raw, headers={"X-SFPY-SIGNATURE": _legacy_sign(legacy)})
+        assert r.status_code == 200 and r.json() == {"received": True, "ignored": "legacy event"}
+        # Same data with a 2.0 type but legacy-style signature: still ignored.
+        legacy["type"] = "payment.succeeded"
+        legacy["version"] = "2.0.0"
+        raw = json.dumps(legacy).encode()
+        r = client.post("/api/webhooks/safepay", content=raw, headers={"X-SFPY-SIGNATURE": _legacy_sign(legacy)})
+        assert r.status_code == 200 and r.json().get("ignored") == "legacy event"
+        # Whole-body signed but not version 2.0.0: ignored.
+        body = json.loads(_event(start))
+        body["version"] = "1.0.0"
+        raw = json.dumps(body).encode()
+        r = client.post("/api/webhooks/safepay", content=raw, headers={"X-SFPY-SIGNATURE": _sign(raw)})
+        assert r.status_code == 200 and r.json().get("ignored") == "legacy event"
+        # Unsigned legacy event: rejected.
+        assert client.post("/api/webhooks/safepay", content=raw, headers={"X-SFPY-SIGNATURE": "00"}).status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+    assert _balance(buyer["id"]) == 100
+    assert _txn(start["transaction_id"])["status"] == "processing"
+
+
+def test_safepay_test_event_with_unknown_tracker_is_not_credited(safepay, buyer, pack):
+    _start(buyer, pack)
+    body = {"token": "evt_" + str(uuid.uuid4()), "version": "2.0.0", "merchant_api_key": SANDBOX_KEY,
+            "type": "payment.succeeded",
+            "data": {"tracker": "track_" + str(uuid.uuid4()), "state": "TRACKER_ENDED", "amount": 2500,
+                     "currency": "USD", "metadata": {"order_id": "test-order"}}}
+    raw = json.dumps(body).encode()
+    app, client = _client(buyer)
+    try:
+        r = client.post("/api/webhooks/safepay", content=raw, headers={"X-SFPY-SIGNATURE": _sign(raw)})
+    finally:
+        app.dependency_overrides.clear()
+    assert r.status_code == 200 and r.json().get("ignored") == "unknown transaction"
+    assert _balance(buyer["id"]) == 100

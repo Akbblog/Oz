@@ -233,6 +233,28 @@ class SafepayService:
             return False
         return compact != raw_body and matches(compact)
 
+    def signature_scheme(self, raw_body: bytes, signature: str) -> Optional[str]:
+        """Which signing rule the delivery satisfies: 'v2' (whole body, Payments 2.0),
+        'legacy' (v1 rule: HMAC-SHA512 of the compact JSON of body["data"] only), or None.
+
+        Only 'v2' deliveries may ever change payment state; a legacy signature covers just
+        the data object, not the event type/version, so legacy events are acknowledged only.
+        """
+        if self.verify_webhook_signature(raw_body, signature):
+            return "v2"
+        secret = self.creds.webhook_secret
+        if not secret or not signature:
+            return None
+        try:
+            body = json.loads(raw_body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+        if not isinstance(body, dict) or "data" not in body:
+            return None
+        legacy = json.dumps(body["data"], separators=(",", ":")).encode("utf-8")
+        digest = hmac.new(secret.encode("utf-8"), legacy, hashlib.sha512).hexdigest()
+        return "legacy" if hmac.compare_digest(digest, signature.strip().lower()) else None
+
 
 def summarize_tracker(data: Dict[str, Any]) -> Dict[str, Any]:
     """Normalise both reporter response shapes (flat and ``data.tracker``)."""
