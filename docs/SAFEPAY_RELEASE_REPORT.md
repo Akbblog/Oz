@@ -118,6 +118,43 @@ cannot reach a local machine and the dashboard endpoint does not exist yet.
   be expired by the reconciler.
 - **Allowlist:** a user who is not on the allowlist gets "Card payments are launching soon" and a 403.
 
+## Real Safepay webhook verification (2026-11-21, production backend, sandbox)
+
+**Diagnosis before the fix.** The endpoint at first received only legacy `PAYMENT:CREATED` retries: five deliveries
+between 23:53 and 00:04 UTC, spaced 1, 2, 3 and 4 minutes apart, all answered 401 because no secret was stored yet.
+Webhook Logs v2 showed "No webhook notification sent" for `PAYMENT.SUCCEEDED`. A `payment.succeeded` sent through
+the test-webhook API (`POST /client/hooks/v2/test`) returned `is_success: true` but never reached the server.
+**Cause:** the endpoint had no 2.0.0 subscriptions. There is no API for subscriptions; the fix is in the dashboard:
+Developers → Endpoints → ⋯ → Details → tick `payment.succeeded` and `payment.failed` (2.0.0) → Subscribe.
+The owner did this and stored `SAFEPAY_SANDBOX_WEBHOOK_SECRET` on the VM through a hidden-input script.
+Only the backend container was recreated.
+
+**Backend hardening (7c410b2).**
+- Every delivery is logged with type, version, event id prefix and signature result, never secrets.
+- Only events signed over the whole body with `version: 2.0.0` can change a payment.
+- Correctly signed legacy events are acknowledged with 200 and ignored. A legacy signature covers only `data`, so it can never credit.
+- Test events match no transaction, so they are acknowledged and never credited.
+
+**Evidence:**
+
+| Check | Result |
+|---|---|
+| Diagnostic test event after subscribing (00:23:17) | Delivered within 2 s, `type=payment.succeeded version=2.0.0 scheme=v2`, "matched no transaction", 200, **not credited** |
+| Real sandbox payment, card 4456 5300 0000 1005, app return page blocked so no status polling (paid 00:24:49) | Webhook `evt_dea0e651…` at 00:24:58, `scheme=v2`, 200. "completed via webhook: +500". Txn `af35e67d…` `completed`/`TRACKER_ENDED`, US$25.00. `webhook_events` row `processed`, **1 ledger row** (+500), audit `source: webhook`. Balance 1,600 → 2,100; the live Credits page shows 2,100 |
+| Duplicate delivery: the exact stored body replayed twice with a valid signature | Both `{"duplicate": true}`, balance stays 2,100, ledger still 1 row |
+| Declined card 4456 5300 0000 1013, return blocked (00:26:41) | Real `payment.failed` 2.0.0 at 00:26:47, `scheme=v2`, 200. Txn `2674a35c…` `failed`, reason `declined: … payer could not be authenticated …`. No ledger row, balance unchanged |
+| Production totals | 4 completed tester payments = 4 ledger rows = 2,000 credits; tester balance 2,100 (100 + 2,000). 1 failed. Historical Stripe/Coinbase rows unchanged. No legacy deliveries since the restart |
+
+Production stays `SAFEPAY_ENV=sandbox`, with checkout allowlisted to the tester only.
+
+**Remaining before live:**
+- Safepay live merchant approval.
+- The live API key, secret key and a **live** endpoint at the same URL, subscribed to `payment.succeeded`/`payment.failed` 2.0.0, with its own shared secret (`SAFEPAY_LIVE_*`).
+- Safepay's confirmation that the live account accepts USD.
+- After that: one small real payment, then clear the allowlist.
+
+Optional: unsubscribe the legacy `payment:created` event in the sandbox dashboard. It is harmless, since it is acknowledged and ignored.
+
 ## Current status
 
 **Sandbox only.** Production runs the new code with `SAFEPAY_ENV=sandbox`. Checkout is limited to the tester account
