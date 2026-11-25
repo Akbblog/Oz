@@ -2129,6 +2129,81 @@ class ApiService {
     }
   }
 
+  /// Classified credit totals, reconciliation and one page of ledger history.
+  Future<Map<String, dynamic>> getUserCreditReport(int userId,
+      {int page = 1, int pageSize = 25}) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/users/$userId/credit-report')
+        .replace(queryParameters: {
+      'page': '$page',
+      'page_size': '$pageSize',
+    });
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(jsonDecode(response.body));
+    }
+    throw Exception('Failed to load credit history (${response.statusCode})');
+  }
+
+  /// Time-windowed overview metrics. [range] is 24h, 7d, 30d or all.
+  Future<Map<String, dynamic>> getAdminOverview(String range) async {
+    final headers = await _getHeaders();
+    final uri = Uri.parse('$baseUrl/api/admin/overview')
+        .replace(queryParameters: {'range': range});
+    final response = await http.get(uri, headers: headers).timeout(timeout);
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(jsonDecode(response.body));
+    }
+    throw Exception('Failed to load overview (${response.statusCode})');
+  }
+
+  /// Internal dependency health reported by the backend process.
+  Future<Map<String, dynamic>> getAdminHealth() async {
+    final headers = await _getHeaders();
+    final response = await http
+        .get(Uri.parse('$baseUrl/api/admin/health'), headers: headers)
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(jsonDecode(response.body));
+    }
+    throw Exception('Health check failed (${response.statusCode})');
+  }
+
+  /// Measures the public path from this browser to the API (on the web build:
+  /// this site's /api rewrite -> Cloudflare tunnel -> backend). Returns the
+  /// round-trip time in milliseconds. Throws unless the answer is the API's
+  /// own health document: a proxy, captive portal or error page that answers
+  /// HTTP 200 with HTML is NOT "reachable".
+  Future<int> probePublicApi({http.Client? client}) async {
+    final uri = Uri.parse('$baseUrl/api/health');
+    final sw = Stopwatch()..start();
+    final response = await (client != null ? client.get(uri) : http.get(uri))
+        .timeout(const Duration(seconds: 8));
+    sw.stop();
+    if (response.statusCode != 200) {
+      throw Exception('Public API returned HTTP ${response.statusCode}');
+    }
+    if (!isApiHealthBody(response.body)) {
+      throw Exception(
+          'Public URL answered HTTP 200, but not with the API health response');
+    }
+    return sw.elapsedMilliseconds;
+  }
+
+  /// True only for the backend's `/api/health` JSON:
+  /// `{"status": "healthy", "timestamp": "<iso time>"}`.
+  static bool isApiHealthBody(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      return decoded is Map &&
+          decoded['status'] == 'healthy' &&
+          decoded['timestamp'] is String &&
+          DateTime.tryParse(decoded['timestamp'] as String) != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<List<Map<String, dynamic>>> getUserJobsAdmin(int userId) async {
     final headers = await _getHeaders();
     final response = await http

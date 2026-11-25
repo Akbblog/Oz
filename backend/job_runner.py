@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
 from typing import Awaitable, Callable, Dict, Optional
 
@@ -55,6 +56,12 @@ class JobRunner:
         self._loop_task: Optional[asyncio.Task] = None
         self._maintenance_every = _int_env("JOB_MAINTENANCE_SECONDS", 30)
         self._last_maintenance = 0.0
+        # Outcome of scheduling passes (read by /api/admin/health): a pass that
+        # hit a database/claim error is a failed pass, not a healthy one.
+        self.last_pass_at: Optional[float] = None
+        self.last_ok_pass_at: Optional[float] = None
+        self.last_pass_ok: Optional[bool] = None
+        self.last_pass_error: Optional[str] = None
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -79,7 +86,7 @@ class JobRunner:
         return list(self._tasks.keys())
 
     # -- loop --------------------------------------------------------------
-    async def _maintenance(self) -> None:
+    async def _maintenance(self, errors: list) -> None:
         loop = asyncio.get_running_loop()
         now = loop.time()
         if now - self._last_maintenance < self._maintenance_every:
@@ -91,39 +98,57 @@ class JobRunner:
                 logger.warning("Job recovery: requeued=%d failed=%d", requeued, failed)
         except Exception as exc:
             logger.error("Job recovery sweep failed: %r", exc)
+            errors.append(f"recovery sweep: {type(exc).__name__}")
         try:
             refunded = await asyncio.to_thread(job_service.settle_unsettled_terminal_jobs)
             if refunded:
                 logger.info("Settlement sweep refunded %d credits", refunded)
         except Exception as exc:
             logger.error("Settlement sweep failed: %r", exc)
+            errors.append(f"settlement sweep: {type(exc).__name__}")
+
+    def _record_pass(self, errors: list) -> None:
+        self.last_pass_ok = not errors
+        self.last_pass_error = "; ".join(errors)[:200] if errors else None
+        if not errors:
+            self.last_ok_pass_at = time.time()
 
     async def run_once(self) -> int:
         """One scheduling pass. Returns number of jobs started."""
-        await self._maintenance()
-        free = self.concurrency - len(self._tasks)
-        if free <= 0:
-            return 0
-        started = 0
+        self.last_pass_at = time.time()
+        errors: list = []
         try:
-            candidates = await asyncio.to_thread(job_service.list_claimable_job_ids, free * 2)
-        except Exception as exc:
-            logger.error("Could not list pending jobs: %r", exc)
-            return 0
-        for job_id in candidates:
-            if started >= free:
-                break
+            await self._maintenance(errors)
+            free = self.concurrency - len(self._tasks)
+            if free <= 0:
+                return 0
+            started = 0
             try:
-                claimed = await asyncio.to_thread(job_service.claim_job, job_id, self.worker_id)
+                candidates = await asyncio.to_thread(job_service.list_claimable_job_ids, free * 2)
             except Exception as exc:
-                logger.error("Claim failed for %s: %r", job_id, exc)
-                continue
-            if not claimed:
-                continue
-            task = asyncio.create_task(self._run_one(job_id), name=f"job-{job_id}")
-            self._tasks[job_id] = task
-            started += 1
-        return started
+                logger.error("Could not list pending jobs: %r", exc)
+                errors.append(f"list pending: {type(exc).__name__}")
+                return 0
+            for job_id in candidates:
+                if started >= free:
+                    break
+                try:
+                    claimed = await asyncio.to_thread(job_service.claim_job, job_id, self.worker_id)
+                except Exception as exc:
+                    logger.error("Claim failed for %s: %r", job_id, exc)
+                    errors.append(f"claim: {type(exc).__name__}")
+                    continue
+                if not claimed:
+                    continue
+                task = asyncio.create_task(self._run_one(job_id), name=f"job-{job_id}")
+                self._tasks[job_id] = task
+                started += 1
+            return started
+        except Exception as exc:
+            errors.append(f"pass: {type(exc).__name__}")
+            raise
+        finally:
+            self._record_pass(errors)
 
     async def _run_one(self, job_id: str) -> None:
         try:

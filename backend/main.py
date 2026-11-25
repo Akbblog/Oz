@@ -5833,6 +5833,43 @@ async def get_user_kpis_endpoint(
     return _kpis(user_id)
 
 
+@app.get("/api/admin/users/{user_id}/credit-report")
+async def get_user_credit_report_endpoint(
+    user_id: int,
+    page: int = 1,
+    page_size: int = 25,
+    admin: dict = Depends(get_admin_user),
+):
+    """Classified credit totals, reconciliation and paginated ledger (read-only)."""
+    from admin_reporting import get_user_credit_report
+
+    report = await asyncio.to_thread(get_user_credit_report, user_id, page, page_size)
+    if report is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return report
+
+
+@app.get("/api/admin/overview")
+async def get_admin_overview_endpoint(
+    range: str = "24h",
+    admin: dict = Depends(get_admin_user),
+):
+    """Time-windowed admin overview metrics plus a current snapshot (read-only)."""
+    from admin_reporting import RANGES, get_overview_metrics
+
+    if range not in RANGES:
+        raise HTTPException(status_code=422, detail=f"range must be one of: {', '.join(RANGES)}")
+    return await asyncio.to_thread(get_overview_metrics, range)
+
+
+@app.get("/api/admin/health")
+async def get_admin_health_endpoint(admin: dict = Depends(get_admin_user)):
+    """Internal dependency health of this API process (database, migrations, job runner)."""
+    from admin_reporting import get_internal_health
+
+    return await asyncio.to_thread(get_internal_health, _job_runner)
+
+
 @app.get("/api/admin/users/{user_id}/jobs")
 async def get_user_jobs_admin(
     user_id: int,

@@ -13,6 +13,8 @@ import '../widgets/analytics_charts.dart';
 import '../core/utils/server_time.dart';
 import '../core/admin_roles.dart';
 import 'admin_jobs_screen.dart';
+import 'admin_credit_account_dialog.dart';
+import '../widgets/admin_overview_panel.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -67,8 +69,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _creditRequests = [];
   Map<String, dynamic> _adminSettings = {};
-  int _activePromos = 0;
-  int _promoUses = 0;
+  int? _activePromos; // null = failed to load (shown as Unavailable)
+  int? _promoUses;
   final TextEditingController _startingCreditsController =
       TextEditingController();
   bool _isLoading = true;
@@ -151,8 +153,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       } catch (_) {
         // Ignore credit request failures.
       }
-      int activePromos = 0;
-      int promoUses = 0;
+      int? activePromos;
+      int? promoUses;
       try {
         final promosRes = await _apiService.getAdminPromos();
         final promos =
@@ -1288,89 +1290,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       );
     }
 
-    final crossAxisCount = layoutType == LayoutType.desktopLarge
-        ? 6
-        : layoutType == LayoutType.desktopMedium
-            ? 4
-            : layoutType == LayoutType.desktopSmall
-                ? 3
-                : 2;
-
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildSectionHeader('Overview', 'Last 24h'),
-          const SizedBox(height: AppSpacing.sm),
-          GridView.count(
-            crossAxisCount: crossAxisCount,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: AppSpacing.sm,
-            mainAxisSpacing: AppSpacing.sm,
-            childAspectRatio:
-                layoutType.index >= LayoutType.desktopSmall.index ? 1.5 : 1.15,
-            children: [
-              _buildStatCard(
-                'Total Users',
-                _stats!['total_users'].toString(),
-                Icons.group_add,
-                AppColors.brandPurple,
-              ),
-              _buildStatCard(
-                'Pending',
-                _stats!['pending_users'].toString(),
-                Icons.pending_actions,
-                AppColors.warningYellow,
-              ),
-              _buildStatCard(
-                'Total Jobs',
-                _stats!['total_jobs'].toString(),
-                Icons.work,
-                AppColors.blue,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => const AdminJobsScreen(),
-                    ),
-                  );
-                },
-              ),
-              _buildStatCard(
-                'Credits',
-                (_stats!['total_credits'] ?? 0).toString(),
-                Icons.payments,
-                AppColors.purple,
-              ),
-              _buildStatCard(
-                'Active Promos',
-                _activePromos.toString(),
-                Icons.confirmation_number_rounded,
-                AppColors.amber,
-              ),
-              if (layoutType.index >= LayoutType.desktopMedium.index)
-                _buildStatCard(
-                  'Promo Uses',
-                  _promoUses.toString(),
-                  Icons.local_offer_rounded,
-                  AppColors.brandOrange,
+          AdminOverviewPanel(
+            apiService: _apiService,
+            activePromos: _activePromos,
+            promoUses: _promoUses,
+            onOpenSearches: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const AdminJobsScreen(),
                 ),
-              if (layoutType.index >= LayoutType.desktopMedium.index)
-                _buildStatCard(
-                  'Active Sessions',
-                  (_stats!['active_sessions'] ?? 0).toString(),
-                  Icons.online_prediction,
-                  AppColors.blue,
-                ),
-              if (layoutType.index >= LayoutType.desktopMedium.index)
-                _buildStatCard(
-                  'API Health',
-                  (_stats!['api_health'] ?? 'OK').toString(),
-                  Icons.health_and_safety_rounded,
-                  AppColors.successGreen,
-                ),
-            ],
+              );
+            },
           ),
           const SizedBox(height: AppSpacing.lg),
           if (layoutType.index >= LayoutType.desktopSmall.index)
@@ -1453,107 +1388,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildStatCard(
-    String title,
-    String value,
-    IconData icon,
-    Color accent, {
-    VoidCallback? onTap,
-  }) {
-    final decoration = BoxDecoration(
-      color: AppColors.surfaceDark,
-      borderRadius: AppSpacing.borderRadiusLg,
-      border: Border.all(color: AppColors.elevatedCardDark),
-    );
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.15),
-                borderRadius: AppSpacing.borderRadiusSm,
-              ),
-              child: Icon(icon, color: accent, size: 18),
-            ),
-            if (title == 'Pending')
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.15),
-                  borderRadius: AppSpacing.borderRadiusSm,
-                ),
-                child: Text(
-                  'Action',
-                  style: AppTypography.labelSmall.copyWith(
-                    color: accent,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Text(
-          title.toUpperCase(),
-          style: AppTypography.labelSmall.copyWith(
-            color: Colors.white54,
-            letterSpacing: 1.1,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          value,
-          style: AppTypography.headlineSmall.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
-
-    if (onTap == null) {
-      return Container(
-        padding: AppSpacing.paddingMd,
-        decoration: decoration,
-        child: content,
-      );
-    }
-
-    bool pressed = false;
-    return StatefulBuilder(
-      builder: (context, setInnerState) {
-        return AnimatedScale(
-          duration: AppSpacing.durationFast,
-          curve: Curves.easeOut,
-          scale: pressed ? 0.985 : 1,
-          child: Material(
-            color: Colors.transparent,
-            child: Ink(
-              decoration: decoration,
-              child: InkWell(
-                borderRadius: AppSpacing.borderRadiusLg,
-                splashColor: accent.withValues(alpha: 0.2),
-                highlightColor: accent.withValues(alpha: 0.1),
-                onHighlightChanged: (isPressed) {
-                  setInnerState(() => pressed = isPressed);
-                },
-                onTap: onTap,
-                child: Padding(
-                  padding: AppSpacing.paddingMd,
-                  child: content,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -2028,7 +1862,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               const SizedBox(width: AppSpacing.xs),
               Expanded(
                 child: _smallButton(
-                  label: 'KPIs',
+                  label: 'Credit history',
                   color: AppColors.elevatedCardDark,
                   textColor: AppColors.infoBlue,
                   onTap: () =>
@@ -2740,7 +2574,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Future<void> _showUserKpis(int userId, String username) async {
     showDialog(
       context: context,
-      builder: (ctx) => _UserKpisDialog(
+      builder: (ctx) => AdminCreditAccountDialog(
         apiService: _apiService,
         userId: userId,
         username: username,
@@ -4175,172 +4009,6 @@ class _UserTimelineDialogState extends State<_UserTimelineDialog> {
     );
   }
 }
-
-// ==================== USER KPIs DIALOG ====================
-
-class _UserKpisDialog extends StatefulWidget {
-  final ApiService apiService;
-  final int userId;
-  final String username;
-
-  const _UserKpisDialog({
-    required this.apiService,
-    required this.userId,
-    required this.username,
-  });
-
-  @override
-  State<_UserKpisDialog> createState() => _UserKpisDialogState();
-}
-
-class _UserKpisDialogState extends State<_UserKpisDialog> {
-  Map<String, dynamic>? _kpis;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final data = await widget.apiService.getUserKpis(widget.userId);
-      if (mounted) {
-        setState(() {
-          _kpis = data;
-          _loading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      child: Container(
-        width: 420,
-        padding: AppSpacing.paddingMd,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceDark,
-          borderRadius: AppSpacing.borderRadiusLg,
-          border: Border.all(color: AppColors.elevatedCardDark),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.insights, color: AppColors.brandPurple, size: 22),
-                const SizedBox(width: AppSpacing.xs),
-                Expanded(
-                  child: Text(
-                    'KPIs: ${widget.username}',
-                    style: AppTypography.titleMedium.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon:
-                      const Icon(Icons.close, color: Colors.white54, size: 20),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.all(AppSpacing.xl),
-                child: CircularProgressIndicator(
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(AppColors.brandPurple),
-                ),
-              )
-            else if (_kpis == null)
-              Text('Failed to load KPIs',
-                  style:
-                      AppTypography.bodyMedium.copyWith(color: Colors.white60))
-            else ...[
-              _kpiRow('Jobs Run', '${_kpis!['jobs_run'] ?? 0}', Icons.work,
-                  AppColors.blue),
-              _kpiRow(
-                  'Results Generated',
-                  '${_kpis!['results_generated'] ?? 0}',
-                  Icons.checklist,
-                  AppColors.successGreen),
-              _kpiRow('Credits Used', '${_kpis!['credits_used'] ?? 0}',
-                  Icons.payments, AppColors.warningYellow),
-              _kpiRow(
-                  'Credits Purchased',
-                  '${_kpis!['credits_purchased'] ?? 0}',
-                  Icons.add_card,
-                  AppColors.brandPurple),
-              _kpiRow(
-                  'Cost / Result',
-                  _kpis!['cost_per_result'] != null
-                      ? (_kpis!['cost_per_result'] as num).toStringAsFixed(1)
-                      : '-',
-                  Icons.trending_down,
-                  AppColors.brandOrange),
-              _kpiRow('Last Activity', _formatKpiDate(_kpis!['last_activity']),
-                  Icons.access_time, Colors.white54),
-              _kpiRow('Last Login', _formatKpiDate(_kpis!['last_login']),
-                  Icons.login, Colors.white54),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _formatKpiDate(dynamic val) {
-    if (val == null) return 'Never';
-    try {
-      final dt = _parseServerOrThrow(val.toString());
-      return '${dt.month}/${dt.day}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) {
-      return val.toString();
-    }
-  }
-
-  Widget _kpiRow(String label, String value, IconData icon, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: AppSpacing.borderRadiusSm,
-            ),
-            child: Icon(icon, color: color, size: 16),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Text(
-              label,
-              style: AppTypography.bodySmall.copyWith(color: Colors.white70),
-            ),
-          ),
-          Text(
-            value,
-            style: AppTypography.titleSmall.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 
 DateTime _parseServerOrThrow(String value) {
   final dt = parseServerTimeLocal(value);

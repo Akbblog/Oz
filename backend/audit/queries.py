@@ -153,8 +153,8 @@ def get_user_timeline(
 def get_user_kpis(user_id: int) -> Dict[str, Any]:
     """
     Per-user value KPIs:
-    jobs_run, results_generated, credits_used, credits_purchased,
-    cost_per_result, last_activity, last_login
+    jobs_run, results_generated, credits_used (net), credits_purchased (paid only),
+    cost_per_result (net credits per lead on file), last_activity, last_login
     """
     # Jobs run
     row = execute_query(
@@ -174,22 +174,18 @@ def get_user_kpis(user_id: int) -> Dict[str, Any]:
     )
     results_generated = int(row[0]) if row else 0
 
-    # Credits used (negative amounts in ledger = debits)
-    row = execute_query(
-        "SELECT COALESCE(SUM(-amount), 0) FROM credit_ledger WHERE user_id = ? AND amount < 0",
-        (user_id,), fetch_one=True, commit=False,
-    )
-    credits_used = int(row[0]) if row else 0
+    # Credit figures come from the classified ledger (admin_reporting). The old
+    # version summed every 'credit' row as "purchased" (free starting credits and
+    # admin grants included) and every debit as "used" (refunds ignored).
+    from admin_reporting import get_user_credit_report
 
-    # Credits purchased (positive amounts from 'credit' type)
-    row = execute_query(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_ledger WHERE user_id = ? AND transaction_type = 'credit'",
-        (user_id,), fetch_one=True, commit=False,
-    )
-    credits_purchased = int(row[0]) if row else 0
-
-    # Cost per result
-    cost_per_result = round(credits_used / results_generated, 2) if results_generated > 0 else 0
+    report = get_user_credit_report(user_id, page=1, page_size=1)
+    s = report["summary"] if report else {}
+    credits_charged_gross = int(s.get("job_charges_gross", 0))
+    credits_refunded = int(s.get("job_refunds", 0))
+    credits_used_net = int(s.get("job_charges_net", 0))
+    paid_credits = int(s.get("paid_credits", 0))
+    net_per_lead = s.get("net_credits_per_lead_on_file")
 
     # Last activity from audit_events
     row = execute_query(
@@ -209,9 +205,15 @@ def get_user_kpis(user_id: int) -> Dict[str, Any]:
         "user_id": user_id,
         "jobs_run": jobs_run,
         "results_generated": results_generated,
-        "credits_used": credits_used,
-        "credits_purchased": credits_purchased,
-        "cost_per_result": cost_per_result,
+        # Legacy keys, now correctly defined (kept for older admin clients):
+        "credits_used": credits_used_net,          # net: charges minus refunds
+        "credits_purchased": paid_credits,         # completed, non-sandbox payments only
+        "cost_per_result": net_per_lead,           # net credits per lead, searches on file; None if no leads
+        # Explicit fields:
+        "credits_charged_gross": credits_charged_gross,
+        "credits_refunded": credits_refunded,
+        "credits_used_net": credits_used_net,
+        "paid_credits": paid_credits,
         "last_activity": last_activity,
         "last_login": last_login,
     }
