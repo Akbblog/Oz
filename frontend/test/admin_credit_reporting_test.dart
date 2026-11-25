@@ -6,7 +6,12 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:business_scraper_app/screens/admin_credit_account_dialog.dart';
 import 'package:business_scraper_app/services/api_service.dart';
-import 'package:business_scraper_app/widgets/admin_overview_panel.dart';
+import 'package:business_scraper_app/admin/admin_kit.dart';
+import 'package:business_scraper_app/admin/admin_shell.dart';
+import 'package:business_scraper_app/admin/pages/overview_page.dart';
+import 'package:business_scraper_app/providers/auth_provider.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // --------------------------------------------------------------------------
 // fixtures (synthetic: no real accounts, searches or payments)
@@ -118,6 +123,43 @@ class FakeAdminApi extends ApiService {
     if (healthError != null) throw healthError!;
     return health!;
   }
+
+  // The overview also reads these; keep the tests off the network.
+  Object? visitorsError = Exception('404 Not Found');
+  @override
+  Future<Map<String, dynamic>> getAdminVisitorsSummary({int days = 7}) async {
+    if (visitorsError != null) throw visitorsError!;
+    return {
+      'days': days,
+      'totals': {'visits': 12, 'unique_visitors': 9, 'active_now': 2},
+      'series': [
+        {'date': '2026-01-09', 'visits': 5, 'unique_visitors': 4},
+        {'date': '2026-01-10', 'visits': 7, 'unique_visitors': 5},
+      ],
+      'top_sources': [
+        {'label': 'direct', 'count': 8},
+        {'label': 'search', 'count': 4},
+      ],
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> getAnalyticsCreditPatterns({int days = 30}) async => {'data': []};
+
+  @override
+  Future<List<Map<String, dynamic>>> getAllUsers() async => [];
+
+  @override
+  Future<Map<String, dynamic>> getActivityFeed({
+    int? userId,
+    String? action,
+    String? status,
+    String? dateFrom,
+    String? dateTo,
+    int limit = 50,
+    int offset = 0,
+  }) async =>
+      {'events': [], 'total': 0};
 
   @override
   Future<int> probePublicApi({http.Client? client}) async {
@@ -330,36 +372,54 @@ void main() {
         },
       };
 
-  Widget panel(FakeAdminApi api, {int? promos = 1, int? uses = 4}) => SingleChildScrollView(
-      child: AdminOverviewPanel(apiService: api, activePromos: promos, promoUses: uses));
-
-  int newUsersShown(WidgetTester tester) {
-    final card = find.ancestor(of: find.text('New users'), matching: find.byType(Column)).first;
-    final texts = tester.widgetList<Text>(find.descendant(of: card, matching: find.byType(Text)));
-    return int.parse(texts.map((t) => t.data ?? '').firstWhere((d) => RegExp(r'^\d+$').hasMatch(d)));
+  Future<void> pumpOverview(WidgetTester tester, FakeAdminApi api,
+      {Size size = const Size(1400, 2600)}) async {
+    SharedPreferences.setMockInitialValues({});
+    AdminBadges.apiFactory = () => api;
+    addTearDown(() => AdminBadges.apiFactory = ApiService.new);
+    tester.view.physicalSize = size;
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(ChangeNotifierProvider(
+      create: (_) => AuthProvider(),
+      child: MaterialApp(home: AdminOverviewPage(api: api)),
+    ));
   }
 
-  group('overview panel', () {
-    testWidgets('range selector requests filtered data with the required labels', (tester) async {
+  String kpi(WidgetTester tester, String label) {
+    final tile = find.ancestor(of: find.text(label), matching: find.byType(AKpi)).first;
+    final texts = tester.widgetList<Text>(find.descendant(of: tile, matching: find.byType(Text)));
+    return texts.map((t) => t.data ?? '').firstWhere((d) => d != label && d.isNotEmpty);
+  }
+
+  String credit(WidgetTester tester, String key) =>
+      tester.widget<Text>(find.byKey(Key('credit-$key'))).data!;
+
+  group('overview page', () {
+    testWidgets('range selector requests filtered data; every credit figure keeps its own label', (tester) async {
       final api = FakeAdminApi()
         ..overview = overview
         ..health = okHealth()
         ..probeMs = 120;
-      await _pump(tester, panel(api));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
-      expect(find.text('ACTIVITY · LAST 24 HOURS'), findsOneWidget);
-      for (final label in ['Free signup credits', 'Paid credits', 'Search charges', 'Search refunds',
-          'Net search usage', 'Staff grants']) {
+      expect(api.rangesRequested.where((r) => r == '7d'), isNotEmpty, reason: 'opens on the last 7 days');
+      for (final label in ['Search charges', 'Search refunds', 'Free signup credits', 'Staff grants']) {
         expect(find.text(label), findsOneWidget, reason: label);
       }
-      expect(find.text('Last 24h'), findsNothing);
+      expect(find.text('Net search usage'), findsNWidgets(2), reason: 'headline tile + movements line');
+      expect(credit(tester, 'credits_charged_gross'), '130');
+      expect(credit(tester, 'credits_refunded'), '60');
+      expect(credit(tester, 'credits_charged_net'), '70');
+      expect(credit(tester, 'paid_credits'), '0');
+      expect(credit(tester, 'starting_credits'), '100');
       expect(find.text('Active Sessions'), findsNothing);
+      expect(kpi(tester, 'New users'), '7');
 
-      await tester.tap(find.byKey(const Key('range-7d')));
+      await tester.tap(find.byKey(const ValueKey('seg-24h')));
       await tester.pumpAndSettle();
-      expect(api.rangesRequested, ['24h', '7d']);
-      expect(find.text('ACTIVITY · LAST 7 DAYS'), findsOneWidget);
-      expect(newUsersShown(tester), 7);
+      expect(api.rangesRequested.last, '24h');
+      expect(kpi(tester, 'New users'), '1');
       expect(find.byKey(const Key('health-ok')), findsOneWidget);
       expect(find.text('Reachable · 120 ms'), findsOneWidget);
     });
@@ -369,20 +429,21 @@ void main() {
         ..overview = overview
         ..health = okHealth()
         ..probeMs = 50;
-      await _pump(tester, panel(api));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
-      expect(newUsersShown(tester), 1);
+      await tester.tap(find.byKey(const ValueKey('seg-24h')));
+      await tester.pumpAndSettle();
+      expect(kpi(tester, 'New users'), '1');
 
-      final slow = api.rangeGates['7d'] = Completer<void>();
-      await tester.tap(find.byKey(const Key('range-7d')));
+      final slow = Completer<void>();
+      api.rangeGates['30d'] = slow;
+      await tester.tap(find.byKey(const ValueKey('seg-30d')));
       await tester.pump();
-      await tester.tap(find.byKey(const Key('range-24h')));
+      await tester.tap(find.byKey(const ValueKey('seg-24h')));
       await tester.pumpAndSettle();
-      slow.complete(); // the 7d answer arrives after 24h was re-selected
+      slow.complete(); // the 30d answer arrives after 24h was re-selected
       await tester.pumpAndSettle();
-      expect(api.rangesRequested, ['24h', '7d', '24h']);
-      expect(find.text('ACTIVITY · LAST 24 HOURS'), findsOneWidget);
-      expect(newUsersShown(tester), 1, reason: 'stale 7d data (7) must not replace 24h data');
+      expect(kpi(tester, 'New users'), '1', reason: 'stale 30d data (7) must not replace 24h data');
     });
 
     testWidgets('health and probe failures show unknown/unreachable, never OK', (tester) async {
@@ -390,11 +451,13 @@ void main() {
         ..overview = overview
         ..healthError = Exception('Health check failed (502)')
         ..probeError = Exception('Public API returned 530');
-      await _pump(tester, panel(api));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('health-unknown')), findsOneWidget);
       expect(find.byKey(const Key('probe-unreachable')), findsOneWidget);
-      expect(find.text('OK'), findsNothing);
+      expect(find.textContaining('Unreachable'), findsOneWidget);
+      expect(find.textContaining('OK'), findsNothing);
+      expect(find.textContaining('System status needs a look'), findsOneWidget);
     });
 
     testWidgets('failed scheduling pass and missing migration are not OK', (tester) async {
@@ -406,15 +469,15 @@ void main() {
         ..overview = overview
         ..health = h
         ..probeMs = 90;
-      await _pump(tester, panel(api));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('health-degraded')), findsOneWidget);
-      expect(find.textContaining('Search runner: failing'), findsOneWidget);
-      expect(find.textContaining('Schema migrations: missing'), findsOneWidget);
-      expect(find.text('OK'), findsNothing);
+      expect(find.text('FAILING · last scheduling pass failed'), findsOneWidget);
+      expect(find.text('MISSING · not applied: 017'), findsOneWidget);
+      expect(find.textContaining('System status needs a look'), findsOneWidget);
     });
 
-    testWidgets('unavailable metrics and promo counts say Unavailable, not 0', (tester) async {
+    testWidgets('unavailable figures say Unavailable, never 0', (tester) async {
       final api = FakeAdminApi()
         ..overview = (r) {
           final o = overview(r);
@@ -425,10 +488,24 @@ void main() {
         }
         ..health = okHealth()
         ..probeMs = 50;
-      await _pump(tester, panel(api, promos: null, uses: null));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
-      // active users, sandbox test credits, active promos, promo uses
-      expect(find.text('Unavailable'), findsNWidgets(4));
+      expect(kpi(tester, 'Active users'), 'Unavailable');
+      expect(credit(tester, 'sandbox_test_credits'), 'Unavailable');
+      // Visitor tracking not reporting (endpoint missing): unavailable, not 0.
+      expect(kpi(tester, 'Visitors'), 'Unavailable');
+    });
+
+    testWidgets('visitor numbers appear once tracking reports', (tester) async {
+      final api = FakeAdminApi()
+        ..overview = overview
+        ..health = okHealth()
+        ..probeMs = 50
+        ..visitorsError = null;
+      await pumpOverview(tester, api);
+      await tester.pumpAndSettle();
+      expect(kpi(tester, 'Visitors'), '9');
+      expect(find.textContaining('2 on the site now'), findsOneWidget);
     });
 
     testWidgets('overview failure shows an error with retry', (tester) async {
@@ -436,13 +513,14 @@ void main() {
         ..overviewError = Exception('Failed to load overview (500)')
         ..health = okHealth()
         ..probeMs = 50;
-      await _pump(tester, panel(api));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('overview-error')), findsOneWidget);
       api
         ..overviewError = null
         ..overview = overview;
-      await tester.tap(find.text('Retry'));
+      await tester.tap(find.descendant(
+          of: find.byKey(const Key('overview-error')), matching: find.text('Retry')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('overview-error')), findsNothing);
     });
@@ -451,10 +529,11 @@ void main() {
       final api = FakeAdminApi()
         ..overview = overview
         ..health = okHealth()
-        ..probeMs = 75;
-      await _pump(tester, panel(api), size: const Size(390, 844));
+        ..probeMs = 75
+        ..visitorsError = null;
+      await pumpOverview(tester, api, size: const Size(390, 844));
       await tester.pumpAndSettle();
-      expect(find.text('Net search usage'), findsOneWidget);
+      expect(find.text('Overview'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -487,14 +566,14 @@ void main() {
         ..overview = overview
         ..health = okHealth()
         ..probeClient = serving(200, proxyHtml, type: 'text/html');
-      await _pump(tester, panel(api));
+      await pumpOverview(tester, api);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('probe-unreachable')), findsOneWidget);
       expect(find.byKey(const Key('probe-ok')), findsNothing);
       expect(find.textContaining('not with the API health response'), findsOneWidget);
 
       api.probeClient = serving(200, healthJson);
-      await tester.tap(find.byTooltip('Re-check'));
+      await tester.tap(find.byTooltip('Check again'));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('probe-ok')), findsOneWidget);
     });

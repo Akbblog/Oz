@@ -10,7 +10,10 @@ import '../widgets/glass_card.dart';
 import '../widgets/gradient_background.dart';
 
 class AdminPromoManagementScreen extends StatefulWidget {
-  const AdminPromoManagementScreen({super.key});
+  /// Inside the admin console frame: no title bar of its own.
+  final bool embedded;
+
+  const AdminPromoManagementScreen({super.key, this.embedded = false});
 
   @override
   State<AdminPromoManagementScreen> createState() =>
@@ -98,15 +101,21 @@ class _AdminPromoManagementScreenState extends State<AdminPromoManagementScreen>
         appBar: AppBar(
           backgroundColor: AppColors.backgroundDark,
           elevation: 0,
-          title: Text(
-            'Promo Management',
-            style: AppTypography.titleLarge.copyWith(color: Colors.white),
-          ),
+          automaticallyImplyLeading: !widget.embedded,
+          toolbarHeight: widget.embedded ? 0 : null,
+          title: widget.embedded
+              ? null
+              : Text(
+                  'Promo Management',
+                  style: AppTypography.titleLarge.copyWith(color: Colors.white),
+                ),
           iconTheme: const IconThemeData(color: Colors.white),
-          actions: [
-            IconButton(onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
-            const SizedBox(width: AppSpacing.sm),
-          ],
+          actions: widget.embedded
+              ? null
+              : [
+                  IconButton(onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
+                  const SizedBox(width: AppSpacing.sm),
+                ],
           bottom: TabBar(
             labelColor: Colors.white,
             unselectedLabelColor: Colors.white60,

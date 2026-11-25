@@ -6,10 +6,19 @@ import 'core/theme/app_theme.dart';
 import 'providers/active_searches_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/scraper_provider.dart';
-import 'screens/admin_dashboard_screen.dart';
-import 'screens/admin_pricing_management_screen.dart';
+import 'admin/admin_kit.dart' show AC;
+import 'admin/admin_shell.dart';
+import 'admin/pages/activity_page.dart';
+import 'admin/pages/analytics_page.dart';
+import 'admin/pages/credits_page.dart';
+import 'admin/pages/overview_page.dart';
+import 'admin/pages/pricing_page.dart';
+import 'admin/pages/revenue_page.dart';
+import 'admin/pages/settings_page.dart';
+import 'admin/pages/users_page.dart';
+import 'admin/pages/visitors_page.dart';
+import 'screens/admin_jobs_screen.dart';
 import 'screens/admin_promo_management_screen.dart';
-import 'screens/admin_revenue_dashboard_screen.dart';
 import 'screens/crm/crm_agenda_screen.dart';
 import 'screens/crm/crm_contacts_screen.dart';
 import 'screens/crm/crm_leads_screen.dart';
@@ -34,6 +43,7 @@ import 'screens/search_detail_screen.dart';
 import 'screens/subscription_management_screen.dart';
 import 'screens/wallet_coming_soon_screen.dart';
 import 'screens/wallet_screen.dart';
+import 'services/analytics_service.dart';
 import 'widgets/app_shell.dart';
 
 /// Route table (brief "Routes"). Path URL strategy is on, so every route is a
@@ -71,6 +81,8 @@ class AppRouter {
   }
 
   static Route<dynamic>? onGenerateRoute(RouteSettings settings) {
+    // Every navigation is a page view (and keeps the visit record fresh).
+    AnalyticsService.instance.routeChanged(settings.name);
     final uri = Uri.tryParse(settings.name ?? '/') ?? Uri(path: '/');
     var path = uri.path.isEmpty ? '/' : uri.path;
     if (path.length > 1 && path.endsWith('/')) {
@@ -171,16 +183,46 @@ class AppRouter {
       case '/subscription':
         return _page(settings, const ProtectedRoute(child: SubscriptionManagementScreen()));
       case '/admin':
-        return _page(settings, const ProtectedRoute(requireAdmin: true, child: AdminDashboardScreen()));
+        return _admin(settings, const AdminOverviewPage());
+      case '/admin/users':
+        return _admin(settings, AdminUsersPage(query: uri.queryParameters));
+      case '/admin/credits':
+        return _admin(settings, const AdminCreditsPage());
+      case '/admin/searches':
+      case '/admin/jobs':
+        return _admin(
+          settings,
+          const AdminScaffold(
+            section: AdminSection.searches,
+            title: 'Searches',
+            subtitle: 'Every search run by every user, with results and downloads',
+            scroll: false,
+            child: AdminJobsScreen(showHeader: false),
+          ),
+        );
+      case '/admin/activity':
+        return _admin(settings, const AdminActivityPage());
+      case '/admin/visitors':
+        return _admin(settings, const AdminVisitorsPage());
+      case '/admin/analytics':
+        return _admin(settings, const AdminAnalyticsPage());
       case '/admin/revenue':
-        return _page(settings,
-            const ProtectedRoute(requireAdmin: true, child: AdminRevenueDashboardScreen()));
+        return _admin(settings, const AdminRevenuePage());
       case '/admin/pricing':
-        return _page(settings,
-            const ProtectedRoute(requireAdmin: true, child: AdminPricingManagementScreen()));
+        return _admin(settings, const AdminPricingPage());
       case '/admin/promos':
-        return _page(settings,
-            const ProtectedRoute(requireAdmin: true, child: AdminPromoManagementScreen()));
+        return _admin(
+          settings,
+          const AdminScaffold(
+            section: AdminSection.promos,
+            title: 'Promo codes',
+            subtitle: 'Create codes, see who used them and switch them off',
+            scroll: false,
+            child: AdminPromoManagementScreen(embedded: true),
+          ),
+        );
+      case '/admin/settings':
+        return _admin(settings, const AdminSettingsPage());
     }
 
     // Safepay hosted checkout returns here (redirect_url / cancel_url).
@@ -241,6 +283,15 @@ class AppRouter {
           title: 'CRM',
           requiresAuth: true,
           child: child,
+        ),
+      );
+
+  /// Admin console pages: admins only, switching without a transition.
+  static Route<dynamic> _admin(RouteSettings settings, Widget page) => _shell(
+        settings,
+        ColoredBox(
+          color: AC.bg,
+          child: ProtectedRoute(requireAdmin: true, child: page),
         ),
       );
 

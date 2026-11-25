@@ -41,7 +41,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
   String _statusFilter = 'All';
   String _dateFilter = 'All';
   String _sortOption = 'Newest';
-  String _viewMode = 'Cards';
+  String _viewMode = 'Table';
 
   int _page = 1;
   static const int _pageSize = 20;
@@ -605,7 +605,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
   Widget _buildSummary(LayoutType layoutType) {
     final cards = [
       _summaryCard(
-        'Total Jobs',
+        'Total searches',
         _asInt(_summary['total_jobs']).toString(),
         Icons.work_rounded,
         _AdminJobsColors.indigo,
@@ -1195,7 +1195,7 @@ class _AdminJobsScreenState extends State<AdminJobsScreen>
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            'No jobs found for this filter.',
+            'No searches match this filter.',
             style: AppTypography.bodyMedium.copyWith(color: Colors.white70),
           ),
         ],
@@ -1219,7 +1219,7 @@ class _StatusStyle {
 }
 
 class _AdminJobsColors {
-  static const Color slate950 = AppColors.backgroundDark;
+  static const Color slate950 = Color(0xFF121315); // admin console canvas
   static const Color slate900 = AppColors.backgroundDarkAlt;
   static const Color indigo = AppColors.primaryBlue;
   static const Color emerald = AppColors.successGreen;

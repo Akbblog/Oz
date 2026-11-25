@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 import os
 import uuid
 import json
@@ -6328,6 +6328,65 @@ async def ingest_analytics_events_endpoint(
     auth_user_id = current_user["id"] if current_user else None
     count = ingest_events(raw_events, auth_user_id=auth_user_id)
     return {"ingested": count}
+
+
+@app.post("/api/analytics/visit")
+async def record_site_visit_endpoint(
+    request: Request,
+    body: Any = Body(None),
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """
+    Visitor beacon (public): one call per page change. The first call of a
+    browser session stores where it came from (IP, geo, referrer, device);
+    later calls bump its page count. Never fails loudly.
+    """
+    from analytics.visits import record_visit
+    auth_user_id = current_user["id"] if current_user else None
+    client_host = request.client.host if request.client else None
+    ok = await asyncio.to_thread(record_visit, body, request.headers, client_host, auth_user_id)
+    return {"ok": bool(ok)}
+
+
+@app.get("/api/admin/visitors")
+async def admin_visitors_endpoint(
+    days: int = 7,
+    limit: int = 50,
+    offset: int = 0,
+    q: Optional[str] = None,
+    country: Optional[str] = None,
+    kind: str = "all",
+    source: Optional[str] = None,
+    live: bool = False,
+    admin: dict = Depends(get_admin_user),
+):
+    """Visit log, newest first: who opened the app, from where, on what.
+    live=true returns only sessions active in the last few minutes."""
+    from analytics.visits import list_visits
+    return await asyncio.to_thread(list_visits, days, limit, offset, q, country, kind, source, live)
+
+
+@app.get("/api/admin/visitors/summary")
+async def admin_visitors_summary_endpoint(
+    days: int = 7,
+    admin: dict = Depends(get_admin_user),
+):
+    """Visitor totals, daily series and top sources/countries/pages/devices."""
+    from analytics.visits import get_summary
+    return await asyncio.to_thread(get_summary, days)
+
+
+@app.get("/api/admin/visitors/{session_id}")
+async def admin_visitor_detail_endpoint(
+    session_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """One visit with its page trail and the same visitor's other visits."""
+    from analytics.visits import get_visit_detail
+    detail = await asyncio.to_thread(get_visit_detail, session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    return detail
 
 
 @app.get("/api/admin/analytics/dau")

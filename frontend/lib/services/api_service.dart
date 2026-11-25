@@ -2484,4 +2484,79 @@ class ApiService {
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
   }
+
+  // ------------------------------------------------------------------
+  // Admin console: visitors, analytics and revenue extras
+  // ------------------------------------------------------------------
+
+  Map<String, dynamic> _asMap(dynamic data) =>
+      data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+
+  List<Map<String, dynamic>> _asRows(dynamic data, [String key = 'data']) {
+    final raw = data is Map ? data[key] : data;
+    if (raw is! List) return <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// Site visits (one row per browser session), newest first.
+  Future<Map<String, dynamic>> getAdminVisitors({
+    int days = 7,
+    int limit = 50,
+    int offset = 0,
+    String? q,
+    String? country,
+    String? kind,
+    String? source,
+    bool live = false,
+  }) async {
+    final query = <String, String>{
+      if (live) 'live': 'true',
+      'days': '$days',
+      'limit': '$limit',
+      'offset': '$offset',
+      if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+      if (country != null && country.isNotEmpty) 'country': country,
+      if (kind != null && kind.isNotEmpty && kind != 'all') 'kind': kind,
+      if (source != null && source.isNotEmpty) 'source': source,
+    };
+    return _asMap(await _getJson('/api/admin/visitors',
+        query: query, context: 'Loading visitors'));
+  }
+
+  Future<Map<String, dynamic>> getAdminVisitorsSummary({int days = 7}) async =>
+      _asMap(await _getJson('/api/admin/visitors/summary',
+          query: {'days': '$days'}, context: 'Loading visitor summary'));
+
+  Future<Map<String, dynamic>> getAdminVisit(String sessionId) async =>
+      _asMap(await _getJson(
+          '/api/admin/visitors/${Uri.encodeComponent(sessionId)}',
+          context: 'Loading visit'));
+
+  Future<List<Map<String, dynamic>>> getAnalyticsTopPages(
+          {int days = 30, int limit = 12}) async =>
+      _asRows(await _getJson('/api/admin/analytics/top-pages',
+          query: {'days': '$days', 'limit': '$limit'},
+          context: 'Loading top pages'));
+
+  Future<List<Map<String, dynamic>>> getAnalyticsRetention(
+          {int days = 60}) async =>
+      _asRows(await _getJson('/api/admin/analytics/retention',
+          query: {'days': '$days'}, context: 'Loading retention'));
+
+  Future<List<Map<String, dynamic>>> getAnalyticsMau({int months = 12}) async =>
+      _asRows(await _getJson('/api/admin/analytics/mau',
+          query: {'months': '$months'}, context: 'Loading monthly users'));
+
+  Future<List<Map<String, dynamic>>> getAnalyticsUserJourney(int userId,
+          {int limit = 100}) async =>
+      _asRows(
+          await _getJson('/api/admin/analytics/user-journey/$userId',
+              query: {'limit': '$limit'}, context: 'Loading user journey'),
+          'events');
+
+  Future<Map<String, dynamic>> getAdminChurn() async => _asMap(
+      await _getJson('/api/admin/analytics/churn', context: 'Loading churn'));
 }
