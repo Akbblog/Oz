@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../core/admin_roles.dart';
+import '../../core/countries.dart';
+import '../../widgets/country_flag_badge.dart';
 import '../../providers/auth_provider.dart';
 import '../../screens/admin_credit_account_dialog.dart';
 import '../../services/api_service.dart';
@@ -30,6 +34,7 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
   String? _error;
   String _status = 'all';
   String? _role;
+  String? _country;
   String _sort = 'newest';
   final Set<int> _selected = {};
   bool _bulkBusy = false;
@@ -106,8 +111,9 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
     final list = _users.where((u) {
       if (_status != 'all' && userState(u) != _status) return false;
       if (_role != null && AdminRoles.roleOf(u) != _role) return false;
+      if (_country != null && userCountry(u) != _country) return false;
       if (q.isEmpty) return true;
-      return '${u['username']} ${u['email']} ${u['phone'] ?? ''} #${u['id']}'
+      return '${u['full_name'] ?? ''} ${u['company'] ?? ''} ${u['username']} ${u['email']} ${u['phone'] ?? ''} #${u['id']}'
           .toLowerCase()
           .contains(q);
     }).toList();
@@ -192,7 +198,7 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
               child: _loading
                   ? const ALoading(height: 280)
                   : ATable<Map<String, dynamic>>(
-                      minWidth: 980,
+                      minWidth: 1100,
                       rows: rows,
                       onRowTap: _open,
                       isSelected: (u) => _selected.contains(u['id']),
@@ -212,11 +218,15 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
                       ),
                       columns: [
                         ACol('User', (u) {
-                          final name = '${u['username'] ?? 'Unknown'}';
+                          final name = userDisplayName(u);
+                          final company = '${u['company'] ?? ''}'.trim();
                           return ATwoLine(name,
-                              secondary: '${u['email'] ?? ''}',
+                              secondary: company.isEmpty
+                                  ? '${u['email'] ?? ''}'
+                                  : '${u['email'] ?? ''} · $company',
                               leading: AAvatar(name));
                         }, flex: 4),
+                        ACol('Country', (u) => _countryCell(u), flex: 2),
                         ACol('Role', (u) {
                           final r = AdminRoles.roleOf(u);
                           return APill(cap(r), roleColor(r));
@@ -234,7 +244,7 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
                             (u) => Text(
                                 '${u['phone'] ?? ''}'.trim().isEmpty
                                     ? '–'
-                                    : '${u['phone']}',
+                                    : prettyPhone(u['phone'], u['phone_country']),
                                 style: AT.bodyDim),
                             flex: 2),
                         ACol(
@@ -270,7 +280,37 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
     );
   }
 
+  Widget _countryCell(Map<String, dynamic> u) {
+    final iso = userCountry(u);
+    if (iso == null) return const Text('–', style: AT.mute);
+    final fromPhone = '${u['phone_country'] ?? ''}'.isNotEmpty;
+    return Tooltip(
+      message: u['country_mismatch'] == true
+          ? 'Phone is ${countryName(u['phone_country'])}, signed up from ${countryName(u['signup_country'])}'
+          : (fromPhone ? 'From the phone number' : 'From the sign-up location'),
+      child: Row(
+        children: [
+          CountryFlagBadge(countryName: iso, size: 14),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(countryName(iso),
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: AT.bodyDim),
+          ),
+          if (u['country_mismatch'] == true) ...[
+            const SizedBox(width: 6),
+            const Icon(Icons.warning_amber_rounded, size: 14, color: AC.amber),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _filters(Map<String, int> counts) {
+    final countries = <String>{
+      for (final u in _users)
+        if (userCountry(u) != null) userCountry(u)!
+    }.toList()
+      ..sort((a, b) => countryName(a).compareTo(countryName(b)));
     return Wrap(
       spacing: 10,
       runSpacing: 10,
@@ -280,7 +320,7 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
           width: 300,
           child: ASearchField(
             controller: _search,
-            hint: 'Search name, email, phone or #id',
+            hint: 'Search name, company, email, phone or #id',
             onChanged: (_) => setState(() {}),
           ),
         ),
@@ -308,6 +348,14 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
           },
           onChanged: (v) => setState(() => _role = v),
         ),
+        if (countries.isNotEmpty)
+          ADropdown<String>(
+            value: _country,
+            hint: 'Any country',
+            width: 170,
+            items: {for (final c in countries) c: countryName(c)},
+            onChanged: (v) => setState(() => _country = v),
+          ),
         ADropdown<String>(
           value: _sort,
           hint: 'Newest first',
@@ -375,6 +423,8 @@ class _UserRecordState extends State<_UserRecord> {
   String? _jobsError;
   List<Map<String, dynamic>>? _timeline;
   String? _timelineError;
+  List<Map<String, dynamic>>? _visits;
+  String? _visitsError;
 
   Map<String, dynamic> get u => widget.user;
   int get _id => (u['id'] as num).toInt();
@@ -417,6 +467,22 @@ class _UserRecordState extends State<_UserRecord> {
     }
   }
 
+  Future<void> _loadVisits() async {
+    if (_visits != null) return;
+    try {
+      final d = await widget.api
+          .getAdminVisitors(userId: _id, days: 365, limit: 25);
+      if (mounted) {
+        setState(() => _visits = List<Map<String, dynamic>>.from(
+            (d['visits'] as List? ?? const [])
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))));
+      }
+    } catch (e) {
+      if (mounted) setState(() => _visitsError = cleanError(e));
+    }
+  }
+
   Future<void> _do(Future<bool> Function(UserActions a) action) async {
     final changed = await action(UserActions(context, widget.api, widget.viewer));
     if (changed && mounted) Navigator.of(context).pop(true);
@@ -424,7 +490,7 @@ class _UserRecordState extends State<_UserRecord> {
 
   @override
   Widget build(BuildContext context) {
-    final name = '${u['username'] ?? 'Unknown'}';
+    final name = userDisplayName(u);
     final state = userState(u);
     final role = AdminRoles.roleOf(u);
     return ASheetFrame(
@@ -470,11 +536,13 @@ class _UserRecordState extends State<_UserRecord> {
               options: const {
                 'summary': 'Summary',
                 'searches': 'Searches',
+                'visits': 'Visits',
                 'timeline': 'Timeline',
               },
               onChanged: (v) {
                 setState(() => _tab = v);
                 if (v == 'searches') _loadJobs();
+                if (v == 'visits') _loadVisits();
                 if (v == 'timeline') _loadTimeline();
               },
             ),
@@ -482,6 +550,7 @@ class _UserRecordState extends State<_UserRecord> {
           const SizedBox(height: 6),
           if (_tab == 'summary') _summary(state),
           if (_tab == 'searches') _searches(),
+          if (_tab == 'visits') _visitsView(),
           if (_tab == 'timeline') _timelineView(),
         ],
       ),
@@ -517,6 +586,13 @@ class _UserRecordState extends State<_UserRecord> {
                   username: '${u['username'] ?? 'User'}',
                 ),
               )),
+      if ('${u['phone'] ?? ''}'.startsWith('+'))
+        AButton('WhatsApp',
+            icon: Icons.chat_outlined,
+            onPressed: () => launchUrl(
+                Uri.parse(
+                    'https://wa.me/${'${u['phone']}'.replaceAll(RegExp(r'[^0-9]'), '')}'),
+                mode: LaunchMode.externalApplication)),
       if (AdminRoles.canEditProfile(v, u))
         AButton('Edit profile',
             icon: Icons.edit_outlined,
@@ -613,10 +689,64 @@ class _UserRecordState extends State<_UserRecord> {
                   hint: 'Net, searches on file'),
             ],
           ),
+        if (u['country_mismatch'] == true)
+          Container(
+            margin: const EdgeInsets.only(top: 14),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AC.amber.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AC.amber.withValues(alpha: 0.35)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    size: 17, color: AC.amber),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'The phone number is from ${countryName(u['phone_country'])} but the account was created from ${countryName(u['signup_country'])}. Often harmless (travel, VPN), worth a glance.',
+                    style: AT.small,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const ASectionLabel('Contact'),
+        AField('Full name', value: '${u['full_name'] ?? ''}'),
+        AField('Company', value: '${u['company'] ?? ''}'),
+        AField('Email', value: '${u['email'] ?? ''}', copyable: true),
+        AField('Phone',
+            value: prettyPhone(u['phone'], u['phone_country']), copyable: true),
+        AField('Phone country',
+            child: '${u['phone_country'] ?? ''}'.isEmpty
+                ? Text(
+                    '${u['phone'] ?? ''}'.trim().isEmpty
+                        ? '–'
+                        : 'Unknown: the number was saved without a country. Set it in Edit profile.',
+                    style: AT.mute)
+                : _flagLine('${u['phone_country']}')),
+        const ASectionLabel('Sign-up'),
+        AField('Signed up from',
+            child: '${u['signup_country'] ?? ''}'.isEmpty
+                ? const Text('Not recorded', style: AT.mute)
+                : _flagLine('${u['signup_country']}',
+                    city: '${u['signup_city'] ?? ''}')),
+        AField('IP address',
+            value: '${u['signup_ip'] ?? ''}', copyable: true, mono: true),
+        AField('Device', value: '${u['signup_device'] ?? ''}'),
+        AField('Found us via',
+            value: [
+              if ('${u['signup_source'] ?? ''}'.isNotEmpty)
+                cap('${u['signup_source']}'),
+              if ('${u['signup_referrer_host'] ?? ''}'.isNotEmpty)
+                '${u['signup_referrer_host']}',
+              if ('${u['signup_campaign'] ?? ''}'.isNotEmpty)
+                'campaign ${u['signup_campaign']}',
+            ].join(' · ')),
         const ASectionLabel('Account'),
         AField('User ID', value: '#${u['id']}', copyable: true),
-        AField('Email', value: '${u['email'] ?? ''}', copyable: true),
-        AField('Phone', value: '${u['phone'] ?? ''}', copyable: true),
+        AField('Sign-in name', value: '${u['username'] ?? ''}', copyable: true),
         AField('Joined', value: fmtDateTime(u['created_at'])),
         AField('Last sign-in',
             value: u['last_login'] == null
@@ -643,6 +773,83 @@ class _UserRecordState extends State<_UserRecord> {
           AField('Suspended', value: fmtDateTime(u['suspended_at'])),
         if ('${u['suspension_reason'] ?? ''}'.trim().isNotEmpty)
           AField('Suspension reason', value: '${u['suspension_reason']}'),
+      ],
+    );
+  }
+
+  Widget _flagLine(String iso, {String city = ''}) => Row(
+        children: [
+          CountryFlagBadge(countryName: iso, size: 14),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+                city.trim().isEmpty
+                    ? countryName(iso)
+                    : '${city.trim()}, ${countryName(iso)}',
+                style: AT.body),
+          ),
+        ],
+      );
+
+  Widget _visitsView() {
+    if (_visitsError != null) {
+      final m = _visitsError!.toLowerCase();
+      if (m.contains('not found') || m.contains('404')) {
+        return const AEmpty(
+            icon: Icons.public_off,
+            title: 'Visitor tracking is not live yet',
+            message: 'Visits appear here once the tracking update is running.');
+      }
+      return AErrorBox(_visitsError!);
+    }
+    final visits = _visits;
+    if (visits == null) return const ALoading();
+    if (visits.isEmpty) {
+      return const AEmpty(
+          icon: Icons.public,
+          title: 'No visits recorded for this account',
+          message:
+              'Visits are recorded from the day tracking went live, when the person is signed in.');
+    }
+    return Column(
+      children: [
+        for (final v in visits)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: AC.border))),
+            child: Row(
+              children: [
+                CountryFlagBadge(countryName: '${v['country'] ?? ''}', size: 14),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ATwoLine(
+                    [
+                      if ('${v['city'] ?? ''}'.isNotEmpty) '${v['city']}',
+                      if ('${v['country'] ?? ''}'.isNotEmpty)
+                        countryName(v['country']),
+                    ].join(', ').isEmpty
+                        ? 'Unknown location'
+                        : [
+                            if ('${v['city'] ?? ''}'.isNotEmpty) '${v['city']}',
+                            if ('${v['country'] ?? ''}'.isNotEmpty)
+                              countryName(v['country']),
+                          ].join(', '),
+                    secondary:
+                        '${fmtDateTime(v['first_seen_at'])} · IP ${v['ip_address'] ?? '–'} · ${v['browser'] ?? ''} ${v['os'] ?? ''}',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('${fmtInt(v['page_count'] ?? 1)} pages', style: AT.num),
+                    Text(cap('${v['source'] ?? ''}'), style: AT.mute),
+                  ],
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }

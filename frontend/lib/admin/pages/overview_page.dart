@@ -583,11 +583,11 @@ class _AdminOverviewPageState extends State<AdminOverviewPage> {
                           child: Row(
                             children: [
                               Expanded(
-                                child: ATwoLine('${u['username'] ?? 'Unknown'}',
+                                child: ATwoLine(userDisplayName(u),
                                     secondary:
                                         '${u['email'] ?? ''} · joined ${timeAgo(u['created_at'])}',
                                     leading:
-                                        AAvatar('${u['username'] ?? '?'}')),
+                                        AAvatar(userDisplayName(u))),
                               ),
                               const SizedBox(width: 8),
                               APill(userStateLabel(userState(u)),

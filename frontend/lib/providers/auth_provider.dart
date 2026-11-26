@@ -121,8 +121,13 @@ class AuthProvider with ChangeNotifier {
     String username,
     String email,
     String password,
-    String phone,
-  ) async {
+    String phone, {
+    String? fullName,
+    String? company,
+    String? phoneCountry,
+    String? visitorId,
+    String? sessionId,
+  }) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -133,6 +138,11 @@ class AuthProvider with ChangeNotifier {
         email: email,
         password: password,
         phone: phone,
+        fullName: fullName,
+        company: company,
+        phoneCountry: phoneCountry,
+        visitorId: visitorId,
+        sessionId: sessionId,
       );
       _isLoading = false;
       notifyListeners();

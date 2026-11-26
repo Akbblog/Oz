@@ -347,7 +347,7 @@ class _LoginScreenState extends State<LoginScreen>
             const SizedBox(height: AppSpacing.xl),
 
             // Username
-            _buildLabel('Username'),
+            _buildLabel('Email or username'),
             const SizedBox(height: 6),
             TextFormField(
               controller: _usernameController,
@@ -355,7 +355,7 @@ class _LoginScreenState extends State<LoginScreen>
               autofillHints: const [AutofillHints.username],
               style: const TextStyle(color: Colors.white),
               decoration: _inputDecoration(
-                hint: 'Enter your username',
+                hint: 'Email or username',
                 icon: Icons.person_outline_rounded,
               ),
               validator: (value) =>

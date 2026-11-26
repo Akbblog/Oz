@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/admin_roles.dart';
+import '../../core/countries.dart';
+import '../../widgets/country_picker.dart';
 import '../../services/api_service.dart';
 import '../admin_kit.dart';
 
@@ -36,6 +38,24 @@ Color roleColor(String role) => switch (role) {
       'support' => AC.blue,
       _ => AC.grey,
     };
+
+/// The person's name when we have it, otherwise their sign-in name.
+String userDisplayName(Map<String, dynamic> u) {
+  final full = '${u['full_name'] ?? ''}'.trim();
+  if (full.isNotEmpty) return full;
+  final username = '${u['username'] ?? ''}'.trim();
+  return username.isEmpty ? 'Unknown' : username;
+}
+
+/// Country for an account: the phone's country when known, otherwise where
+/// the account was created. Null when neither is known.
+String? userCountry(Map<String, dynamic> u) {
+  for (final key in const ['phone_country', 'signup_country']) {
+    final v = '${u[key] ?? ''}'.trim().toUpperCase();
+    if (v.length == 2) return v;
+  }
+  return null;
+}
 
 String cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
@@ -209,12 +229,30 @@ class UserActions {
       'username': '${u['username'] ?? ''}',
       'email': '${u['email'] ?? ''}',
       'phone': '${u['phone'] ?? ''}',
+      'full_name': '${u['full_name'] ?? ''}',
+      'company': '${u['company'] ?? ''}',
+      'phone_country': '${u['phone_country'] ?? ''}',
     };
+    var country = countryByIso(o['phone_country']);
+    // Show the national part next to the dial code when the country is known.
+    final startPhone = country != null && o['phone']!.startsWith('+${country.dial}')
+        ? o['phone']!.substring(country.dial.length + 1)
+        : o['phone']!;
+    final fullName = TextEditingController(text: o['full_name']);
+    final company = TextEditingController(text: o['company']);
     final username = TextEditingController(text: o['username']);
     final email = TextEditingController(text: o['email']);
-    final phone = TextEditingController(text: o['phone']);
+    final phone = TextEditingController(text: startPhone);
     String? error;
     var busy = false;
+    Widget field(TextEditingController c, String label) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: TextField(
+              controller: c,
+              style: AT.body,
+              cursorColor: AC.accent,
+              decoration: aInput(label: label)),
+        );
     final ok = await showADialog<bool>(
       context,
       title: 'Edit profile',
@@ -224,28 +262,42 @@ class UserActions {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-                controller: username,
-                style: AT.body,
-                cursorColor: AC.accent,
-                decoration: aInput(label: 'Username')),
-            const SizedBox(height: 10),
-            TextField(
-                controller: email,
-                style: AT.body,
-                cursorColor: AC.accent,
-                decoration: aInput(label: 'Email')),
-            const SizedBox(height: 10),
-            TextField(
-                controller: phone,
-                style: AT.body,
-                cursorColor: AC.accent,
-                decoration: aInput(label: 'Phone')),
+            field(fullName, 'Full name'),
+            field(company, 'Company'),
+            field(email, 'Email'),
+            Row(
+              children: [
+                CountryDialButton(
+                  country: country,
+                  background: AC.bg,
+                  border: AC.borderStrong,
+                  foreground: AC.text,
+                  height: 42,
+                  onChanged: (c) => setS(() => country = c),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                      controller: phone,
+                      keyboardType: TextInputType.phone,
+                      style: AT.body,
+                      cursorColor: AC.accent,
+                      decoration: aInput(label: 'Phone number')),
+                ),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 10),
+              child: Text(
+                  'Pick the country and type the number as the person would dial it locally. It is checked and saved in international format.',
+                  style: AT.mute),
+            ),
+            field(username, 'Sign-in name'),
             if (error != null) ...[
-              const SizedBox(height: 8),
               Text(error!, style: AT.small.copyWith(color: AC.red)),
+              const SizedBox(height: 6),
             ],
-            const SizedBox(height: 16),
+            const SizedBox(height: 6),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -261,18 +313,24 @@ class UserActions {
                     final un = username.text.trim();
                     final em = email.text.trim();
                     final ph = phone.text.trim();
+                    final fn = fullName.text.trim();
+                    final co = company.text.trim();
                     if (un.length < 3) {
                       setS(() =>
-                          error = 'Username needs at least 3 characters.');
+                          error = 'Sign-in name needs at least 3 characters.');
                       return;
                     }
                     if (!em.contains('@')) {
                       setS(() => error = 'Enter a valid email address.');
                       return;
                     }
+                    final phoneChanged = ph != startPhone ||
+                        (country?.iso ?? '') != o['phone_country'];
                     if (un == o['username'] &&
                         em == o['email'] &&
-                        ph == o['phone']) {
+                        fn == o['full_name'] &&
+                        co == o['company'] &&
+                        !phoneChanged) {
                       Navigator.pop(ctx, false);
                       return;
                     }
@@ -285,7 +343,10 @@ class UserActions {
                         _id(u),
                         username: un != o['username'] ? un : null,
                         email: em != o['email'] ? em : null,
-                        phone: ph != o['phone'] ? ph : null,
+                        phone: phoneChanged ? ph : null,
+                        phoneCountry: phoneChanged ? country?.iso : null,
+                        fullName: fn != o['full_name'] ? fn : null,
+                        company: co != o['company'] ? co : null,
                       );
                       if (ctx.mounted) Navigator.pop(ctx, true);
                     } catch (e) {
@@ -304,9 +365,9 @@ class UserActions {
         ),
       ),
     );
-    username.dispose();
-    email.dispose();
-    phone.dispose();
+    for (final c in [fullName, company, username, email, phone]) {
+      c.dispose();
+    }
     if (ok == true && context.mounted) aToast(context, 'Profile updated');
     return ok == true;
   }

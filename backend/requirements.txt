@@ -39,3 +39,4 @@ aiosmtplib==3.0.1
 # Currency & Tax (Phase 5+, optional)
 # forex-python==1.8
 # vat-moss==2024.1.1
+phonenumbers>=8.13.0

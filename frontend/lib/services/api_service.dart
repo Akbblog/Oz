@@ -106,6 +106,11 @@ class ApiService {
     required String email,
     required String password,
     required String phone,
+    String? fullName,
+    String? company,
+    String? phoneCountry,
+    String? visitorId,
+    String? sessionId,
   }) async {
     try {
       final response = await http
@@ -117,6 +122,12 @@ class ApiService {
               'email': email,
               'password': password,
               'phone': phone,
+              if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+              if (company != null && company.isNotEmpty) 'company': company,
+              if (phoneCountry != null && phoneCountry.isNotEmpty)
+                'phone_country': phoneCountry,
+              if (visitorId != null) 'visitor_id': visitorId,
+              if (sessionId != null) 'session_id': sessionId,
             }),
           )
           .timeout(timeout);
@@ -614,12 +625,20 @@ class ApiService {
     String? username,
     String? email,
     String? phone,
+    String? phoneCountry,
+    String? fullName,
+    String? company,
   }) async {
     final headers = await _getHeaders();
     final body = <String, dynamic>{};
     if (username != null) body['username'] = username;
     if (email != null) body['email'] = email;
     if (phone != null) body['phone'] = phone;
+    if (phone != null && phoneCountry != null) {
+      body['phone_country'] = phoneCountry;
+    }
+    if (fullName != null) body['full_name'] = fullName;
+    if (company != null) body['company'] = company;
 
     final response = await http
         .put(
@@ -2511,9 +2530,11 @@ class ApiService {
     String? kind,
     String? source,
     bool live = false,
+    int? userId,
   }) async {
     final query = <String, String>{
       if (live) 'live': 'true',
+      if (userId != null) 'user_id': '$userId',
       'days': '$days',
       'limit': '$limit',
       'offset': '$offset',
@@ -2524,6 +2545,22 @@ class ApiService {
     };
     return _asMap(await _getJson('/api/admin/visitors',
         query: query, context: 'Loading visitors'));
+  }
+
+  /// Country of this browser's network ("PK"), or null. Never throws: it
+  /// only preselects the dial code on the sign-up form.
+  Future<String?> getGeoHint() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/api/geo/hint'))
+          .timeout(const Duration(seconds: 6));
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body);
+      final c = data is Map ? data['country'] : null;
+      return c is String && c.length == 2 ? c.toUpperCase() : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Map<String, dynamic>> getAdminVisitorsSummary({int days = 7}) async =>

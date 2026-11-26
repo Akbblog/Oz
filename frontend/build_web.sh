@@ -24,6 +24,12 @@ BUILD_STATUS=$?
 # Incremental builds have been observed to report success while leaving
 # build/web without its asset manifests (the app then loads as a blank page).
 # Refuse to call such a bundle "successful".
+# Replace the (empty) service worker with one that removes the caching worker
+# older releases installed, so returning visitors get the new build.
+if [ $BUILD_STATUS -eq 0 ] && [ -f web/sw_cleanup.js ]; then
+    cp web/sw_cleanup.js build/web/flutter_service_worker.js
+fi
+
 if [ $BUILD_STATUS -eq 0 ]; then
     for f in build/web/main.dart.js build/web/assets/AssetManifest.bin.json build/web/assets/FontManifest.json; do
         if [ ! -s "$f" ]; then

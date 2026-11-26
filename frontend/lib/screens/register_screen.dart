@@ -1,9 +1,13 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:universal_html/html.dart' as html;
+import '../core/countries.dart';
 import '../providers/auth_provider.dart';
 import '../core/theme/app_theme.dart';
 import '../services/analytics_service.dart';
+import '../services/api_service.dart';
+import '../widgets/country_picker.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -15,14 +19,21 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _companyController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
   final _passwordVisible = ValueNotifier<bool>(false);
-  final _confirmPasswordVisible = ValueNotifier<bool>(false);
   bool _isLoading = false;
+
+  /// Country for the phone number. Preselected from the visitor's network,
+  /// then the browser language; the person can always change it.
+  Country? _country;
+  bool _countryTouched = false;
+
+  /// Messages from the server, shown under the field they are about.
+  final Map<String, String> _serverErrors = {};
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -55,18 +66,46 @@ class _RegisterScreenState extends State<RegisterScreen>
     );
 
     _animationController.forward();
+    _guessCountry();
+  }
+
+  Future<void> _guessCountry() async {
+    String? locale;
+    try {
+      locale = html.window.navigator.language;
+    } catch (_) {}
+    final fromLocale = countryFromLocale(locale);
+    if (fromLocale != null && mounted) setState(() => _country = fromLocale);
+    final hint = countryByIso(await ApiService().getGeoHint());
+    if (hint != null && mounted && !_countryTouched) {
+      setState(() => _country = hint);
+    }
+  }
+
+  /// A sign-in name is still stored for every account, but nobody has to
+  /// invent one: it comes from the email, and people sign in with the email.
+  static String _usernameFrom(String email, {String suffix = ''}) {
+    var base = email.split('@').first.toLowerCase().replaceAll(RegExp(r'[^a-z0-9._]'), '');
+    if (base.length < 3) base = 'user$base';
+    if (base.length > 24) base = base.substring(0, 24);
+    return '$base$suffix';
+  }
+
+  void _clearServerError(String field) {
+    if (_serverErrors.containsKey(field)) {
+      setState(() => _serverErrors.remove(field));
+    }
   }
 
   @override
   void dispose() {
     _animationController.dispose();
-    _usernameController.dispose();
+    _nameController.dispose();
+    _companyController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
     _passwordController.dispose();
-    _confirmPasswordController.dispose();
     _passwordVisible.dispose();
-    _confirmPasswordVisible.dispose();
     super.dispose();
   }
 
@@ -95,38 +134,70 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   Future<void> _handleRegister() async {
+    setState(() => _serverErrors.clear());
     if (!_formKey.currentState!.validate()) return;
-
-    if (_passwordController.text != _confirmPasswordController.text) {
-      _showSnackBar('Passwords do not match', isError: true);
-      return;
-    }
 
     setState(() => _isLoading = true);
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final message = await authProvider.register(
-      _usernameController.text.trim(),
-      _emailController.text.trim(),
-      _passwordController.text,
-      _phoneController.text.trim(),
-    );
+    final email = _emailController.text.trim().toLowerCase();
+    final typedPhone = _phoneController.text.trim();
+    final who = await AnalyticsService.instance.identity();
 
-    if (mounted) {
-      setState(() => _isLoading = false);
+    String? message;
+    String error = '';
+    // The sign-in name is derived from the email; if someone else already
+    // has it, try again with a short number added instead of asking.
+    for (var attempt = 0; attempt < 4; attempt++) {
+      final suffix = attempt == 0
+          ? ''
+          : '${100 + (DateTime.now().microsecondsSinceEpoch + attempt * 37) % 900}';
+      message = await authProvider.register(
+        _usernameFrom(email, suffix: suffix),
+        email,
+        _passwordController.text,
+        typedPhone,
+        fullName: _nameController.text.trim(),
+        company: _companyController.text.trim(),
+        // Always sent, so the server checks the number properly. A number
+        // typed with "+" still wins over the selected country.
+        phoneCountry: _country?.iso,
+        visitorId: who.visitorId,
+        sessionId: who.sessionId,
+      );
+      if (message != null) break;
+      error = authProvider.errorMessage ?? '';
+      if (!error.toLowerCase().contains('username already exists')) break;
     }
 
-    if (message != null && mounted) {
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (message != null) {
       _showSnackBar(message);
-      final uid = Provider.of<AuthProvider>(context, listen: false)
-          .currentUser?['id'] as int?;
+      final uid = authProvider.currentUser?['id'] as int?;
       if (uid != null) AnalyticsService.instance.identify(uid);
       AnalyticsService.instance.track('register');
       Navigator.of(context).pop();
-    } else if (mounted) {
-      final error =
-          authProvider.errorMessage ?? 'Registration failed. Please try again.';
-      _showSnackBar(error, isError: true);
+      return;
+    }
+
+    final lower = error.toLowerCase();
+    setState(() {
+      if (lower.contains('email')) {
+        _serverErrors['email'] = lower.contains('already')
+            ? 'This email already has an account. Sign in instead.'
+            : error;
+      } else if (lower.contains('phone')) {
+        _serverErrors['phone'] = error;
+      } else if (lower.contains('password')) {
+        _serverErrors['password'] = error;
+      }
+    });
+    if (_serverErrors.isEmpty) {
+      _showSnackBar(
+          error.isEmpty ? 'Registration failed. Please try again.' : error,
+          isError: true);
     }
   }
 
@@ -326,83 +397,155 @@ class _RegisterScreenState extends State<RegisterScreen>
             ),
             const SizedBox(height: AppSpacing.xl),
 
-            // Username
-            _buildLabel('Username'),
+            // Full name
+            _buildLabel('Full name'),
             const SizedBox(height: 6),
             TextFormField(
-              controller: _usernameController,
+              key: const Key('signup-name'),
+              controller: _nameController,
+              textCapitalization: TextCapitalization.words,
+              autofillHints: const [AutofillHints.name],
+              textInputAction: TextInputAction.next,
               style: const TextStyle(color: AppColors.textPrimaryLight),
               decoration: _inputDecoration(
-                hint: 'Choose a username',
+                hint: 'Your name',
                 icon: Icons.person_outline_rounded,
               ),
-              validator: (value) =>
-                  value?.isEmpty ?? true ? 'Please enter a username' : null,
+              validator: (value) {
+                final v = (value ?? '').trim();
+                if (v.length < 2) return 'Please enter your name';
+                return null;
+              },
             ),
             const SizedBox(height: AppSpacing.md),
 
             // Email
-            _buildLabel('Email'),
+            _buildLabel('Work email'),
             const SizedBox(height: 6),
             TextFormField(
+              key: const Key('signup-email'),
               controller: _emailController,
               keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              textInputAction: TextInputAction.next,
+              onChanged: (_) => _clearServerError('email'),
+              forceErrorText: _serverErrors['email'],
               style: const TextStyle(color: AppColors.textPrimaryLight),
               decoration: _inputDecoration(
-                hint: 'Enter your email',
+                hint: 'you@company.com',
                 icon: Icons.mail_outline_rounded,
               ),
               validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter an email';
-                }
-                if (!value.contains('@')) {
-                  return 'Please enter a valid email';
+                final v = (value ?? '').trim();
+                if (v.isEmpty) return 'Please enter your email';
+                if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$').hasMatch(v)) {
+                  return 'That email address does not look complete';
                 }
                 return null;
               },
             ),
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 4),
+              child: Text(
+                'You will sign in with this email.',
+                style: AppTypography.bodySmall.copyWith(
+                    color: AppColors.textSecondaryLight, fontSize: 11.5),
+              ),
+            ),
             const SizedBox(height: AppSpacing.md),
 
-            // Phone
-            _buildLabel('Phone Number'),
+            // Phone: country + number
+            _buildLabel('Phone number'),
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CountryDialButton(
+                  key: const Key('signup-country'),
+                  country: _country,
+                  background: Colors.white,
+                  border: const Color(0xFFe2e8f0),
+                  foreground: AppColors.textPrimaryLight,
+                  radius: AppSpacing.radiusLg,
+                  onChanged: (c) => setState(() {
+                    _country = c;
+                    _countryTouched = true;
+                    _serverErrors.remove('phone');
+                  }),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextFormField(
+                    key: const Key('signup-phone'),
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    autofillHints: const [AutofillHints.telephoneNumber],
+                    textInputAction: TextInputAction.next,
+                    onChanged: (_) => _clearServerError('phone'),
+                    forceErrorText: _serverErrors['phone'],
+                    style: const TextStyle(color: AppColors.textPrimaryLight),
+                    decoration: _inputDecoration(
+                      hint: 'Mobile number',
+                      icon: Icons.phone_rounded,
+                    ),
+                    validator: (value) {
+                      final raw = (value ?? '').trim();
+                      if (raw.isEmpty) return 'Please enter your phone number';
+                      if (RegExp(r'[^0-9+()\-\s.]').hasMatch(raw)) {
+                        return 'Use digits only';
+                      }
+                      final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+                      if (digits.length < 6 || digits.length > 15) {
+                        return 'That number does not look complete';
+                      }
+                      if (!raw.startsWith('+') && _country == null) {
+                        return 'Choose your country first';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // Company (optional)
+            _buildLabel('Company (optional)'),
             const SizedBox(height: 6),
             TextFormField(
-              controller: _phoneController,
-              keyboardType: TextInputType.phone,
+              key: const Key('signup-company'),
+              controller: _companyController,
+              textCapitalization: TextCapitalization.words,
+              autofillHints: const [AutofillHints.organizationName],
+              textInputAction: TextInputAction.next,
               style: const TextStyle(color: AppColors.textPrimaryLight),
               decoration: _inputDecoration(
-                hint: 'Enter your phone number',
-                icon: Icons.phone_rounded,
+                hint: 'Where you work',
+                icon: Icons.business_outlined,
               ),
-              validator: (value) {
-                final raw = (value ?? '').trim();
-                if (raw.isEmpty) {
-                  return 'Please enter a phone number';
-                }
-                final digitsOnly = raw.replaceAll(RegExp(r'[^\d]'), '');
-                if (digitsOnly.length < 7) {
-                  return 'Please enter a valid phone number';
-                }
-                return null;
-              },
             ),
             const SizedBox(height: AppSpacing.md),
 
-            // Password
+            // Password (one field with a show/hide toggle; no retyping)
             _buildLabel('Password'),
             const SizedBox(height: 6),
             ValueListenableBuilder<bool>(
               valueListenable: _passwordVisible,
               builder: (context, visible, child) {
                 return TextFormField(
+                  key: const Key('signup-password'),
                   controller: _passwordController,
                   obscureText: !visible,
+                  autofillHints: const [AutofillHints.newPassword],
+                  onChanged: (_) => _clearServerError('password'),
+                  forceErrorText: _serverErrors['password'],
+                  onFieldSubmitted: (_) => _isLoading ? null : _handleRegister(),
                   style: const TextStyle(color: AppColors.textPrimaryLight),
                   decoration: _inputDecoration(
-                    hint: 'Create a password',
+                    hint: 'At least 8 characters',
                     icon: Icons.lock_outline_rounded,
                     suffixIcon: IconButton(
+                      tooltip: visible ? 'Hide password' : 'Show password',
                       icon: Icon(
                         visible
                             ? Icons.visibility_rounded
@@ -415,45 +558,13 @@ class _RegisterScreenState extends State<RegisterScreen>
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Please enter a password';
+                      return 'Please choose a password';
                     }
                     if (value.length < 8) {
-                      return 'Password must be at least 8 characters';
+                      return 'Use at least 8 characters';
                     }
                     return null;
                   },
-                );
-              },
-            ),
-            const SizedBox(height: AppSpacing.md),
-
-            // Confirm Password
-            _buildLabel('Confirm Password'),
-            const SizedBox(height: 6),
-            ValueListenableBuilder<bool>(
-              valueListenable: _confirmPasswordVisible,
-              builder: (context, visible, child) {
-                return TextFormField(
-                  controller: _confirmPasswordController,
-                  obscureText: !visible,
-                  style: const TextStyle(color: AppColors.textPrimaryLight),
-                  decoration: _inputDecoration(
-                    hint: 'Confirm your password',
-                    icon: Icons.lock_reset_rounded,
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        visible
-                            ? Icons.visibility_rounded
-                            : Icons.visibility_off_rounded,
-                        color: AppColors.textSecondaryLight,
-                        size: 20,
-                      ),
-                      onPressed: () => _confirmPasswordVisible.value = !visible,
-                    ),
-                  ),
-                  validator: (value) => value?.isEmpty ?? true
-                      ? 'Please confirm your password'
-                      : null,
                 );
               },
             ),

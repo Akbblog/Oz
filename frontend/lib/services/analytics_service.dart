@@ -94,6 +94,17 @@ class AnalyticsService {
     track('page_view', properties: {'page': pageName});
   }
 
+  /// This browser's visitor id and the current session id, so a new account
+  /// can be linked to the visits that led to it. Null before [init].
+  Future<({String? visitorId, String? sessionId})> identity() async {
+    if (!_started) return (visitorId: null, sessionId: null);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _visitorId ??= prefs.getString(_visitorKey);
+    } catch (_) {}
+    return (visitorId: _visitorId, sessionId: _sessionId);
+  }
+
   /// Called by the router for every navigation: records the page view and
   /// keeps the visit (session) row on the server fresh, so the admin
   /// Visitors page shows who is on the site, where they came from and what

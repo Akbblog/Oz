@@ -451,7 +451,8 @@ def _like(value: str) -> str:
 
 def list_visits(days: int = 7, limit: int = 50, offset: int = 0, q: Optional[str] = None,
                 country: Optional[str] = None, kind: str = "all",
-                source: Optional[str] = None, live: bool = False) -> Dict[str, Any]:
+                source: Optional[str] = None, live: bool = False,
+                user_id: Optional[int] = None) -> Dict[str, Any]:
     """Visit log. With live=True: only sessions seen in the last ACTIVE_WINDOW_SECONDS,
     most recently active first (the date range is ignored)."""
     days = _clamp_days(days)
@@ -471,6 +472,9 @@ def list_visits(days: int = 7, limit: int = 50, offset: int = 0, q: Optional[str
         clauses = ["v.date_bucket >= ?"]
         params = [_cutoff(days)]
     order = "v.last_seen_at DESC, v.id DESC" if live else "v.first_seen_at DESC, v.id DESC"
+    if user_id is not None:
+        clauses.append("v.user_id = ?")
+        params.append(int(user_id))
     kind = (kind or "all").strip().lower()
     if kind == "anonymous":
         clauses.append("v.is_bot = 0 AND v.user_id IS NULL")

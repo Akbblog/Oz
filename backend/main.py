@@ -388,6 +388,14 @@ def _startup_init_db() -> None:
     init_database()
     # Ensure feature flags exist for frontend gating.
     ensure_default_admin_settings()
+    # Accounts whose stored number is already international get their country.
+    try:
+        import user_profile
+        fixed = user_profile.backfill_phone_countries()
+        if fixed:
+            logger.info("Set the phone country on %d existing account(s)", fixed)
+    except Exception as exc:
+        logger.warning("Phone country backfill skipped: %r", exc)
 
     # ── Startup recovery ────────────────────────────────────────────────────
     # Jobs left 'running' by a previous process are NOT failed here. The job
@@ -568,6 +576,12 @@ class UserRegister(BaseModel):
     password: str
     phone: Optional[str] = None
     referral_code: Optional[str] = None
+    # Optional so app versions that predate these fields can still register.
+    full_name: Optional[str] = None
+    company: Optional[str] = None
+    phone_country: Optional[str] = None   # ISO 3166-1 alpha-2 chosen in the form
+    visitor_id: Optional[str] = None      # links the account to its visit history
+    session_id: Optional[str] = None
 
     @field_validator("password")
     @classmethod
@@ -599,6 +613,9 @@ class AdminUserProfileUpdateRequest(BaseModel):
     username: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    phone_country: Optional[str] = None
+    full_name: Optional[str] = None
+    company: Optional[str] = None
     is_admin: Optional[bool] = None
     role: Optional[str] = None  # 'user', 'support', 'admin', 'owner'
 
@@ -1190,35 +1207,71 @@ async def register(user_data: UserRegister, request: Request, background_tasks: 
     """Register a new user (can be auto-approved if setting enabled)"""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     # Check if username exists
     cursor.execute("SELECT id FROM users WHERE username = ?", (user_data.username,))
     if cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=400, detail="Username already exists")
-    
-    # Check if email exists
-    cursor.execute("SELECT id FROM users WHERE email = ?", (user_data.email,))
+
+    # Emails are stored lower-cased and compared without regard to case.
+    import user_profile
+    email_value = user_profile.normalize_email(user_data.email)
+    cursor.execute("SELECT id FROM users WHERE LOWER(email) = ?", (email_value,))
     if cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=400, detail="Email already exists")
-    
+    if user_profile.is_disposable_email(email_value):
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Please use a permanent email address. Temporary inboxes can't be used to sign up.",
+        )
+
+    # Phone: validated for its country and stored in one international format.
+    try:
+        # Strict only when the form sent a country (the current form always
+        # does). Older app versions send free text: kept as typed, as before.
+        phone_info = user_profile.normalize_phone(
+            user_data.phone, user_data.phone_country, strict=bool(user_data.phone_country))
+    except user_profile.PhoneError as exc:
+        conn.close()
+        raise HTTPException(status_code=400, detail=str(exc))
+    if phone_info["country"]:
+        cursor.execute("SELECT id FROM users WHERE phone = ?", (phone_info["phone"],))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="This phone number is already registered")
+    full_name_value = user_profile.clean_text(user_data.full_name)
+    company_value = user_profile.clean_text(user_data.company)
+    signup = user_profile.signup_context(
+        request.headers, request.client.host if request.client else None,
+        user_data.visitor_id, user_data.session_id,
+    )
+
     # Check if auto-approve is enabled
     auto_approve = get_admin_setting("auto_approve_users", "false") == "true"
     starting_credits = _get_starting_credits()
-    
+
     # Create user with proper approval status and credits
     password_hash = get_password_hash(user_data.password)
-    phone_value = (user_data.phone or "").strip() or None
+    phone_value = phone_info["phone"]
     created_at = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO users (username, email, password_hash, phone, is_approved, credit_balance, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (user_data.username, user_data.email, password_hash, phone_value,
+        INSERT INTO users (username, email, password_hash, phone, is_approved, credit_balance, created_at,
+                           full_name, company, phone_country,
+                           signup_ip, signup_country, signup_city, signup_device,
+                           signup_source, signup_referrer_host, signup_campaign, signup_visitor_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_data.username, email_value, password_hash, phone_value,
           1 if auto_approve else 0,
           starting_credits if auto_approve else 0,
-          created_at))
-    
+          created_at,
+          full_name_value, company_value, phone_info["country"],
+          signup["signup_ip"], signup["signup_country"], signup["signup_city"], signup["signup_device"],
+          signup["signup_source"], signup["signup_referrer_host"], signup["signup_campaign"],
+          signup["signup_visitor_id"]))
+
     conn.commit()
     user_id = cursor.lastrowid
     conn.close()
@@ -1232,7 +1285,9 @@ async def register(user_data: UserRegister, request: Request, background_tasks: 
         actor_username=user_data.username,
         target_type="user",
         target_id=str(user_id),
-        after={"username": user_data.username, "email": user_data.email, "auto_approved": auto_approve},
+        after={"username": user_data.username, "email": email_value, "auto_approved": auto_approve,
+               "phone_country": phone_info["country"], "signup_country": signup["signup_country"],
+               "signup_source": signup["signup_source"]},
         ip_address=request.state.client_ip,
         user_agent=request.state.user_agent,
     )
@@ -1311,7 +1366,7 @@ async def register(user_data: UserRegister, request: Request, background_tasks: 
                     )
         except Exception:
             pass
-    
+
     # Send appropriate email
     try:
         if auto_approve:
@@ -1357,9 +1412,9 @@ async def login(credentials: UserLogin, request: Request):
             """
             SELECT id, username, email, phone, password_hash, is_approved, is_admin, role, is_suspended
             FROM users
-            WHERE username = ? OR email = ?
+            WHERE username = ? OR LOWER(email) = ?
             """,
-            (credentials.username, credentials.username),
+            (credentials.username, (credentials.username or "").strip().lower()),
         )
         user = cursor.fetchone()
 
@@ -1412,7 +1467,7 @@ async def login(credentials: UserLogin, request: Request):
         conn.commit()
     finally:
         conn.close()
-    
+
     # Audit: successful login
     from audit import record_audit_event
     record_audit_event(
@@ -1579,6 +1634,11 @@ async def reset_password(request: ResetPasswordRequest):
 
 # /internal/debug_users removed (CLAUDE_DEEP_AUDIT C-1): use GET /api/admin/users.
 
+def _countries_differ(phone_country, signup_country) -> bool:
+    import user_profile
+    return user_profile.countries_differ(phone_country, signup_country)
+
+
 @app.get("/api/admin/users")
 async def get_all_users(admin: dict = Depends(get_admin_user)):
     """Get all users (admin only)"""
@@ -1587,7 +1647,10 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
     cursor.execute("""
         SELECT id, username, email, phone, is_approved, is_admin, credit_balance, created_at, last_login,
                approved_at, approved_by, denied_at, denied_by, denied_reason, role,
-               is_suspended, suspended_at, suspended_by, suspension_reason
+               is_suspended, suspended_at, suspended_by, suspension_reason,
+               full_name, company, phone_country,
+               signup_ip, signup_country, signup_city, signup_device,
+               signup_source, signup_referrer_host, signup_campaign, signup_visitor_id
         FROM users ORDER BY created_at DESC
     """)
     users = cursor.fetchall()
@@ -1619,6 +1682,19 @@ async def get_all_users(admin: dict = Depends(get_admin_user)):
                 "suspended_at": u[16],
                 "suspended_by": u[17],
                 "suspension_reason": u[18],
+                "full_name": u[19],
+                "company": u[20],
+                "phone_country": u[21],
+                "signup_ip": u[22],
+                "signup_country": u[23],
+                "signup_city": u[24],
+                "signup_device": u[25],
+                "signup_source": u[26],
+                "signup_referrer_host": u[27],
+                "signup_campaign": u[28],
+                "signup_visitor_id": u[29],
+                # Phone says one country, the sign-up IP another: worth a look.
+                "country_mismatch": _countries_differ(u[21], u[23]),
             }
             for u in users
         ]
@@ -1708,10 +1784,33 @@ async def update_user_profile(
         update_fields.append("email = ?")
         params.append(email)
 
-    if profile_data.phone is not None:
-        phone = profile_data.phone.strip()
+    # Only a phone that is actually being changed is validated: re-saving a
+    # profile must never be refused because of a number stored long ago.
+    phone_changed = profile_data.phone is not None and (
+        profile_data.phone.strip() != (existing[3] or "").strip() or bool(profile_data.phone_country)
+    )
+    if phone_changed:
+        import user_profile
+        try:
+            info = user_profile.normalize_phone(
+                profile_data.phone, profile_data.phone_country, strict=bool(profile_data.phone_country))
+        except user_profile.PhoneError as exc:
+            conn.close()
+            raise HTTPException(status_code=400, detail=str(exc))
         update_fields.append("phone = ?")
-        params.append(phone or None)
+        params.append(info["phone"])
+        update_fields.append("phone_country = ?")
+        params.append(info["country"])
+
+    if profile_data.full_name is not None:
+        import user_profile
+        update_fields.append("full_name = ?")
+        params.append(user_profile.clean_text(profile_data.full_name))
+
+    if profile_data.company is not None:
+        import user_profile
+        update_fields.append("company = ?")
+        params.append(user_profile.clean_text(profile_data.company))
 
     if not update_fields:
         conn.close()
@@ -1726,7 +1825,8 @@ async def update_user_profile(
     conn.close()
 
     after_state = {
-        k: v for k, v in profile_data.model_dump(exclude_unset=True).items() if k in ("username", "email", "phone")
+        k: v for k, v in profile_data.model_dump(exclude_unset=True).items()
+        if k in ("username", "email", "phone", "phone_country", "full_name", "company")
     }
 
     record_audit_event(
@@ -4242,23 +4342,23 @@ async def get_job_results(job_id: str, current_user: dict = Depends(get_current_
 
     conn = get_db()
     cursor = conn.cursor()
-    
+
     # Verify job ownership
     cursor.execute("SELECT user_id FROM jobs WHERE job_id = ?", (job_id,))
     job = cursor.fetchone()
     if not job or job[0] != current_user["id"]:
         conn.close()
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Get results (lead_id / lead_key: see job_service.RESULT_API_COLUMNS)
     cursor.execute(
         f"SELECT {job_service.RESULT_API_COLUMNS} FROM results WHERE job_id = ? ORDER BY id",
         (job_id,),
     )
     results = [job_service.result_api_dict(row) for row in cursor.fetchall()]
-    
+
     conn.close()
-    
+
     return {
         "job_id": job_id,
         "total_results": len(results),
@@ -6348,6 +6448,14 @@ async def record_site_visit_endpoint(
     return {"ok": bool(ok)}
 
 
+@app.get("/api/geo/hint")
+async def geo_hint_endpoint(request: Request):
+    """Country of the caller from the edge headers (public; used to preselect
+    the dial code on the sign-up form). {"country": "PK"} or {"country": null}."""
+    from analytics.visits import resolve_geo
+    return {"country": resolve_geo(request.headers).get("country")}
+
+
 @app.get("/api/admin/visitors")
 async def admin_visitors_endpoint(
     days: int = 7,
@@ -6358,12 +6466,13 @@ async def admin_visitors_endpoint(
     kind: str = "all",
     source: Optional[str] = None,
     live: bool = False,
+    user_id: Optional[int] = None,
     admin: dict = Depends(get_admin_user),
 ):
     """Visit log, newest first: who opened the app, from where, on what.
     live=true returns only sessions active in the last few minutes."""
     from analytics.visits import list_visits
-    return await asyncio.to_thread(list_visits, days, limit, offset, q, country, kind, source, live)
+    return await asyncio.to_thread(list_visits, days, limit, offset, q, country, kind, source, live, user_id)
 
 
 @app.get("/api/admin/visitors/summary")
