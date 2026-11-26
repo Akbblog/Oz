@@ -214,3 +214,12 @@ def test_free_text_phone_from_an_older_app_version_is_never_refused(client, db_c
     # The current form sends the country, so the same mistake is caught there.
     r = _register(client, "newapp", phone="+92 54646546", phone_country="PK")
     assert r.status_code == 400
+
+
+def test_signup_location_falls_back_to_what_the_app_reported(client, db_connection):
+    bare = {"x-vercel-forwarded-for": "203.0.113.9", "x-vercel-id": "iad1::t", "user-agent": CHROME}
+    r = _register(client, "geo1", bare, phone="03001234599", phone_country="PK",
+                  geo_country="PK", geo_city="Karachi")
+    assert r.status_code == 201, r.text
+    assert _row(db_connection, "geo1", "signup_ip, signup_country, signup_city") == (
+        "203.0.113.9", "PK", "Karachi")

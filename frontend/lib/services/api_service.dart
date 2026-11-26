@@ -111,6 +111,8 @@ class ApiService {
     String? phoneCountry,
     String? visitorId,
     String? sessionId,
+    String? geoCountry,
+    String? geoCity,
   }) async {
     try {
       final response = await http
@@ -128,6 +130,8 @@ class ApiService {
                 'phone_country': phoneCountry,
               if (visitorId != null) 'visitor_id': visitorId,
               if (sessionId != null) 'session_id': sessionId,
+              if (geoCountry != null) 'geo_country': geoCountry,
+              if (geoCity != null) 'geo_city': geoCity,
             }),
           )
           .timeout(timeout);

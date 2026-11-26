@@ -48,7 +48,8 @@ class AnalyticsService {
 
   void init() {
     _started = true;
-    _sessionId ??= _newId();
+    _sessionId ??= _resumeSession() ?? _newId();
+    _rememberSession();
     _flushTimer?.cancel();
     _flushTimer = Timer.periodic(_flushInterval, (_) => flush());
     // While the tab stays open and visible, tell the server the session is
@@ -92,6 +93,64 @@ class AnalyticsService {
     _lastPageAt = now;
     _currentPage = pageName;
     track('page_view', properties: {'page': pageName});
+  }
+
+  // One visit = one stretch of activity in this browser. A reload or a second
+  // tab continues the same visit; 30 minutes without activity ends it.
+  static const String _sessionKey = 'il_session_id';
+  static const String _sessionSeenKey = 'il_session_seen';
+  static const Duration _sessionIdle = Duration(minutes: 30);
+
+  String? _resumeSession() {
+    if (!kIsWeb) return null;
+    try {
+      final id = html.window.localStorage[_sessionKey];
+      final seen = int.tryParse(html.window.localStorage[_sessionSeenKey] ?? '');
+      if (id == null || id.length < 6 || seen == null) return null;
+      final idle = DateTime.now().millisecondsSinceEpoch - seen;
+      return idle >= 0 && idle < _sessionIdle.inMilliseconds ? id : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _rememberSession() {
+    if (!kIsWeb || _sessionId == null) return;
+    try {
+      html.window.localStorage[_sessionKey] = _sessionId!;
+      html.window.localStorage[_sessionSeenKey] =
+          '${DateTime.now().millisecondsSinceEpoch}';
+    } catch (_) {}
+  }
+
+  // Where this browser is, as the hosting edge sees it (country / region /
+  // city). Asked once per page load; empty when the host does not offer it.
+  Future<Map<String, String>>? _geoFuture;
+
+  Future<Map<String, String>> geo() => _geoFuture ??= _loadGeo();
+
+  /// Forget the cached location (tests).
+  void resetGeo() => _geoFuture = null;
+
+  Future<Map<String, String>> _loadGeo() async {
+    final out = <String, String>{};
+    try {
+      final response = await http
+          .get(Uri.parse('${Environment.apiUrl}/api/edge-geo'))
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          for (final key in const ['country', 'region', 'city']) {
+            final v = data[key];
+            if (v is String && v.trim().isNotEmpty) out[key] = v.trim();
+          }
+        }
+      }
+    } catch (_) {
+      // No location is fine; the server stores what it has.
+    }
+    return out;
   }
 
   /// This browser's visitor id and the current session id, so a new account
@@ -154,6 +213,8 @@ class AnalyticsService {
       }
       final token = prefs.getString('auth_token');
       final query = Uri.base.queryParameters;
+      final where = await geo();
+      _rememberSession();
       String? referrer;
       String? language;
       int? screenW;
@@ -184,6 +245,9 @@ class AnalyticsService {
           'screen_w': screenW,
           'screen_h': screenH,
           'timezone': DateTime.now().timeZoneName,
+          if (where['country'] != null) 'geo_country': where['country'],
+          if (where['region'] != null) 'geo_region': where['region'],
+          if (where['city'] != null) 'geo_city': where['city'],
         }),
       ).timeout(const Duration(seconds: 10));
     } catch (_) {

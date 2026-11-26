@@ -405,3 +405,25 @@ def _fresh_rate_limit():
     visits._rate.clear()
     yield
     visits._rate.clear()
+
+
+def test_location_reported_by_the_app_is_used_when_the_request_has_none(client, db_connection):
+    # Behind the Vercel rewrite the request carries the visitor IP but no location headers.
+    bare = {"x-vercel-forwarded-for": "203.0.113.9", "x-vercel-id": "iad1::t", "user-agent": CHROME}
+    _beacon(client, "sess-geo-00001", "/", bare)                      # first hit: location not known yet
+    assert _row(db_connection, "sess-geo-00001")[2:4] == (None, None)
+    _beacon(client, "sess-geo-00001", "/find", bare, geo_country="pk", geo_region="PB", geo_city="Lahore")
+    assert _row(db_connection, "sess-geo-00001")[2:4] == ("PK", "Lahore")
+    # Once set it is not overwritten by a later, different report.
+    _beacon(client, "sess-geo-00001", "/pricing", bare, geo_country="DE", geo_city="Berlin")
+    assert _row(db_connection, "sess-geo-00001")[2:4] == ("PK", "Lahore")
+
+    _beacon(client, "sess-geo-00002", "/", bare, geo_country="AE", geo_city="Dubai")
+    assert _row(db_connection, "sess-geo-00002")[2:4] == ("AE", "Dubai")
+    _beacon(client, "sess-geo-00003", "/", bare, geo_country="Pakistan", geo_city="x")   # not a country code
+    assert _row(db_connection, "sess-geo-00003")[2:4] == (None, None)
+
+    # Real location headers always win over what the app says.
+    edge = dict(bare, **{"x-vercel-ip-country": "GB", "x-vercel-ip-city": "London"})
+    _beacon(client, "sess-geo-00004", "/", edge, geo_country="PK", geo_city="Lahore")
+    assert _row(db_connection, "sess-geo-00004")[2:4] == ("GB", "London")

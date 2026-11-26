@@ -131,7 +131,8 @@ def is_disposable_email(email: Any) -> bool:
 
 
 def signup_context(headers: Mapping[str, str], client_host: Optional[str],
-                   visitor_id: Any = None, session_id: Any = None) -> Dict[str, Optional[str]]:
+                   visitor_id: Any = None, session_id: Any = None,
+                   reported_geo: Any = None) -> Dict[str, Optional[str]]:
     """Where a registration came from. Every value may be None; never raises."""
     out: Dict[str, Optional[str]] = {
         "signup_ip": None, "signup_country": None, "signup_city": None, "signup_device": None,
@@ -142,7 +143,7 @@ def signup_context(headers: Mapping[str, str], client_host: Optional[str],
         from analytics import visits
 
         out["signup_ip"] = visits.resolve_client_ip(headers, client_host)
-        geo = visits.resolve_geo(headers)
+        geo = visits.best_geo(headers, reported_geo)
         out["signup_country"] = geo.get("country")
         out["signup_city"] = geo.get("city")
         ua = visits.parse_user_agent(headers.get("user-agent"))

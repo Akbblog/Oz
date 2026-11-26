@@ -118,6 +118,31 @@ def resolve_client_ip(headers: Mapping[str, str], client_host: Optional[str] = N
     return host[:64] if host and host != "unknown" else None
 
 
+_COUNTRY_RE = re.compile(r"^[A-Za-z]{2}$")
+
+
+def client_geo(payload: Any) -> Dict[str, Optional[str]]:
+    """Location the app was given by the hosting edge (/api/edge-geo) and sent
+    along. Used only when the request itself carries no location headers, which
+    is the case behind the Vercel rewrite. It is reported by the browser, so it
+    is good for statistics, not for security decisions."""
+    out: Dict[str, Optional[str]] = {"country": None, "region": None, "city": None}
+    if not isinstance(payload, dict):
+        return out
+    country = str(payload.get("geo_country") or "").strip()
+    if _COUNTRY_RE.match(country):
+        out["country"] = country.upper()
+        out["region"] = _trunc(payload.get("geo_region"), 64)
+        out["city"] = _trunc(payload.get("geo_city"), 128)
+    return out
+
+
+def best_geo(headers: Mapping[str, str], payload: Any) -> Dict[str, Optional[str]]:
+    """Location headers when the request has them, else what the app reported."""
+    geo = resolve_geo(headers)
+    return geo if geo.get("country") else client_geo(payload)
+
+
 def resolve_geo(headers: Mapping[str, str]) -> Dict[str, Optional[str]]:
     """Country / region / city of the browser, or None when unknown.
 
@@ -316,16 +341,18 @@ def _record_visit(payload: Any, headers: Mapping[str, str], client_host: Optiona
 
     # Heartbeat: the tab is still open on the same page. Keeps the session
     # "live" without counting another page view.
+    geo = best_geo(headers, payload)
     if payload.get("heartbeat") is True and _heartbeat(session_id, now, auth_user_id):
+        _fill_location(session_id, geo)
         return True
 
     if _touch(session_id, path, now, auth_user_id):
+        _fill_location(session_id, geo)
         return True
 
     visitor_id = _clean_id(payload.get("visitor_id"))
     ua = _trunc(_header(headers, "user-agent"), 512)
     parsed = parse_user_agent(ua)
-    geo = resolve_geo(headers)
     referrer = _trunc(payload.get("referrer"), 512)
     utm_source = _trunc(payload.get("utm_source"), 128)
     utm_medium = _trunc(payload.get("utm_medium"), 128)
@@ -367,6 +394,20 @@ def _record_visit(payload: Any, headers: Mapping[str, str], client_host: Optiona
             return True
         logger.warning("visit insert failed (non-fatal): %r", exc)
         return False
+
+
+def _fill_location(session_id: str, geo: Dict[str, Optional[str]]) -> None:
+    """Give a visit its location once it is known (the first hit of a session
+    can arrive before the app has learned where it is)."""
+    if not geo.get("country"):
+        return
+    try:
+        execute_query(
+            "UPDATE site_visits SET country = ?, region = ?, city = ? WHERE session_id = ? AND country IS NULL",
+            (geo["country"], geo["region"], geo["city"], session_id),
+        )
+    except Exception:
+        logger.debug("visit location update skipped", exc_info=True)
 
 
 def _heartbeat(session_id: str, now: str, auth_user_id: Optional[int]) -> bool:

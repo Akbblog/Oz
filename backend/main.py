@@ -582,6 +582,8 @@ class UserRegister(BaseModel):
     phone_country: Optional[str] = None   # ISO 3166-1 alpha-2 chosen in the form
     visitor_id: Optional[str] = None      # links the account to its visit history
     session_id: Optional[str] = None
+    geo_country: Optional[str] = None     # location the hosting edge gave the app
+    geo_city: Optional[str] = None
 
     @field_validator("password")
     @classmethod
@@ -1247,6 +1249,7 @@ async def register(user_data: UserRegister, request: Request, background_tasks: 
     signup = user_profile.signup_context(
         request.headers, request.client.host if request.client else None,
         user_data.visitor_id, user_data.session_id,
+        {"geo_country": user_data.geo_country, "geo_city": user_data.geo_city},
     )
 
     # Check if auto-approve is enabled

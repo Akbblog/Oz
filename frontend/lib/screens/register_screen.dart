@@ -76,7 +76,11 @@ class _RegisterScreenState extends State<RegisterScreen>
     } catch (_) {}
     final fromLocale = countryFromLocale(locale);
     if (fromLocale != null && mounted) setState(() => _country = fromLocale);
-    final hint = countryByIso(await ApiService().getGeoHint());
+    // Network location first (the hosting edge knows it), then the backend's
+    // own guess for hosts without that.
+    final where = await AnalyticsService.instance.geo();
+    final hint = countryByIso(where['country']) ??
+        countryByIso(await ApiService().getGeoHint());
     if (hint != null && mounted && !_countryTouched) {
       setState(() => _country = hint);
     }
@@ -143,6 +147,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     final email = _emailController.text.trim().toLowerCase();
     final typedPhone = _phoneController.text.trim();
     final who = await AnalyticsService.instance.identity();
+    final where = await AnalyticsService.instance.geo();
 
     String? message;
     String error = '';
@@ -164,6 +169,8 @@ class _RegisterScreenState extends State<RegisterScreen>
         phoneCountry: _country?.iso,
         visitorId: who.visitorId,
         sessionId: who.sessionId,
+        geoCountry: where['country'],
+        geoCity: where['city'],
       );
       if (message != null) break;
       error = authProvider.errorMessage ?? '';

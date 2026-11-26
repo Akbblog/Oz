@@ -127,6 +127,8 @@ class AuthProvider with ChangeNotifier {
     String? phoneCountry,
     String? visitorId,
     String? sessionId,
+    String? geoCountry,
+    String? geoCity,
   }) async {
     _isLoading = true;
     _errorMessage = null;
@@ -143,6 +145,8 @@ class AuthProvider with ChangeNotifier {
         phoneCountry: phoneCountry,
         visitorId: visitorId,
         sessionId: sessionId,
+        geoCountry: geoCountry,
+        geoCity: geoCity,
       );
       _isLoading = false;
       notifyListeners();

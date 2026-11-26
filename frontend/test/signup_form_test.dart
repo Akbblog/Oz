@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:business_scraper_app/core/countries.dart';
 import 'package:business_scraper_app/providers/auth_provider.dart';
 import 'package:business_scraper_app/screens/register_screen.dart';
+import 'package:business_scraper_app/services/analytics_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -14,6 +15,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   Future<void> open(WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
+    // Each test has its own fake clock; a lookup cached by an earlier test
+    // would never complete in this one.
+    AnalyticsService.instance.resetGeo();
     tester.view.physicalSize = const Size(900, 1800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -85,8 +89,8 @@ void main() {
   testWidgets('sends structured data; a taken sign-in name is retried silently', (tester) async {
     final bodies = <Map<String, dynamic>>[];
     final client = MockClient((req) async {
-      if (req.url.path == '/api/geo/hint') {
-        return http.Response(jsonEncode({'country': 'PK'}), 200);
+      if (req.url.path == '/api/edge-geo') {
+        return http.Response(jsonEncode({'country': 'PK', 'region': 'PB', 'city': 'Lahore'}), 200);
       }
       if (req.url.path == '/api/auth/register') {
         bodies.add(Map<String, dynamic>.from(jsonDecode(req.body)));
@@ -119,6 +123,9 @@ void main() {
     expect(sent['company'], 'Lopez Dental');
     expect(sent['phone'], '0300 1234567');
     expect(sent['phone_country'], 'PK');
+    // Location from the hosting edge travels with the sign-up.
+    expect(sent['geo_country'], 'PK');
+    expect(sent['geo_city'], 'Lahore');
     // Back on the previous page after a successful sign-up.
     expect(find.text('open sign-up'), findsOneWidget);
   });

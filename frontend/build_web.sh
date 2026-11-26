@@ -30,6 +30,13 @@ if [ $BUILD_STATUS -eq 0 ] && [ -f web/sw_cleanup.js ]; then
     cp web/sw_cleanup.js build/web/flutter_service_worker.js
 fi
 
+# Give this build its own asset path (see web/flutter_bootstrap.js).
+if [ $BUILD_STATUS -eq 0 ]; then
+    BUILD_ID=$(date -u +%Y%m%d%H%M%S)
+    sed -i "s/__BUILD_ID__/$BUILD_ID/" build/web/flutter_bootstrap.js
+    echo "Build id: $BUILD_ID"
+fi
+
 if [ $BUILD_STATUS -eq 0 ]; then
     for f in build/web/main.dart.js build/web/assets/AssetManifest.bin.json build/web/assets/FontManifest.json; do
         if [ ! -s "$f" ]; then
