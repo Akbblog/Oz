@@ -17,10 +17,14 @@ class PaymentReturnScreen extends StatefulWidget {
   final String transactionId;
   final bool cancelled;
 
+  /// Injected in tests.
+  final ApiService? api;
+
   const PaymentReturnScreen({
     super.key,
     required this.transactionId,
     this.cancelled = false,
+    this.api,
   });
 
   @override
@@ -33,7 +37,7 @@ class _PaymentReturnScreenState extends State<PaymentReturnScreen> {
   static const _pollEvery = Duration(seconds: 3);
   static const _patience = Duration(minutes: 2);
 
-  final ApiService _api = ApiService();
+  late final ApiService _api = widget.api ?? ApiService();
   _View _view = _View.confirming;
   Map<String, dynamic>? _status;
   String? _error;
@@ -118,7 +122,14 @@ class _PaymentReturnScreenState extends State<PaymentReturnScreen> {
       _error = notFound
           ? 'We could not find this payment on your account.'
           : ErrorHandler.getUserFriendlyMessage(e);
-      _view = notFound ? _View.error : (_status == null ? _View.error : _view);
+      if (notFound) {
+        _view = _View.error;
+      } else if (_view == _View.confirming && _withinPatience) {
+        // A slow or failed status check is not a payment problem: keep showing
+        // "Confirming payment" and try again on the next poll.
+      } else if (_status == null) {
+        _view = _View.error;
+      }
     });
   }
 
