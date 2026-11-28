@@ -103,14 +103,14 @@ class _HeroStageState extends State<HeroStage> {
         final w = c.maxWidth;
         final s = (w / 540).clamp(0.6, 1.12);
         final cardW = math.min(w * 0.64, 318.0 * s);
-        final cardH = 268.0 * s;
-        final globeSize = w * 0.90;
+        final cardH = 286.0 * s;
+        final globeSize = w * 0.98;
         return Stack(
           clipBehavior: Clip.none,
           children: [
             Positioned(
-              left: -w * 0.02,
-              top: -w * 0.02,
+              left: -w * 0.07,
+              top: -w * 0.06,
               width: globeSize,
               height: globeSize,
               child: HtmlElementView.fromTagName(
@@ -123,7 +123,7 @@ class _HeroStageState extends State<HeroStage> {
               child: MouseRegion(
                 cursor: _dragging ? SystemMouseCursors.grabbing : SystemMouseCursors.grab,
                 onHover: (e) => _globe?.hover(
-                    e.localPosition.dx / w - 0.43, e.localPosition.dy / w - 0.43),
+                    e.localPosition.dx / w - 0.42, e.localPosition.dy / w - 0.43),
                 onExit: (_) => _globe?.leave(),
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,

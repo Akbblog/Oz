@@ -286,7 +286,7 @@ class _HeroGlobeState extends State<HeroGlobe> with SingleTickerProviderStateMix
         final w = c.maxWidth;
         final s = (w / 540).clamp(0.6, 1.12);
         final cardW = math.min(w * 0.64, 318.0 * s);
-        final cardH = 268.0 * s;
+        final cardH = 286.0 * s;
         final cardLeft = w - cardW;
         final cardTop = w - cardH - w * 0.005;
         final scene = _Scene(
