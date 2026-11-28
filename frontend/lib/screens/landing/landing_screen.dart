@@ -214,22 +214,33 @@ class _LandingScreenState extends State<LandingScreen>
                         colorFilter: const ColorFilter.mode(
                             Colors.white, BlendMode.srcIn)),
                   ),
-                  const SizedBox(width: 10),
-                  const Text('Infinity Leads',
-                      style: TextStyle(
-                          color: LC.text,
-                          fontSize: 16.5,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.2)),
-                  if (wide) ...[
-                    const SizedBox(width: 28),
-                    link('How it works', _how),
-                    link('Features', _features),
-                    link('Coverage', _coverageKey),
-                    link('FAQ', _faq),
-                    link('Contact', _contact),
+                  if (MediaQuery.of(context).size.width >= 440) ...[
+                    const SizedBox(width: 10),
+                    const Text('Infinity Leads',
+                        style: TextStyle(
+                            color: LC.text,
+                            fontSize: 16.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.2)),
                   ],
-                  const Spacer(),
+                  // Section links take whatever room is left and never push
+                  // the buttons off the bar.
+                  Expanded(
+                    child: wide
+                        ? SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            physics: const NeverScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(left: 28),
+                            child: Row(children: [
+                              link('How it works', _how),
+                              link('Features', _features),
+                              link('Coverage', _coverageKey),
+                              link('FAQ', _faq),
+                              link('Contact', _contact),
+                            ]),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
                   TextButton(
                     onPressed: () => _go('/login'),
                     style: TextButton.styleFrom(
@@ -276,10 +287,14 @@ class _LandingScreenState extends State<LandingScreen>
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               _PulseDot(t: _loop),
               const SizedBox(width: 8),
-              Text(
-                'Local business leads in ${_coverage.countries.length} countries',
-                style: const TextStyle(
-                    color: LC.accent, fontSize: 13, fontWeight: FontWeight.w600),
+              Flexible(
+                child: Text(
+                  'Local business leads in ${_coverage.countries.length} countries',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: LC.accent, fontSize: 13, fontWeight: FontWeight.w600),
+                ),
               ),
             ]),
           ),
@@ -824,7 +839,7 @@ class _Tick extends StatelessWidget {
         children: [
           const Icon(Icons.check_circle_rounded, size: 16, color: LC.green),
           const SizedBox(width: 7),
-          Text(text, style: LT.small.copyWith(color: LC.dim)),
+          Flexible(child: Text(text, style: LT.small.copyWith(color: LC.dim))),
         ],
       );
 }

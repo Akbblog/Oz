@@ -563,25 +563,31 @@ class _ResultsWindow extends StatelessWidget {
               padding: EdgeInsets.fromLTRB(18 * s, 16 * s, 18 * s, 12 * s),
               child: Row(
                 children: [
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 6 * s),
-                    decoration: BoxDecoration(
-                      color: LC.bg,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: LC.border),
+                  Flexible(
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 6 * s),
+                      decoration: BoxDecoration(
+                        color: LC.bg,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: LC.border),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.search_rounded, size: 14 * s, color: LC.accent),
+                        SizedBox(width: 6 * s),
+                        Flexible(
+                          child: Text('Local businesses · 3 cities',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontFamily: LT.font,
+                                  color: LC.dim,
+                                  fontSize: 12 * s,
+                                  fontWeight: FontWeight.w500)),
+                        ),
+                      ]),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.search_rounded, size: 14 * s, color: LC.accent),
-                      SizedBox(width: 6 * s),
-                      Text('Local businesses · 3 cities',
-                          style: TextStyle(
-                              fontFamily: LT.font,
-                              color: LC.dim,
-                              fontSize: 12 * s,
-                              fontWeight: FontWeight.w500)),
-                    ]),
                   ),
-                  const Spacer(),
+                  SizedBox(width: 10 * s),
                   Text('$found',
                       style: TextStyle(
                           fontFamily: LT.font,

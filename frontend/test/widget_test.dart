@@ -7,6 +7,7 @@ import 'package:business_scraper_app/providers/credit_provider.dart';
 import 'package:business_scraper_app/providers/scraper_provider.dart';
 import 'package:business_scraper_app/providers/search_setup_provider.dart';
 import 'package:business_scraper_app/screens/find/location_step.dart';
+import 'package:business_scraper_app/screens/landing/landing_screen.dart';
 import 'package:business_scraper_app/screens/home_screen.dart';
 import 'package:business_scraper_app/screens/login_screen.dart';
 import 'package:business_scraper_app/screens/search_detail_screen.dart';
@@ -120,9 +121,16 @@ void main() {
     CreditProvider.instance.clear();
   });
 
-  testWidgets('guest opening / lands on Find leads with guest navigation', (tester) async {
+  testWidgets('guest opening / sees the landing page; its button opens Find leads with guest navigation',
+      (tester) async {
     _size(tester, const Size(1440, 900));
     await tester.pumpWidget(MultiProvider(providers: buildAppProviders(), child: const MyApp()));
+    for (var i = 0; i < 25; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byType(LandingScreen), findsOneWidget);
+    expect(find.text('Find every business'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('hero-find')));
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
