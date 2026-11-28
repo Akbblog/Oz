@@ -37,7 +37,10 @@ String _contactLine() {
 
 String _whoWeAre() {
   final address = BusinessInfo.address.isEmpty ? '' : ', ${BusinessInfo.address.join(', ')}';
-  return 'Infinity Leads is operated by ${BusinessInfo.operator}$address. In these pages "we", "us" and "our" mean '
+  final who = BusinessInfo.legalName.isEmpty
+      ? 'Infinity Leads provides this service'
+      : 'Infinity Leads is operated by ${BusinessInfo.operator}$address';
+  return '$who. In these pages "we", "us" and "our" mean '
       '${BusinessInfo.legalName.isEmpty ? BusinessInfo.tradingName : BusinessInfo.legalName}, and "you" means the '
       'person or business using the service.';
 }

@@ -20,7 +20,7 @@ class BusinessInfo {
   static const String phone = '';
 
   /// Support email shown to customers.
-  static const String email = 'support@infinityleads.pro';
+  static const String email = 'akbkhipk@gmail.com';
 
   /// City whose courts have jurisdiction (Terms, governing law).
   static const String jurisdictionCity = '';
