@@ -7,6 +7,7 @@ import '../../services/api_service.dart';
 import '../../widgets/contact_form.dart';
 import '../../widgets/country_flag_badge.dart';
 import '../find/find_common.dart' show countryDisplayName;
+import 'hero_stage.dart';
 import 'landing_kit.dart';
 
 /// Public home page for visitors who are not signed in.
@@ -362,7 +363,7 @@ class _LandingScreenState extends State<LandingScreen>
     final visual = Reveal(
       delay: const Duration(milliseconds: 200),
       dy: 40,
-      child: HeroVisual(t: _loop),
+      child: HeroStage(countries: _coverage.countries),
     );
 
     if (!wide) {
