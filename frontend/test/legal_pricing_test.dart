@@ -126,7 +126,7 @@ void main() {
     for (final d in Policies.all) {
       await tester.pumpWidget(ChangeNotifierProvider(
         create: (_) => AuthProvider(),
-        child: MaterialApp(onGenerateRoute: AppRouter.onGenerateRoute, initialRoute: d.route),
+        child: MaterialApp(key: ValueKey(d.route), onGenerateRoute: AppRouter.onGenerateRoute, initialRoute: d.route),
       ));
       await tester.pump();
       expect(find.text(d.title), findsOneWidget, reason: d.route);
@@ -134,7 +134,7 @@ void main() {
     for (final alias in ['/cancellation-policy', '/terms-and-conditions', '/privacy']) {
       await tester.pumpWidget(ChangeNotifierProvider(
         create: (_) => AuthProvider(),
-        child: MaterialApp(onGenerateRoute: AppRouter.onGenerateRoute, initialRoute: alias),
+        child: MaterialApp(key: ValueKey(alias), onGenerateRoute: AppRouter.onGenerateRoute, initialRoute: alias),
       ));
       await tester.pump();
       expect(find.byType(PolicyScreen), findsOneWidget, reason: alias);
