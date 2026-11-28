@@ -31,6 +31,7 @@ class _HeroStageState extends State<HeroStage> {
   final math.Random _rnd = math.Random(11);
 
   GlobeHandle? _globe;
+  Offset _anchor = const Offset(0.62, 0.68);
   bool _fallback = !kIsWeb;
   bool _dragging = false;
   Timer? _timer;
@@ -65,6 +66,7 @@ class _HeroStageState extends State<HeroStage> {
       return;
     }
     _globe = handle;
+    handle.anchor(_anchor.dx, _anchor.dy);
     // A steady beat: every 0.8 s something happens on the globe.
     _timer = Timer.periodic(const Duration(milliseconds: 800), (_) => _onBeat());
   }
@@ -75,22 +77,31 @@ class _HeroStageState extends State<HeroStage> {
     if (globe == null || keys.length < 2 || !mounted) return;
     _beat++;
     if (_beat.isOdd) {
-      // A lead "arrives": its country lights up and an arc leaves it.
-      final from = keys[_cursor++ % keys.length];
-      var to = keys[_rnd.nextInt(keys.length)];
-      if (to == from) to = keys[(keys.indexOf(from) + 1) % keys.length];
-      globe.pulse(from, to);
-      Timer(const Duration(milliseconds: 650), () {
+      // A lead leaves a country that is facing us and flies into the card.
+      String? from;
+      for (var i = 0; i < keys.length; i++) {
+        final key = keys[_cursor++ % keys.length];
+        if (globe.pulse(key)) {
+          from = key;
+          break;
+        }
+      }
+      if (from == null) return;
+      final country = from;
+      // The row appears as the comet lands.
+      Timer(const Duration(milliseconds: 1000), () {
         if (!mounted) return;
         final s = kGlobeSamples[_sample++ % kGlobeSamples.length];
-        final next = [GlobeLead(++_ids, s.$1, s.$2, from), ..._leads.value];
+        final next = [GlobeLead(++_ids, s.$1, s.$2, country), ..._leads.value];
         _leads.value = next.length > 4 ? next.sublist(0, 4) : next;
         _count.value += 4 + _rnd.nextInt(9);
       });
-    } else if (_beat % 4 == 0) {
+    } else {
+      // Between leads, a comet crosses from one country to another.
       final a = keys[_rnd.nextInt(keys.length)];
-      final b = keys[_rnd.nextInt(keys.length)];
-      if (a != b) globe.link(a, b);
+      var b = keys[_rnd.nextInt(keys.length)];
+      if (b == a) b = keys[(keys.indexOf(a) + 1 + _rnd.nextInt(keys.length - 1)) % keys.length];
+      globe.link(a, b);
     }
   }
 
@@ -105,6 +116,11 @@ class _HeroStageState extends State<HeroStage> {
         final cardW = math.min(w * 0.64, 318.0 * s);
         final cardH = 286.0 * s;
         final globeSize = w * 0.98;
+        // Tell the globe where the card's first row is, so leads land on it.
+        final anchorX = (w - cardW + 26 * s + w * 0.07) / globeSize;
+        final anchorY = (w - cardH - w * 0.005 + 72 * s + w * 0.06) / globeSize;
+        _anchor = Offset(anchorX, anchorY);
+        _globe?.anchor(anchorX, anchorY);
         return Stack(
           clipBehavior: Clip.none,
           children: [

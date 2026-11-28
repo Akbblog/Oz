@@ -1,6 +1,7 @@
 /// Non-web builds (and tests): there is no WebGL globe; the app draws its own.
 class GlobeHandle {
-  void pulse(String from, [String? to]) {}
+  bool pulse(String key) => false;
+  void anchor(double nx, double ny) {}
   void link(String from, String to) {}
   void hover(double nx, double ny) {}
   void leave() {}

@@ -17,7 +17,18 @@ class GlobeHandle {
     }
   }
 
-  void pulse(String from, [String? to]) => _call('pulse', from.toJS, to?.toJS);
+  /// Sends a lead from [key]'s country to the results card. False when that
+  /// country is on the far side of the globe right now.
+  bool pulse(String key) {
+    try {
+      return _h.callMethod<JSBoolean?>('pulse'.toJS, key.toJS)?.toDart ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Where the results card sits, as a fraction of the globe's box.
+  void anchor(double nx, double ny) => _call('anchor', nx.toJS, ny.toJS);
   void link(String from, String to) => _call('link', from.toJS, to.toJS);
   void hover(double nx, double ny) => _call('hover', nx.toJS, ny.toJS);
   void leave() => _call('leave');

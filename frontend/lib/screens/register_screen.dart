@@ -7,6 +7,7 @@ import '../providers/auth_provider.dart';
 import '../core/theme/app_theme.dart';
 import '../services/analytics_service.dart';
 import '../services/api_service.dart';
+import '../widgets/brand_mark.dart';
 import '../widgets/country_picker.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -93,6 +94,13 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (base.length < 3) base = 'user$base';
     if (base.length > 24) base = base.substring(0, 24);
     return '$base$suffix';
+  }
+
+  /// Back to where the person came from; to sign-in when this page was
+  /// opened directly by its address.
+  void _leave() {
+    final nav = Navigator.of(context);
+    nav.canPop() ? nav.pop() : nav.pushReplacementNamed('/login');
   }
 
   void _clearServerError(String field) {
@@ -185,7 +193,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       final uid = authProvider.currentUser?['id'] as int?;
       if (uid != null) AnalyticsService.instance.identify(uid);
       AnalyticsService.instance.track('register');
-      Navigator.of(context).pop();
+      _leave();
       return;
     }
 
@@ -211,7 +219,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.surfaceDark,
+      backgroundColor: AppColors.backgroundDark,
       body: Stack(
         children: [
           // Background Blobs
@@ -236,7 +244,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                         child: IconButton(
                           icon: const Icon(Icons.chevron_left,
                               color: AppColors.textSecondaryLight),
-                          onPressed: () => Navigator.of(context).pop(),
+                          onPressed: _leave,
                         ),
                       ),
                     ],
@@ -321,41 +329,27 @@ class _RegisterScreenState extends State<RegisterScreen>
   Widget _buildHeaderIcon() {
     return Column(
       children: [
-        Container(
-          width: 70,
-          height: 70,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                Color(0xFF4ade80),
-                Color(0xFF16a34a)
-              ], // Green 400 to 600
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF22c55e).withValues(alpha: 0.3),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: const Center(
-            child: Icon(
-              Icons.person_add_rounded,
-              color: Colors.white,
-              size: 32,
-            ),
-          ),
+        const BrandMark(
+          tiled: true,
+          tileSize: 80,
+          size: 44,
+          tileColor: Color(0xFF2C5F6D),
+          hoverGlow: true,
         ),
         const SizedBox(height: AppSpacing.md),
         Text(
-          'Join Infinity Leads',
-          style: AppTypography.headlineSmall.copyWith(
+          'Infinity Leads',
+          style: AppTypography.headlineMedium.copyWith(
             color: Colors.white,
             fontWeight: FontWeight.bold,
+            letterSpacing: -0.5,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Global lead discovery platform',
+          style: AppTypography.bodySmall.copyWith(
+            color: Colors.white.withValues(alpha: 0.7),
           ),
         ),
       ],
@@ -365,7 +359,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   Widget _buildRegisterCard() {
     return Container(
       width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 450),
+      constraints: const BoxConstraints(maxWidth: 420),
       padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: AppColors.surfaceDark.withValues(alpha: 0.8),
@@ -399,7 +393,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               'Fill in your details to get started',
               textAlign: TextAlign.center,
               style: AppTypography.bodySmall.copyWith(
-                color: AppColors.textSecondaryLight,
+                color: Colors.white.withValues(alpha: 0.7),
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
@@ -413,7 +407,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               textCapitalization: TextCapitalization.words,
               autofillHints: const [AutofillHints.name],
               textInputAction: TextInputAction.next,
-              style: const TextStyle(color: AppColors.textPrimaryLight),
+              style: const TextStyle(color: Colors.white),
               decoration: _inputDecoration(
                 hint: 'Your name',
                 icon: Icons.person_outline_rounded,
@@ -437,7 +431,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               textInputAction: TextInputAction.next,
               onChanged: (_) => _clearServerError('email'),
               forceErrorText: _serverErrors['email'],
-              style: const TextStyle(color: AppColors.textPrimaryLight),
+              style: const TextStyle(color: Colors.white),
               decoration: _inputDecoration(
                 hint: 'you@company.com',
                 icon: Icons.mail_outline_rounded,
@@ -470,10 +464,10 @@ class _RegisterScreenState extends State<RegisterScreen>
                 CountryDialButton(
                   key: const Key('signup-country'),
                   country: _country,
-                  background: Colors.white,
-                  border: const Color(0xFFe2e8f0),
-                  foreground: AppColors.textPrimaryLight,
-                  radius: AppSpacing.radiusLg,
+                  background: Colors.white.withValues(alpha: 0.06),
+                  border: Colors.white.withValues(alpha: 0.10),
+                  foreground: Colors.white,
+                  radius: 12,
                   onChanged: (c) => setState(() {
                     _country = c;
                     _countryTouched = true;
@@ -490,7 +484,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                     textInputAction: TextInputAction.next,
                     onChanged: (_) => _clearServerError('phone'),
                     forceErrorText: _serverErrors['phone'],
-                    style: const TextStyle(color: AppColors.textPrimaryLight),
+                    style: const TextStyle(color: Colors.white),
                     decoration: _inputDecoration(
                       hint: 'Mobile number',
                       icon: Icons.phone_rounded,
@@ -525,7 +519,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               textCapitalization: TextCapitalization.words,
               autofillHints: const [AutofillHints.organizationName],
               textInputAction: TextInputAction.next,
-              style: const TextStyle(color: AppColors.textPrimaryLight),
+              style: const TextStyle(color: Colors.white),
               decoration: _inputDecoration(
                 hint: 'Where you work',
                 icon: Icons.business_outlined,
@@ -547,7 +541,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                   onChanged: (_) => _clearServerError('password'),
                   forceErrorText: _serverErrors['password'],
                   onFieldSubmitted: (_) => _isLoading ? null : _handleRegister(),
-                  style: const TextStyle(color: AppColors.textPrimaryLight),
+                  style: const TextStyle(color: Colors.white),
                   decoration: _inputDecoration(
                     hint: 'At least 8 characters',
                     icon: Icons.lock_outline_rounded,
@@ -557,7 +551,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                         visible
                             ? Icons.visibility_rounded
                             : Icons.visibility_off_rounded,
-                        color: AppColors.textSecondaryLight,
+                        color: Colors.white54,
                         size: 20,
                       ),
                       onPressed: () => _passwordVisible.value = !visible,
@@ -680,36 +674,31 @@ class _RegisterScreenState extends State<RegisterScreen>
     );
   }
 
+  /// Same fields as the sign-in page: dark, subtle border, brand focus ring.
   InputDecoration _inputDecoration({
     required String hint,
     required IconData icon,
     Widget? suffixIcon,
   }) {
+    OutlineInputBorder border(Color color, [double width = 1]) =>
+        OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: color, width: width),
+        );
     return InputDecoration(
       filled: true,
-      fillColor: Colors.white,
+      fillColor: Colors.white.withValues(alpha: 0.06),
       hintText: hint,
-      hintStyle: const TextStyle(color: Color(0xFF94a3b8), fontSize: 14),
-      prefixIcon: Icon(icon, color: const Color(0xFF94a3b8), size: 20),
+      hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
+      prefixIcon: Icon(icon, color: Colors.white54, size: 20),
       suffixIcon: suffixIcon,
       contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide: BorderSide.none,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide:
-            const BorderSide(color: Color(0xFFe2e8f0), width: 1), // Slate 200
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide: const BorderSide(color: AppColors.primaryBlue, width: 2),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        borderSide: const BorderSide(color: AppColors.dangerRed, width: 1),
-      ),
+      border: border(Colors.white.withValues(alpha: 0.10)),
+      enabledBorder: border(Colors.white.withValues(alpha: 0.10)),
+      focusedBorder: border(AppColors.primaryBlue, 2),
+      errorBorder: border(AppColors.dangerRed),
+      focusedErrorBorder: border(AppColors.dangerRed, 2),
+      errorStyle: const TextStyle(color: AppColors.dangerRedLight, fontSize: 12),
     );
   }
 
@@ -727,7 +716,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               ),
             ),
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: _leave,
               child: Text(
                 'Sign In',
                 style: AppTypography.bodyMedium.copyWith(

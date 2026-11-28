@@ -5,7 +5,6 @@ import '../providers/auth_provider.dart';
 import '../core/theme/app_theme.dart';
 import '../widgets/brand_mark.dart';
 import '../services/analytics_service.dart';
-import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   /// Where to go after signing in (e.g. "/searches/abc"). Defaults to Home.
@@ -614,12 +613,8 @@ class _LoginScreenState extends State<LoginScreen>
                 ),
               ),
               TextButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (context) => const RegisterScreen()),
-                  );
-                },
+                // By name, so the address bar shows /register.
+                onPressed: () => Navigator.of(context).pushNamed('/register'),
                 child: Text(
                   'Sign Up',
                   style: AppTypography.bodyMedium.copyWith(
