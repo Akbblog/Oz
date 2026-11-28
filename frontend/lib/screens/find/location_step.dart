@@ -451,18 +451,50 @@ class _FindLocationStepState extends State<FindLocationStep> {
 
   // ------------------------------------------------------- country level
 
+  /// Cities in a country, from the summary (0 when the summary is missing).
+  int _cityTotal(String country) {
+    var total = 0;
+    for (final r in _catalog.regionsOf(country)) {
+      total += _catalog.cityCount(country, r) ?? 0;
+    }
+    return total;
+  }
+
+  /// Regions (states, provinces...) of any country whose name matches [q].
+  List<(String country, String region)> _regionMatches(String q) {
+    if (q.length < 2) return const [];
+    final out = <(String, String)>[];
+    for (final c in _catalog.countries) {
+      for (final r in _catalog.regionsOf(c)) {
+        if (r.toLowerCase().contains(q)) out.add((c, r));
+      }
+    }
+    out.sort((x, y) {
+      final sx = x.$2.toLowerCase().startsWith(q) ? 0 : 1;
+      final sy = y.$2.toLowerCase().startsWith(q) ? 0 : 1;
+      return sx != sy ? sx - sy : x.$2.compareTo(y.$2);
+    });
+    return out.length > 12 ? out.sublist(0, 12) : out;
+  }
+
   Widget _countryLevel(SearchSetupProvider setup, List<String> unlisted, bool signedIn) {
     final width = MediaQuery.sizeOf(context).width;
-    final columns = width >= 1200 ? 4 : (width >= AppBreakpoints.mobile ? 3 : 1);
+    final showAside = width >= 1320;
     final q = _countryFilter.trim().toLowerCase();
     final countries = _catalog.countries
         .where((c) => q.isEmpty || c.toLowerCase().contains(q) || countryDisplayName(c).toLowerCase().contains(q))
         .toList();
+    final regionHits = _regionMatches(q);
     final recents = signedIn ? _recentPlaces() : const <_RecentPlace>[];
     final draftCountry = _selectionCountry;
     final showDraft = setup.cities.isNotEmpty && draftCountry != null && _catalog.hasCountry(draftCountry);
+    var regionTotal = 0, cityTotal = 0;
+    for (final c in _catalog.countries) {
+      regionTotal += _catalog.regionsOf(c).length;
+      cityTotal += _cityTotal(c);
+    }
 
-    return CustomScrollView(
+    final list = CustomScrollView(
       slivers: [
         SliverPadding(
           padding: _pagePadding.copyWith(bottom: 0),
@@ -471,12 +503,25 @@ class _FindLocationStepState extends State<FindLocationStep> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const FindSteps(current: 1),
+                const SizedBox(height: 18),
+                Semantics(
+                  header: true,
+                  child: Text('Where do you want leads?',
+                      style: findTitleStyle.copyWith(fontSize: _isPhone ? 22 : 28, letterSpacing: -0.5, height: 1.15)),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  cityTotal > 0
+                      ? 'Start with a country, then pick its states and cities. '
+                          '${formatCount(_catalog.countries.length)} countries, ${formatCount(regionTotal)} regions and '
+                          '${formatCount(cityTotal)} cities to choose from.'
+                      : 'Start with a country, then pick its states and cities.',
+                  style: findSecondaryStyle.copyWith(fontSize: 14, height: 1.45),
+                ),
                 const SizedBox(height: 16),
-                Semantics(header: true, child: const Text('Where do you want leads?', style: findTitleStyle)),
-                const SizedBox(height: 12),
                 FindSearchField(
                   controller: _countryQuery,
-                  hint: 'Search countries',
+                  hint: 'Search a country, state or region',
                   onChanged: (v) => setState(() => _countryFilter = v),
                 ),
                 if (showDraft) ...[
@@ -497,31 +542,46 @@ class _FindLocationStepState extends State<FindLocationStep> {
                     children: [for (final r in recents) _recentChip(r)],
                   ),
                 ],
-                const SizedBox(height: 16),
+                if (regionHits.isNotEmpty) ...[
+                  const SizedBox(height: 18),
+                  Text('States and regions matching “${_countryFilter.trim()}”', style: findSecondaryStyle),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [for (final hit in regionHits) _regionHit(hit.$1, hit.$2)],
+                  ),
+                ],
+                const SizedBox(height: 18),
                 Text(
                   q.isEmpty
                       ? 'All countries (${_catalog.countries.length})'
                       : '${countries.length} of ${_catalog.countries.length} countries match “${_countryFilter.trim()}”',
                   style: findSecondaryStyle,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 if (countries.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text('No country matches your search.', style: findSecondaryStyle),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      regionHits.isEmpty
+                          ? 'No country matches your search.'
+                          : 'No country has that name. Pick one of the regions above.',
+                      style: findSecondaryStyle,
+                    ),
                   ),
               ],
             ),
           ),
         ),
         SliverPadding(
-          padding: _pagePadding.copyWith(top: 0),
+          padding: _pagePadding.copyWith(top: 0, bottom: 28),
           sliver: SliverGrid(
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: columns,
-              mainAxisExtent: 52,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: _isPhone ? 600 : 330,
+              mainAxisExtent: 80,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
             ),
             delegate: SliverChildBuilderDelegate(
               (context, i) => _countryRow(countries[i], setup),
@@ -529,6 +589,171 @@ class _FindLocationStepState extends State<FindLocationStep> {
             ),
           ),
         ),
+      ],
+    );
+
+    if (!showAside) return list;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: list),
+        SizedBox(
+          width: 332,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 16, 24, 24),
+            child: _guidePanel(signedIn),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// A region found by the search: opens that region directly.
+  Widget _regionHit(String country, String region) {
+    final cities = _catalog.cityCount(country, region);
+    final label = '$region, ${countryDisplayName(country)}';
+    return Semantics(
+      button: true,
+      label: cities == null ? label : '$label, ${citiesLabel(cities)}',
+      excludeSemantics: true,
+      child: ActionChip(
+        avatar: CountryFlagBadge(countryName: country, size: 14),
+        materialTapTargetSize: MaterialTapTargetSize.padded,
+        label: Text(cities == null ? label : '$label · ${formatCount(cities)}'),
+        labelStyle: const TextStyle(color: UiTokens.text, fontSize: 13),
+        backgroundColor: UiTokens.card,
+        side: const BorderSide(color: UiTokens.border),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        onPressed: () async {
+          await _pickCountry(country);
+          if (mounted) await _pickRegion(country, region, push: _isPhone);
+        },
+      ),
+    );
+  }
+
+  /// Wide screens: what happens next and what a lead contains.
+  Widget _guidePanel(bool signedIn) {
+    Widget card({required Widget child}) => Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: UiTokens.card,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: UiTokens.border),
+          ),
+          child: child,
+        );
+    Widget step(int n, String title, String text, {bool current = false}) => Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: current ? UiTokens.accent : Colors.transparent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: current ? UiTokens.accent : UiTokens.border),
+                ),
+                child: Text('$n',
+                    style: TextStyle(
+                        color: current ? const Color(0xFF06181D) : UiTokens.textSecondary,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: TextStyle(
+                            color: current ? UiTokens.text : UiTokens.textSecondary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Text(text, style: const TextStyle(color: UiTokens.textMuted, fontSize: 12.5, height: 1.4)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+    Widget included(IconData icon, String text) => Padding(
+          padding: const EdgeInsets.only(bottom: 9),
+          child: Row(
+            children: [
+              Icon(icon, size: 16, color: UiTokens.completedFg),
+              const SizedBox(width: 10),
+              Expanded(child: Text(text, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 13))),
+            ],
+          ),
+        );
+    const heading = TextStyle(color: UiTokens.text, fontSize: 14.5, fontWeight: FontWeight.w700);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('How a search works', style: heading),
+              const SizedBox(height: 14),
+              step(1, 'Choose where', 'A country, then its states and cities.', current: true),
+              step(2, 'Say who', 'The kind of business and how many results per city.'),
+              step(3, 'Get the list', 'It runs on our servers; download it as Excel or CSV.'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Every lead includes', style: heading),
+              const SizedBox(height: 12),
+              included(Icons.storefront_outlined, 'Business name and category'),
+              included(Icons.call_outlined, 'Phone number'),
+              included(Icons.language_rounded, 'Website'),
+              included(Icons.mail_outline_rounded, 'Email, when the business lists one'),
+              included(Icons.place_outlined, 'Address, city and state'),
+              included(Icons.map_outlined, 'Google Maps link'),
+            ],
+          ),
+        ),
+        if (!signedIn) ...[
+          const SizedBox(height: 12),
+          card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Just looking?', style: heading),
+                const SizedBox(height: 6),
+                const Text(
+                  'You can set up a whole search without an account. You only need one to run it.',
+                  style: TextStyle(color: UiTokens.textSecondary, fontSize: 13, height: 1.45),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: UiTokens.accent,
+                      side: const BorderSide(color: UiTokens.border),
+                      minimumSize: const Size(64, 42),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: () => Navigator.of(context).pushNamed('/register'),
+                    child: const Text('Create a free account'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -595,32 +820,70 @@ class _FindLocationStepState extends State<FindLocationStep> {
     final name = countryDisplayName(key);
     final n = _catalog.regionsOf(key).length;
     final countText = termCount(n, _catalog.regionTerm(key));
+    final cities = _cityTotal(key);
     final current = key == _selectionCountry && setup.cities.isNotEmpty;
     return FindRow(
       semanticLabel: '$name, $countText${current ? ', has your selection' : ''}',
       selected: current,
       onActivate: () => _pickCountry(key),
       color: UiTokens.card,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(14),
       side: BorderSide(color: current ? UiTokens.accent : UiTokens.border, width: current ? 1.5 : 1),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         child: Row(
           children: [
-            CountryFlagBadge(countryName: key, size: 18),
-            const SizedBox(width: 10),
+            Container(
+              width: 46,
+              height: 46,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: UiTokens.background,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: UiTokens.border),
+              ),
+              child: CountryFlagBadge(countryName: key, size: 22),
+            ),
+            const SizedBox(width: 13),
             Expanded(
-              child: Text(name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: UiTokens.text, fontSize: 14, fontWeight: FontWeight.w600)),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: UiTokens.text, fontSize: 15.5, fontWeight: FontWeight.w600, letterSpacing: -0.1)),
+                  const SizedBox(height: 3),
+                  // One line: the city total gives way first on a narrow card.
+                  Row(
+                    children: [
+                      Flexible(
+                        flex: 3,
+                        child: Text(countText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12.5, height: 1.2)),
+                      ),
+                      if (cities > 0) ...[
+                        const SizedBox(width: 6),
+                        Flexible(
+                          flex: 2,
+                          child: Text('· ${citiesLabel(cities)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: UiTokens.textMuted, fontSize: 12.5, height: 1.2)),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
             ),
             const SizedBox(width: 8),
-            if (current) ...[
-              const Icon(Icons.check_circle_rounded, size: 16, color: UiTokens.accent),
-              const SizedBox(width: 6),
-            ],
-            Text(countText, style: const TextStyle(color: UiTokens.textSecondary, fontSize: 12)),
+            Icon(current ? Icons.check_circle_rounded : Icons.chevron_right_rounded,
+                size: current ? 18 : 20, color: current ? UiTokens.accent : UiTokens.textMuted),
           ],
         ),
       ),

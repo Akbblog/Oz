@@ -735,6 +735,64 @@ void main() {
       expect(find.text('Maximum is 100 leads per city.'), findsOneWidget);
     });
   });
+
+  group('country screen', () {
+    testWidgets('search also finds states and regions and opens them directly', (tester) async {
+      _size(tester, const Size(1440, 900));
+      final h = _Harness();
+      await tester.pumpWidget(h.app('/find'));
+      await _settle(tester);
+
+      await tester.enterText(find.byType(TextField).first, 'queb');
+      await tester.pump();
+      expect(find.textContaining('States and regions matching'), findsOneWidget);
+      expect(find.bySemanticsLabel(RegExp(r'^Quebec, Canada')), findsOneWidget);
+      expect(find.text('0 of 2 countries match “queb”'), findsOneWidget);
+      expect(find.text('No country has that name. Pick one of the regions above.'), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^Quebec, Canada')));
+      await _settle(tester);
+      expect(h.setup.country, 'Canada');
+      expect(h.setup.region, 'Quebec');
+      expect(find.text('Montreal'), findsOneWidget, reason: 'the region opens with its cities');
+    });
+
+    testWidgets('wide screens explain the steps; visitors are offered an account', (tester) async {
+      _size(tester, const Size(1600, 900));
+      final guest = _Harness(signedIn: false);
+      await tester.pumpWidget(guest.app('/find'));
+      await _settle(tester);
+      expect(find.text('How a search works'), findsOneWidget);
+      expect(find.text('Every lead includes'), findsOneWidget);
+      expect(find.text('Create a free account'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('signed-in users are not asked to sign up; narrower screens drop the panel', (tester) async {
+      _size(tester, const Size(1600, 900));
+      final h = _Harness();
+      await tester.pumpWidget(h.app('/find'));
+      await _settle(tester);
+      expect(find.text('How a search works'), findsOneWidget);
+      expect(find.text('Create a free account'), findsNothing);
+
+      _size(tester, const Size(1100, 900));
+      await tester.pump();
+      expect(find.text('How a search works'), findsNothing);
+      expect(find.text('Canada'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('phone width lays the country cards out without overflow', (tester) async {
+      _size(tester, const Size(390, 800));
+      final h = _Harness();
+      await tester.pumpWidget(h.app('/find'));
+      await _settle(tester);
+      expect(find.text('United States'), findsOneWidget);
+      expect(find.bySemanticsLabel('Canada, 2 provinces'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
 }
 
 class _FailingApi extends _Api {
