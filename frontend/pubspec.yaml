@@ -54,3 +54,7 @@ flutter:
   assets:
     - assets/nav/
     - assets/
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf

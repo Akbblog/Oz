@@ -11,6 +11,7 @@ import 'admin/admin_shell.dart';
 import 'admin/pages/activity_page.dart';
 import 'admin/pages/analytics_page.dart';
 import 'admin/pages/credits_page.dart';
+import 'admin/pages/messages_page.dart';
 import 'admin/pages/overview_page.dart';
 import 'admin/pages/pricing_page.dart';
 import 'admin/pages/revenue_page.dart';
@@ -28,7 +29,9 @@ import 'screens/crm/crm_reports_screen.dart';
 import 'screens/find/details_step.dart';
 import 'screens/find/location_step.dart';
 import 'screens/forgot_password_screen.dart';
+import 'screens/contact_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/landing/landing_screen.dart';
 import 'screens/live_payments_gate_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/my_searches_screen.dart';
@@ -91,6 +94,10 @@ class AppRouter {
 
     switch (path) {
       case '/':
+        // Visitors get the landing page; signed-in people go straight to Home.
+        return _shell(settings, const _RootPage());
+      case '/contact':
+        return _page(settings, const ContactScreen());
       case '/home':
         return _shell(settings, const ShellPage(
           section: ShellSection.home,
@@ -188,6 +195,8 @@ class AppRouter {
         return _admin(settings, AdminUsersPage(query: uri.queryParameters));
       case '/admin/credits':
         return _admin(settings, const AdminCreditsPage());
+      case '/admin/messages':
+        return _admin(settings, const AdminMessagesPage());
       case '/admin/searches':
       case '/admin/jobs':
         return _admin(
@@ -370,6 +379,23 @@ class ShellPage extends StatelessWidget {
     category ??= context.watch<ActiveSearchesProvider>().jobById(jobId)?['category'] as String?;
     final c = category?.trim() ?? '';
     return c.isEmpty ? 'Search' : 'Search · $c';
+  }
+}
+
+/// `/`: the landing page for visitors, Home for signed-in people.
+class _RootPage extends StatelessWidget {
+  const _RootPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    if (auth.isRestoring) return const BootSplash();
+    if (!auth.isAuthenticated) return const LandingScreen();
+    return const AppShell(
+      section: ShellSection.home,
+      title: 'Home',
+      child: HomeScreen(),
+    );
   }
 }
 

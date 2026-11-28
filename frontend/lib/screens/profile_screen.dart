@@ -221,6 +221,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
           const Divider(height: 1, color: UiTokens.border),
           _LinkTile(
+            icon: Icons.support_agent_rounded,
+            title: 'Contact us',
+            subtitle: 'Questions, billing or feedback: send us a message',
+            onTap: () => Navigator.of(context).pushNamed('/contact'),
+          ),
+          const Divider(height: 1, color: UiTokens.border),
+          _LinkTile(
             icon: Icons.privacy_tip_outlined,
             title: 'Privacy policy',
             onTap: () => Navigator.of(context).pushNamed('/privacy-policy'),

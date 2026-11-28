@@ -18,6 +18,7 @@ class AppTheme {
   // ==========================================================================
 
   static ThemeData get lightTheme => ThemeData(
+        fontFamily: 'Inter',
         useMaterial3: true,
         brightness: Brightness.light,
         colorScheme: ColorScheme.light(
@@ -366,6 +367,7 @@ class AppTheme {
   // ==========================================================================
 
   static ThemeData get darkTheme => ThemeData(
+        fontFamily: 'Inter',
         useMaterial3: true,
         brightness: Brightness.dark,
         colorScheme: ColorScheme.dark(

@@ -234,7 +234,10 @@ class _AdminOverviewPageState extends State<AdminOverviewPage> {
             Align(alignment: Alignment.centerLeft, child: rangeControl),
             const SizedBox(height: 12),
           ],
-          _attention(),
+          AnimatedBuilder(
+            animation: AdminBadges.instance,
+            builder: (context, _) => _attention(),
+          ),
           _periodKpis(),
           const SizedBox(height: 12),
           ASplit(left: _trafficPanel(), right: _nowPanel()),
@@ -296,6 +299,12 @@ class _AdminOverviewPageState extends State<AdminOverviewPage> {
       items.add(_attn(Icons.request_quote_outlined, AC.amber,
           '$requests credit request${requests == 1 ? '' : 's'} to review',
           'Open', () => _go('/admin/credits')));
+    }
+    final messages = AdminBadges.instance.newMessages;
+    if (messages > 0) {
+      items.add(_attn(Icons.mark_email_unread_outlined, AC.amber,
+          '$messages new message${messages == 1 ? '' : 's'} from the contact form',
+          'Read', () => _go('/admin/messages')));
     }
     if (failed > 0) {
       items.add(_attn(Icons.error_outline, AC.red,

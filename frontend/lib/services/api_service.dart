@@ -2598,6 +2598,90 @@ class ApiService {
               query: {'limit': '$limit'}, context: 'Loading user journey'),
           'events');
 
+  /// Contact form (works signed in or out). Throws with the server's own
+  /// reason when the message is refused.
+  Future<void> sendContactMessage({
+    required String name,
+    required String email,
+    required String message,
+    String? phone,
+    String? phoneCountry,
+    String? topic,
+    String? website,
+    String? visitorId,
+    String? geoCountry,
+    String? geoCity,
+    String? page,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/contact'),
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'name': name,
+              'email': email,
+              'message': message,
+              if (phone != null && phone.isNotEmpty) 'phone': phone,
+              if (phone != null && phone.isNotEmpty && phoneCountry != null)
+                'phone_country': phoneCountry,
+              if (topic != null) 'topic': topic,
+              if (website != null && website.isNotEmpty) 'website': website,
+              if (visitorId != null) 'visitor_id': visitorId,
+              if (geoCountry != null) 'geo_country': geoCountry,
+              if (geoCity != null) 'geo_city': geoCity,
+              if (page != null) 'page': page,
+            }),
+          )
+          .timeout(timeout);
+      if (response.statusCode == 200) return;
+      ErrorHandler.handleHttpError(response, context: 'Sending your message');
+      throw ApiException('Your message could not be sent. Please try again.');
+    } on TimeoutException {
+      throw NetworkException('Sending took too long. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ErrorHandler.handleNetworkError(e);
+    }
+  }
+
+  Future<Map<String, dynamic>> getAdminContactMessages({
+    String? status,
+    String? q,
+    int limit = 50,
+    int offset = 0,
+  }) async =>
+      _asMap(await _getJson('/api/admin/contact',
+          query: {
+            'limit': '$limit',
+            'offset': '$offset',
+            if (status != null && status.isNotEmpty) 'status': status,
+            if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+          },
+          context: 'Loading messages'));
+
+  Future<Map<String, dynamic>> getAdminContactSummary() async => _asMap(
+      await _getJson('/api/admin/contact/summary', context: 'Loading messages'));
+
+  Future<Map<String, dynamic>> updateAdminContactMessage(int id,
+      {String? status, String? adminNote}) async {
+    final response = await http
+        .put(
+          Uri.parse('$baseUrl/api/admin/contact/$id'),
+          headers: await _getHeaders(),
+          body: jsonEncode({
+            if (status != null) 'status': status,
+            if (adminNote != null) 'admin_note': adminNote,
+          }),
+        )
+        .timeout(timeout);
+    if (response.statusCode == 200) {
+      return Map<String, dynamic>.from(jsonDecode(response.body));
+    }
+    ErrorHandler.handleHttpError(response, context: 'Updating the message');
+    throw ApiException('The message could not be updated');
+  }
+
   Future<Map<String, dynamic>> getAdminChurn() async => _asMap(
       await _getJson('/api/admin/analytics/churn', context: 'Loading churn'));
 }

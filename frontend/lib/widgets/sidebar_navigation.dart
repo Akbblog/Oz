@@ -78,6 +78,19 @@ class AppSidebar extends StatelessWidget {
                 onTap: () => Navigator.of(context).pushNamed('/admin'),
               ),
             const Spacer(),
+            _SidebarItem(
+              destination: const ShellDestination(
+                section: ShellSection.account,
+                label: 'Contact us',
+                phoneLabel: 'Contact',
+                icon: Icons.support_agent_outlined,
+                selectedIcon: Icons.support_agent_rounded,
+                route: '/contact',
+              ),
+              selected: false,
+              onTap: () => Navigator.of(context).pushNamed('/contact'),
+            ),
+            const SizedBox(height: 4),
             item(ShellDestinations.account),
           ] else ...[
             item(ShellDestinations.find),

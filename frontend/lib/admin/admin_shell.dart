@@ -12,6 +12,7 @@ enum AdminSection {
   overview,
   users,
   credits,
+  messages,
   searches,
   activity,
   visitors,
@@ -45,6 +46,8 @@ const List<_NavGroup> _nav = [
     _NavItem(AdminSection.users, 'Users', Icons.group_outlined, '/admin/users'),
     _NavItem(AdminSection.credits, 'Credit requests',
         Icons.request_quote_outlined, '/admin/credits'),
+    _NavItem(AdminSection.messages, 'Messages',
+        Icons.mark_email_unread_outlined, '/admin/messages'),
   ]),
   _NavGroup('Activity', [
     _NavItem(AdminSection.searches, 'Searches', Icons.travel_explore,
@@ -80,6 +83,7 @@ class AdminBadges extends ChangeNotifier {
 
   int pendingUsers = 0;
   int creditRequests = 0;
+  int newMessages = 0;
   DateTime? _loadedAt;
   bool _loading = false;
 
@@ -101,6 +105,15 @@ class AdminBadges extends ChangeNotifier {
         _loadedAt = DateTime.now();
         notifyListeners();
       }
+      // Unread contact messages (absent on a backend without the inbox).
+      try {
+        final summary = await apiFactory().getAdminContactSummary();
+        final n = (summary['new'] as num?)?.toInt() ?? 0;
+        if (n != newMessages) {
+          newMessages = n;
+          notifyListeners();
+        }
+      } catch (_) {}
     } catch (_) {
       // Badges are a convenience; pages report their own load errors.
     } finally {
@@ -111,6 +124,7 @@ class AdminBadges extends ChangeNotifier {
   int countFor(AdminSection s) => switch (s) {
         AdminSection.users => pendingUsers,
         AdminSection.credits => creditRequests,
+        AdminSection.messages => newMessages,
         _ => 0,
       };
 }
