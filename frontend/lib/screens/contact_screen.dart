@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../widgets/app_shell_common.dart' show UiTokens;
 import '../widgets/contact_form.dart';
+import 'legal/policy_screen.dart';
 
 /// `/contact`: the contact form on its own page (linked from the app's
 /// sidebar and the Account page).
@@ -59,6 +60,10 @@ class ContactScreen extends StatelessWidget {
                     ),
                     child: const ContactForm(),
                   ),
+                  const SizedBox(height: 20),
+                  const MerchantCard(),
+                  const SizedBox(height: 18),
+                  const PolicyLinks(current: '/contact'),
                 ],
               ),
             ),

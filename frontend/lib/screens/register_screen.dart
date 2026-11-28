@@ -727,11 +727,28 @@ class _RegisterScreenState extends State<RegisterScreen>
             ),
           ],
         ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
-              'Privacy Policy',
+              'By creating an account you agree to the',
+              style: AppTypography.bodySmall.copyWith(
+                color: AppColors.textSecondaryLight,
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pushNamed('/terms'),
+              child: Text(
+                'Terms and Conditions',
+                style: AppTypography.bodySmall.copyWith(
+                  color: Colors.white,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+            Text(
+              'and',
               style: AppTypography.bodySmall.copyWith(
                 color: AppColors.textSecondaryLight,
               ),
@@ -740,7 +757,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               onPressed: () =>
                   Navigator.of(context).pushNamed('/privacy-policy'),
               child: Text(
-                'View',
+                'Privacy Policy',
                 style: AppTypography.bodySmall.copyWith(
                   color: Colors.white,
                   decoration: TextDecoration.underline,

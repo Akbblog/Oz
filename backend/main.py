@@ -4677,6 +4677,24 @@ async def get_credit_packages(current_user: dict = Depends(get_current_user)):
     return packages
 
 
+@app.get("/api/public/credit-packs")
+async def public_credit_packs():
+    """Active credit packs and list prices for the public pricing section (no account needed).
+
+    Uses the same price rule as checkout (display price when set, otherwise base price minus the
+    pack discount). Per-user tier pricing, if any, is applied at checkout and shown there.
+    """
+    from db.payment_crud import list_active_packages
+
+    packs = []
+    for row in list_active_packages():
+        base, display, discount = int(row[3] or 0), int(row[4] or 0), float(row[5] or 0)
+        price = display if display > 0 else max(0, base - int(round(base * discount / 100.0)))
+        packs.append({"id": row[0], "name": row[1], "credits": int(row[2] or 0),
+                      "price_cents": price, "is_featured": bool(row[8])})
+    return {"currency": config.SAFEPAY_CHARGE_CURRENCY, "packs": packs}
+
+
 @app.get("/api/payments/packages/{package_id}")
 async def get_credit_package_details(package_id: int, current_user: dict = Depends(get_current_user)):
     """Get a single credit package"""

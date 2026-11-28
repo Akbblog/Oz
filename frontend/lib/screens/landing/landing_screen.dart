@@ -3,10 +3,12 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../config/business_info.dart';
 import '../../services/api_service.dart';
 import '../../widgets/contact_form.dart';
 import '../../widgets/country_flag_badge.dart';
 import '../find/find_common.dart' show countryDisplayName;
+import '../legal/policies.dart';
 import 'hero_stage.dart';
 import 'landing_kit.dart';
 
@@ -50,10 +52,15 @@ class _LandingScreenState extends State<LandingScreen>
   final _how = GlobalKey();
   final _features = GlobalKey();
   final _coverageKey = GlobalKey();
+  final _pricingKey = GlobalKey();
   final _faq = GlobalKey();
   final _contact = GlobalKey();
 
   _Coverage _coverage = _Coverage.fallback;
+
+  /// Public price list; null until loaded (the section then shows a short note).
+  List<Map<String, dynamic>>? _packs;
+  String _currency = 'USD';
 
   @override
   void initState() {
@@ -63,6 +70,25 @@ class _LandingScreenState extends State<LandingScreen>
       _scrolled.value = _scroll.offset > 12;
     });
     _loadCoverage();
+    _loadPacks();
+  }
+
+  Future<void> _loadPacks() async {
+    try {
+      final data = await (widget.api ?? ApiService()).getPublicCreditPacks();
+      final packs = (data['packs'] as List? ?? const [])
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _packs = packs;
+          _currency = (data['currency'] ?? 'USD').toString();
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _packs = const []);
+    }
   }
 
   Future<void> _loadCoverage() async {
@@ -148,6 +174,7 @@ class _LandingScreenState extends State<LandingScreen>
                     section(_howItWorks(wide), key: _how),
                     section(_featureGrid(width), key: _features),
                     section(_coverageSection(), key: _coverageKey),
+                    section(_pricingSection(width), key: _pricingKey),
                     section(_faqSection(wide), key: _faq),
                     section(_contactSection(wide), key: _contact),
                     section(_finalCta(), top: 96, bottom: 56),
@@ -236,6 +263,7 @@ class _LandingScreenState extends State<LandingScreen>
                               link('How it works', _how),
                               link('Features', _features),
                               link('Coverage', _coverageKey),
+                              link('Pricing', _pricingKey),
                               link('FAQ', _faq),
                               link('Contact', _contact),
                             ]),
@@ -751,6 +779,104 @@ class _LandingScreenState extends State<LandingScreen>
     );
   }
 
+  // --------------------------------------------------------------- pricing
+
+  String _money(num cents) {
+    final v = (cents / 100).toStringAsFixed(2);
+    return _currency == 'USD' ? 'US\$$v' : '$_currency $v';
+  }
+
+  Widget _pricingSection(double width) {
+    final packs = _packs;
+    final cols = width >= 980 ? 3 : (width >= 640 ? 2 : 1);
+    Widget card(Map<String, dynamic> p) {
+      final credits = (p['credits'] as num? ?? 0).toInt();
+      final cents = (p['price_cents'] as num? ?? 0).toInt();
+      final per = credits > 0 ? (cents / credits) : 0;
+      return HoverCard(
+        padding: const EdgeInsets.all(22),
+        child: KeyedSubtree(
+          key: ValueKey('price-${p['name']}'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${p['name']}', style: LT.h3),
+              const SizedBox(height: 10),
+              Text(_money(cents),
+                  style: LT.h2.copyWith(fontSize: 32, letterSpacing: -0.8)),
+              const SizedBox(height: 4),
+              Text('$credits credits · ${_money(per)} per credit',
+                  style: LT.small),
+              const SizedBox(height: 16),
+              const _Tick('One-time payment, no subscription'),
+              const SizedBox(height: 6),
+              const _Tick('Credits never expire'),
+              const SizedBox(height: 6),
+              const _Tick('Pay by card (Visa, Mastercard) via Safepay'),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: LButton('Buy ${p['name']}',
+                    primary: p['is_featured'] == true,
+                    onPressed: () => _go('/pricing')),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final body = packs == null
+        ? const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+        : packs.isEmpty
+            ? const Text('Prices are shown after you sign in.', style: LT.body)
+            : LayoutBuilder(builder: (context, c) {
+                const gap = 18.0;
+                final w = (c.maxWidth - gap * (cols - 1)) / cols;
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [for (final p in packs) SizedBox(width: w, child: card(p))],
+                );
+              });
+
+    return Reveal(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('PRICING', style: LT.eyebrow),
+          const SizedBox(height: 10),
+          Text('Buy credits once, use them any time', style: LT.h2),
+          const SizedBox(height: 10),
+          const Text(
+              'Searches are paid with credits. A search shows its credit cost before it starts, and credits for '
+              'results that were not delivered are returned automatically.',
+              style: LT.lead),
+          const SizedBox(height: 26),
+          body,
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text('Prices in US dollars. Unused packs can be refunded within 7 days -', style: LT.small),
+              TextButton(
+                onPressed: () => _go(Policies.refund.route),
+                style: TextButton.styleFrom(
+                    foregroundColor: LC.accent,
+                    padding: const EdgeInsets.symmetric(horizontal: 4)),
+                child: const Text('Refund and Cancellation Policy',
+                    style: TextStyle(fontFamily: LT.font, fontSize: 13)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   // ------------------------------------------------------------ cta + footer
 
   Widget _finalCta() {
@@ -805,25 +931,43 @@ class _LandingScreenState extends State<LandingScreen>
           ),
           child: Text(label),
         );
+    final merchant = <String>[
+      if (BusinessInfo.legalName.isNotEmpty) BusinessInfo.legalName,
+      if (BusinessInfo.address.isNotEmpty) BusinessInfo.address.join(', '),
+      BusinessInfo.email,
+      if (BusinessInfo.phone.isNotEmpty) BusinessInfo.phone,
+    ];
     return Container(
+      key: const ValueKey('landing-footer'),
       decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: LC.border))),
-      padding: EdgeInsets.symmetric(horizontal: pad, vertical: 22),
+      padding: EdgeInsets.symmetric(horizontal: pad, vertical: 26),
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1180, minWidth: 1180),
-          child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: 8,
+          constraints: const BoxConstraints(maxWidth: 1180),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('© ${DateTime.now().year} Infinity Leads', style: LT.small),
-              Wrap(children: [
-                link('Find leads', () => _go('/find')),
-                link('Contact', () => _jump(_contact)),
-                link('Privacy policy', () => _go('/privacy-policy')),
-                link('Sign in', () => _go('/login')),
-              ]),
+              Wrap(
+                spacing: 2,
+                runSpacing: 2,
+                children: [
+                  link('Find leads', () => _go('/find')),
+                  link('Pricing', () => _jump(_pricingKey)),
+                  link('Contact', () => _go('/contact')),
+                  link('Terms and Conditions', () => _go(Policies.terms.route)),
+                  link('Privacy Policy', () => _go(Policies.privacy.route)),
+                  link('Refund and Cancellation', () => _go(Policies.refund.route)),
+                  link('Delivery Policy', () => _go(Policies.delivery.route)),
+                  link('Sign in', () => _go('/login')),
+                ],
+              ),
+              const SizedBox(height: 14),
+              SelectableText(merchant.join('  ·  '),
+                  style: LT.small.copyWith(color: LC.dim)),
+              const SizedBox(height: 6),
+              Text('© ${DateTime.now().year} ${BusinessInfo.tradingName}. Card payments are processed securely by Safepay.',
+                  style: LT.small),
             ],
           ),
         ),

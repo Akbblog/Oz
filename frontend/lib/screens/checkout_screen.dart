@@ -434,9 +434,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           'Credits are added once Safepay confirms the payment.',
           style: AppTypography.labelSmall.copyWith(color: Colors.white38),
         ),
+        const SizedBox(height: AppSpacing.xs),
+        Wrap(
+          key: const ValueKey('checkout-agreement'),
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text('By paying you agree to the ',
+                style: AppTypography.labelSmall.copyWith(color: Colors.white54)),
+            _policyLink('Terms and Conditions', '/terms'),
+            Text(' and the ',
+                style: AppTypography.labelSmall.copyWith(color: Colors.white54)),
+            _policyLink('Refund and Cancellation Policy', '/refund-policy'),
+            Text('.', style: AppTypography.labelSmall.copyWith(color: Colors.white54)),
+          ],
+        ),
       ],
     );
   }
+
+  Widget _policyLink(String label, String route) => InkWell(
+        onTap: () => Navigator.of(context).pushNamed(route),
+        child: Text(
+          label,
+          style: AppTypography.labelSmall.copyWith(
+            color: Colors.white,
+            decoration: TextDecoration.underline,
+          ),
+        ),
+      );
 
   Widget _notice(String text, {bool danger = false}) {
     final color = danger ? AppColors.dangerRed : const Color(0xFFF59E0B);

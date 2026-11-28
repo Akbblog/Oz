@@ -95,7 +95,7 @@ DEFAULT_CREDIT_CONFIG = {
     "min_job": 15,                     # Minimum job cost
     "max_concurrent_jobs": 2,          # Maximum concurrent jobs per user
     "max_jobs_per_hour": 5,            # Maximum jobs per hour per user
-    "credit_expiry_days": 365,         # Days until purchased credits expire (0 = never)
+    "credit_expiry_days": 0,           # Purchased credits never expire (matches the app and the Terms)
     "promotional_expiry_days": 90,     # Days until promotional credits expire
     "bonus_expiry_days": 90,           # Days until bonus credits expire
 }

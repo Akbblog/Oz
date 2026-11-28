@@ -1491,6 +1491,17 @@ class ApiService {
     }
   }
 
+  /// Public price list (no account needed): {currency, packs: [{id, name, credits, price_cents}]}.
+  Future<Map<String, dynamic>> getPublicCreditPacks() async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/api/public/credit-packs'))
+        .timeout(timeout);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Could not load prices', statusCode: response.statusCode);
+  }
+
   /// What the checkout may offer this user (provider, environment, currency, availability).
   Future<Map<String, dynamic>> getCheckoutConfig() async {
     final headers = await _getHeaders();

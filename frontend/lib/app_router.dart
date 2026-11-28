@@ -38,7 +38,8 @@ import 'screens/my_searches_screen.dart';
 import 'screens/payment_methods_screen.dart';
 import 'screens/payment_return_screen.dart';
 import 'screens/pricing_screen.dart';
-import 'screens/privacy_policy_screen.dart';
+import 'screens/legal/policies.dart';
+import 'screens/legal/policy_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/reset_password_screen.dart';
@@ -164,7 +165,15 @@ class AppRouter {
         return _page(settings, const ForgotPasswordScreen());
       case '/privacy-policy':
       case '/privacy':
-        return _page(settings, const PrivacyPolicyScreen());
+        return _page(settings, PolicyScreen(doc: Policies.privacy));
+      case '/terms':
+      case '/terms-and-conditions':
+        return _page(settings, PolicyScreen(doc: Policies.terms));
+      case '/refund-policy':
+      case '/cancellation-policy':
+        return _page(settings, PolicyScreen(doc: Policies.refund));
+      case '/delivery-policy':
+        return _page(settings, PolicyScreen(doc: Policies.delivery));
       case '/pricing':
         // Packages and checkout need the signed-in user; wait for the saved session first.
         return _page(settings, const ProtectedRoute(child: PricingScreen()));
