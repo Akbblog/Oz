@@ -444,8 +444,8 @@ class HeroVisual extends StatelessWidget {
                   ),
                 ),
                 Positioned(
-                  left: -w * 0.03,
-                  bottom: w * 0.10 + bob * 6,
+                  right: -w * 0.03,
+                  bottom: w * 0.035 + bob * 6,
                   child: _Chip(
                     scale: s,
                     icon: Icons.table_view_rounded,
@@ -563,8 +563,10 @@ class _ResultsWindow extends StatelessWidget {
               padding: EdgeInsets.fromLTRB(18 * s, 16 * s, 18 * s, 12 * s),
               child: Row(
                 children: [
-                  Flexible(
-                    child: Container(
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
                       padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 6 * s),
                       decoration: BoxDecoration(
                         color: LC.bg,
@@ -585,6 +587,7 @@ class _ResultsWindow extends StatelessWidget {
                                   fontWeight: FontWeight.w500)),
                         ),
                       ]),
+                    ),
                     ),
                   ),
                   SizedBox(width: 10 * s),

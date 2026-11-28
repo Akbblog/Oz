@@ -569,7 +569,9 @@ class _LandingScreenState extends State<LandingScreen>
                     delay: Duration(milliseconds: 70 * (i % cols)),
                     child: HoverCard(
                       glow: items[i].$4,
-                      child: Column(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: cols == 1 ? 0 : 168),
+                        child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Icon(items[i].$1, color: items[i].$4, size: 26),
@@ -578,6 +580,7 @@ class _LandingScreenState extends State<LandingScreen>
                           const SizedBox(height: 8),
                           Text(items[i].$3, style: LT.body),
                         ],
+                      ),
                       ),
                     ),
                   ),
@@ -752,6 +755,7 @@ class _LandingScreenState extends State<LandingScreen>
   Widget _finalCta() {
     return Reveal(
       child: Container(
+        width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 52),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(26),
@@ -806,7 +810,7 @@ class _LandingScreenState extends State<LandingScreen>
       padding: EdgeInsets.symmetric(horizontal: pad, vertical: 22),
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1180),
+          constraints: const BoxConstraints(maxWidth: 1180, minWidth: 1180),
           child: Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,
