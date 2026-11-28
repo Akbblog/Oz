@@ -6451,6 +6451,82 @@ async def record_site_visit_endpoint(
     return {"ok": bool(ok)}
 
 
+# ==================== CONTACT FORM ====================
+
+class ContactUpdate(BaseModel):
+    status: Optional[str] = None
+    admin_note: Optional[str] = None
+
+
+@app.post("/api/contact")
+async def contact_submit_endpoint(
+    request: Request,
+    body: Any = Body(None),
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """Contact form (public): stores the message for the admin console."""
+    import contact_messages
+    try:
+        result = await asyncio.to_thread(
+            contact_messages.submit, body, request.headers,
+            request.client.host if request.client else None, current_user,
+        )
+    except contact_messages.ContactError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "message": "Thanks, your message has been sent. We will get back to you by email."} \
+        if result.get("ok") else result
+
+
+@app.get("/api/admin/contact")
+async def admin_contact_list_endpoint(
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    """Contact messages, newest first. status: new | read | replied | archived | open."""
+    import contact_messages
+    return await asyncio.to_thread(contact_messages.list_messages, status, q, limit, offset)
+
+
+@app.get("/api/admin/contact/summary")
+async def admin_contact_summary_endpoint(admin: dict = Depends(get_admin_user)):
+    """Message counts by status (drives the unread badge)."""
+    import contact_messages
+    return await asyncio.to_thread(contact_messages.counts)
+
+
+@app.put("/api/admin/contact/{message_id}")
+async def admin_contact_update_endpoint(
+    message_id: int,
+    update: ContactUpdate,
+    request: Request,
+    admin: dict = Depends(get_admin_user),
+):
+    """Mark a message read / replied / archived and/or save a note."""
+    import contact_messages
+    try:
+        updated = await asyncio.to_thread(
+            contact_messages.update_message, message_id, admin["id"], update.status, update.admin_note)
+    except contact_messages.ContactError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if update.status in ("replied", "archived"):
+        record_audit_event(
+            "admin.contact." + update.status,
+            request_id=getattr(request.state, "request_id", None),
+            actor_user_id=admin["id"],
+            actor_username=admin["username"],
+            target_type="contact_message",
+            target_id=str(message_id),
+            ip_address=getattr(request.state, "client_ip", None),
+            user_agent=getattr(request.state, "user_agent", None),
+        )
+    return updated
+
+
 @app.get("/api/geo/hint")
 async def geo_hint_endpoint(request: Request):
     """Country of the caller from the edge headers (public; used to preselect
